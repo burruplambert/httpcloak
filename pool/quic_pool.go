@@ -287,15 +287,17 @@ func (p *QUICHostPool) createConn(ctx context.Context) (*QUICConn, error) {
 
 	// QUIC config with Chrome-like settings
 	quicConfig := &quic.Config{
-		MaxIdleTimeout:        30 * time.Second, // Chrome uses 30s
-		KeepAlivePeriod:       30 * time.Second,
-		MaxIncomingStreams:    100,
-		MaxIncomingUniStreams: 103, // Chrome uses 103
-		Allow0RTT:             true,
-		EnableDatagrams:       true, // Chrome enables QUIC datagrams
-		InitialPacketSize:     1250, // Chrome uses ~1250
-		ClientHelloID:         clientHelloID, // uTLS TLS fingerprinting
-		ECHConfigList:         echConfigList, // ECH from DNS HTTPS records
+		MaxIdleTimeout:               30 * time.Second, // Chrome uses 30s
+		KeepAlivePeriod:              30 * time.Second,
+		MaxIncomingStreams:           100,
+		MaxIncomingUniStreams:        103, // Chrome uses 103
+		Allow0RTT:                    true,
+		EnableDatagrams:              true,  // Chrome enables QUIC datagrams
+		InitialPacketSize:            1250,  // Chrome uses ~1250
+		DisableClientHelloScrambling: true,  // Chrome doesn't scramble SNI, sends fewer packets
+		ChromeStyleInitialPackets:    true,  // Chrome-like frame patterns in Initial packets
+		ClientHelloID:                clientHelloID, // uTLS TLS fingerprinting
+		ECHConfigList:                echConfigList, // ECH from DNS HTTPS records
 	}
 
 	// Get IPv6 and IPv4 addresses

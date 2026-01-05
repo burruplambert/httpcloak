@@ -126,18 +126,17 @@ func NewHTTP3Transport(preset *fingerprint.Preset, dnsCache *dns.Cache) *HTTP3Tr
 
 	// Create QUIC config with connection reuse settings and TLS fingerprinting
 	t.quicConfig = &quic.Config{
-		MaxIdleTimeout:        30 * time.Second, // Chrome uses 30s, not 90s
-		KeepAlivePeriod:       30 * time.Second,
-		MaxIncomingStreams:    100,
-		MaxIncomingUniStreams: 103, // Chrome uses 103
-		Allow0RTT:             true,
-		EnableDatagrams:       true, // Chrome enables QUIC datagrams
-		// Use smaller initial packet size to work within default buffer limits
-		// This avoids the "failed to sufficiently increase receive buffer size" warning
-		InitialPacketSize:       1250, // Chrome uses ~1250
-		DisablePathMTUDiscovery: false, // Still allow PMTUD for optimal performance
-		// Use uTLS for TLS fingerprinting to match the preset's browser fingerprint
-		ClientHelloID: clientHelloID,
+		MaxIdleTimeout:               30 * time.Second, // Chrome uses 30s, not 90s
+		KeepAlivePeriod:              30 * time.Second,
+		MaxIncomingStreams:           100,
+		MaxIncomingUniStreams:        103, // Chrome uses 103
+		Allow0RTT:                    true,
+		EnableDatagrams:              true,  // Chrome enables QUIC datagrams
+		InitialPacketSize:            1250,  // Chrome uses ~1250
+		DisablePathMTUDiscovery:      false, // Still allow PMTUD for optimal performance
+		DisableClientHelloScrambling: true,  // Chrome doesn't scramble SNI, sends fewer packets
+		ChromeStyleInitialPackets:    true,  // Chrome-like frame patterns in Initial packets
+		ClientHelloID:                clientHelloID, // uTLS for TLS fingerprinting
 	}
 
 	// Generate GREASE setting ID (must be of form 0x1f * N + 0x21)
