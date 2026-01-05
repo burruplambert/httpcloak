@@ -232,9 +232,22 @@ func (p *HostPool) createConn(ctx context.Context) (*Conn, error) {
 		MaxVersion:             tls.VersionTLS13,
 		SessionTicketsDisabled: false,          // Enable session tickets
 		ClientSessionCache:     p.sessionCache, // Use per-host session cache
+		OmitEmptyPsk:           true,           // Chrome doesn't send empty PSK on first connection
 	}
 
-	tlsConn := utls.UClient(rawConn, tlsConfig, p.preset.ClientHelloID)
+	// Determine which ClientHelloID to use:
+	// - If we have a cached session for this host and a PSK variant available, use PSK variant
+	// - Otherwise use the regular ClientHelloID
+	clientHelloID := p.preset.ClientHelloID
+	if p.preset.PSKClientHelloID.Client != "" {
+		// Check if there's a cached session (key is ServerName)
+		if session, ok := p.sessionCache.Get(p.host); ok && session != nil {
+			// We have a cached session - use PSK variant for session resumption
+			clientHelloID = p.preset.PSKClientHelloID
+		}
+	}
+
+	tlsConn := utls.UClient(rawConn, tlsConfig, clientHelloID)
 
 	// Set session cache on the connection for PSK/resumption
 	// This enables pre_shared_key extension on subsequent connections

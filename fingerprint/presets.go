@@ -49,7 +49,9 @@ func GetPlatformInfo() PlatformInfo {
 type Preset struct {
 	Name              string
 	ClientHelloID     tls.ClientHelloID // For TCP/TLS (HTTP/1.1, HTTP/2)
+	PSKClientHelloID  tls.ClientHelloID // For TCP/TLS with PSK (session resumption)
 	QUICClientHelloID tls.ClientHelloID // For QUIC/HTTP/3 (different TLS extensions)
+	QUICPSKClientHelloID tls.ClientHelloID // For QUIC/HTTP/3 with PSK (session resumption)
 	UserAgent         string
 	Headers           map[string]string
 	HTTP2Settings     HTTP2Settings
@@ -116,9 +118,10 @@ func Chrome131() *Preset {
 func Chrome133() *Preset {
 	p := GetPlatformInfo()
 	return &Preset{
-		Name:          "chrome-133",
-		ClientHelloID: tls.HelloChrome_133, // Chrome 133 with X25519MLKEM768 (correct post-quantum)
-		UserAgent:     "Mozilla/5.0 " + p.UserAgentOS + " AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
+		Name:             "chrome-133",
+		ClientHelloID:    tls.HelloChrome_133,     // Chrome 133 with X25519MLKEM768 (correct post-quantum)
+		PSKClientHelloID: tls.HelloChrome_133_PSK, // PSK for session resumption
+		UserAgent:        "Mozilla/5.0 " + p.UserAgentOS + " AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
 		Headers: map[string]string{
 			// Low-entropy Client Hints ONLY
 			"sec-ch-ua":          `"Google Chrome";v="133", "Chromium";v="133", "Not_A Brand";v="24"`,
@@ -155,9 +158,10 @@ func Chrome133() *Preset {
 func Chrome141() *Preset {
 	p := GetPlatformInfo()
 	return &Preset{
-		Name:          "chrome-141",
-		ClientHelloID: tls.HelloChrome_133, // Chrome 133 TLS fingerprint with X25519MLKEM768
-		UserAgent:     "Mozilla/5.0 " + p.UserAgentOS + " AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+		Name:             "chrome-141",
+		ClientHelloID:    tls.HelloChrome_133,     // Chrome 133 TLS fingerprint with X25519MLKEM768
+		PSKClientHelloID: tls.HelloChrome_133_PSK, // PSK for session resumption
+		UserAgent:        "Mozilla/5.0 " + p.UserAgentOS + " AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
 		Headers: map[string]string{
 			// Low-entropy Client Hints ONLY
 			"sec-ch-ua":          `"Google Chrome";v="141", "Not?A_Brand";v="8", "Chromium";v="141"`,
@@ -225,20 +229,25 @@ func Firefox133() *Preset {
 func Chrome143() *Preset {
 	p := GetPlatformInfo()
 	// Use platform-specific TLS fingerprint with fixed extension order
-	var clientHelloID tls.ClientHelloID
+	var clientHelloID, pskClientHelloID tls.ClientHelloID
 	switch p.Platform {
 	case "Windows":
 		clientHelloID = tls.HelloChrome_143_Windows
+		pskClientHelloID = tls.HelloChrome_143_Windows_PSK
 	case "macOS":
 		clientHelloID = tls.HelloChrome_143_macOS
+		pskClientHelloID = tls.HelloChrome_143_macOS_PSK
 	default: // Linux and others
 		clientHelloID = tls.HelloChrome_143_Linux
+		pskClientHelloID = tls.HelloChrome_143_Linux_PSK
 	}
 	return &Preset{
-		Name:              "chrome-143",
-		ClientHelloID:     clientHelloID,
-		QUICClientHelloID: tls.HelloChrome_143_QUIC, // QUIC-specific preset for HTTP/3
-		UserAgent:         "Mozilla/5.0 " + p.UserAgentOS + " AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
+		Name:                 "chrome-143",
+		ClientHelloID:        clientHelloID,
+		PSKClientHelloID:     pskClientHelloID,
+		QUICClientHelloID:    tls.HelloChrome_143_QUIC,     // QUIC-specific preset for HTTP/3
+		QUICPSKClientHelloID: tls.HelloChrome_143_QUIC_PSK, // QUIC with PSK for session resumption
+		UserAgent:            "Mozilla/5.0 " + p.UserAgentOS + " AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
 		Headers: map[string]string{
 			// Low-entropy Client Hints ONLY
 			"sec-ch-ua":          `"Google Chrome";v="143", "Chromium";v="143", "Not A(Brand";v="24"`,
@@ -274,10 +283,12 @@ func Chrome143() *Preset {
 // Chrome143Windows returns Chrome 143 with Windows platform and fixed TLS extension order
 func Chrome143Windows() *Preset {
 	return &Preset{
-		Name:              "chrome-143-windows",
-		ClientHelloID:     tls.HelloChrome_143_Windows, // Chrome 143 Windows with fixed extension order
-		QUICClientHelloID: tls.HelloChrome_143_QUIC,    // QUIC-specific preset for HTTP/3
-		UserAgent:         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
+		Name:                 "chrome-143-windows",
+		ClientHelloID:        tls.HelloChrome_143_Windows,     // Chrome 143 Windows with fixed extension order
+		PSKClientHelloID:     tls.HelloChrome_143_Windows_PSK, // PSK for session resumption
+		QUICClientHelloID:    tls.HelloChrome_143_QUIC,        // QUIC-specific preset for HTTP/3
+		QUICPSKClientHelloID: tls.HelloChrome_143_QUIC_PSK,    // QUIC with PSK for session resumption
+		UserAgent:            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
 		Headers: map[string]string{
 			// Low-entropy Client Hints ONLY
 			"sec-ch-ua":          `"Google Chrome";v="143", "Chromium";v="143", "Not A(Brand";v="24"`,
@@ -313,10 +324,12 @@ func Chrome143Windows() *Preset {
 // Chrome143Linux returns Chrome 143 with Linux platform and fixed TLS extension order
 func Chrome143Linux() *Preset {
 	return &Preset{
-		Name:              "chrome-143-linux",
-		ClientHelloID:     tls.HelloChrome_143_Linux, // Chrome 143 Linux with fixed extension order
-		QUICClientHelloID: tls.HelloChrome_143_QUIC,  // QUIC-specific preset for HTTP/3
-		UserAgent:         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
+		Name:                 "chrome-143-linux",
+		ClientHelloID:        tls.HelloChrome_143_Linux,     // Chrome 143 Linux with fixed extension order
+		PSKClientHelloID:     tls.HelloChrome_143_Linux_PSK, // PSK for session resumption
+		QUICClientHelloID:    tls.HelloChrome_143_QUIC,      // QUIC-specific preset for HTTP/3
+		QUICPSKClientHelloID: tls.HelloChrome_143_QUIC_PSK,  // QUIC with PSK for session resumption
+		UserAgent:            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
 		Headers: map[string]string{
 			// Low-entropy Client Hints ONLY
 			"sec-ch-ua":          `"Google Chrome";v="143", "Chromium";v="143", "Not A(Brand";v="24"`,
@@ -352,10 +365,12 @@ func Chrome143Linux() *Preset {
 // Chrome143macOS returns Chrome 143 with macOS platform and fixed TLS extension order
 func Chrome143macOS() *Preset {
 	return &Preset{
-		Name:              "chrome-143-macos",
-		ClientHelloID:     tls.HelloChrome_143_macOS, // Chrome 143 macOS with fixed extension order
-		QUICClientHelloID: tls.HelloChrome_143_QUIC,  // QUIC-specific preset for HTTP/3
-		UserAgent:         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
+		Name:                 "chrome-143-macos",
+		ClientHelloID:        tls.HelloChrome_143_macOS,     // Chrome 143 macOS with fixed extension order
+		PSKClientHelloID:     tls.HelloChrome_143_macOS_PSK, // PSK for session resumption
+		QUICClientHelloID:    tls.HelloChrome_143_QUIC,      // QUIC-specific preset for HTTP/3
+		QUICPSKClientHelloID: tls.HelloChrome_143_QUIC_PSK,  // QUIC with PSK for session resumption
+		UserAgent:            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
 		Headers: map[string]string{
 			// Low-entropy Client Hints ONLY
 			"sec-ch-ua":          `"Google Chrome";v="143", "Chromium";v="143", "Not A(Brand";v="24"`,
