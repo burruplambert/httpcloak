@@ -311,13 +311,14 @@ func (p *QUICHostPool) createConn(ctx context.Context) (*QUICConn, error) {
 
 	// Generate GREASE setting ID (must be of form 0x1f * N + 0x21)
 	greaseSettingID := generateGREASESettingID()
+	// Chrome uses random GREASE values, not static 0
+	greaseSettingValue := rand.Uint64() & 0xFFFFFFFF // Random 32-bit value
 
 	// Chrome-like HTTP/3 additional settings
-	// Chrome uses GREASE setting with value 0
 	additionalSettings := map[uint64]uint64{
-		settingQPACKMaxTableCapacity: 65536, // Chrome's QPACK table capacity
-		settingQPACKBlockedStreams:   100,   // Chrome's blocked streams limit
-		greaseSettingID:              0,     // GREASE setting with value 0
+		settingQPACKMaxTableCapacity: 65536,            // Chrome's QPACK table capacity
+		settingQPACKBlockedStreams:   100,              // Chrome's blocked streams limit
+		greaseSettingID:              greaseSettingValue, // Randomized GREASE value
 	}
 
 	// Create HTTP/3 transport with custom dial function for IPv6-first
