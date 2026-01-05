@@ -293,7 +293,7 @@ func (p *QUICHostPool) createConn(ctx context.Context) (*QUICConn, error) {
 		MaxIncomingUniStreams: 103, // Chrome uses 103
 		Allow0RTT:             true,
 		EnableDatagrams:       true, // Chrome enables QUIC datagrams
-		InitialPacketSize:     1200,
+		InitialPacketSize:     1250, // Chrome uses ~1250
 		ClientHelloID:         clientHelloID, // uTLS TLS fingerprinting
 		ECHConfigList:         echConfigList, // ECH from DNS HTTPS records
 	}

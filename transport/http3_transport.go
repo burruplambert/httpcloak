@@ -134,7 +134,7 @@ func NewHTTP3Transport(preset *fingerprint.Preset, dnsCache *dns.Cache) *HTTP3Tr
 		EnableDatagrams:       true, // Chrome enables QUIC datagrams
 		// Use smaller initial packet size to work within default buffer limits
 		// This avoids the "failed to sufficiently increase receive buffer size" warning
-		InitialPacketSize:       1200,
+		InitialPacketSize:       1250, // Chrome uses ~1250
 		DisablePathMTUDiscovery: false, // Still allow PMTUD for optimal performance
 		// Use uTLS for TLS fingerprinting to match the preset's browser fingerprint
 		ClientHelloID: clientHelloID,
