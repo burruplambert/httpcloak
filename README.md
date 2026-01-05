@@ -671,10 +671,20 @@ This library is intended for:
 
 MIT
 
+## Dependencies
+
+This library uses custom forks to enable browser-accurate fingerprinting:
+
+| Library | Fork | Why |
+|---------|------|-----|
+| uTLS | [sardanioss/utls](https://github.com/sardanioss/utls) | Chrome 143 QUIC preset, platform-specific TLS fingerprints |
+| quic-go | [sardanioss/quic-go](https://github.com/sardanioss/quic-go) | uTLS integration, Chrome HTTP/3 SETTINGS, custom transport params |
+| net | [sardanioss/net](https://github.com/sardanioss/net) | HTTP/2 fingerprinting (SETTINGS, WINDOW_UPDATE, PRIORITY frames) |
+
 ## Credits
 
-- [uTLS](https://github.com/refraction-networking/utls) - TLS fingerprint spoofing
-- [quic-go](https://github.com/quic-go/quic-go) - HTTP/3 implementation
+- [uTLS](https://github.com/refraction-networking/utls) - TLS fingerprint spoofing (upstream)
+- [quic-go](https://github.com/quic-go/quic-go) - HTTP/3 implementation (upstream)
 - [tls.peet.ws](https://tls.peet.ws) - TLS fingerprint analysis
 
 ## AI Assistance Note
