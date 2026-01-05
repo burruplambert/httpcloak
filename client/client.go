@@ -114,6 +114,11 @@ func NewClient(presetName string, opts ...Option) *Client {
 		h2Manager = pool.NewManagerWithTLSConfig(preset, config.InsecureSkipVerify)
 	}
 
+	// Set IPv4 preference on DNS cache if configured
+	if config.PreferIPv4 {
+		h2Manager.GetDNSCache().SetPreferIPv4(true)
+	}
+
 	// Only create QUIC manager if H3 is not disabled AND no proxy is configured
 	// QUIC uses UDP and cannot be tunneled through HTTP proxies
 	var quicManager *pool.QUICManager

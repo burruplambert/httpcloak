@@ -29,6 +29,7 @@ type Cache struct {
 	resolver   *net.Resolver
 	defaultTTL time.Duration
 	minTTL     time.Duration
+	preferIPv4 bool // If true, prefer IPv4 over IPv6
 }
 
 // NewCache creates a new DNS cache
@@ -38,7 +39,13 @@ func NewCache() *Cache {
 		resolver:   net.DefaultResolver,
 		defaultTTL: 5 * time.Minute,  // Default TTL if not specified
 		minTTL:     30 * time.Second, // Minimum TTL to prevent hammering
+		preferIPv4: false,
 	}
+}
+
+// SetPreferIPv4 sets whether to prefer IPv4 addresses over IPv6
+func (c *Cache) SetPreferIPv4(prefer bool) {
+	c.preferIPv4 = prefer
 }
 
 // Resolve looks up the IP addresses for a hostname
@@ -96,7 +103,8 @@ func (c *Cache) lookup(ctx context.Context, host string) ([]net.IP, error) {
 }
 
 // ResolveOne returns a single IP address for the hostname
-// Prefers IPv6 over IPv4 (modern browser behavior)
+// By default prefers IPv6 over IPv4 (modern browser behavior)
+// If PreferIPv4 is set, prefers IPv4 instead
 func (c *Cache) ResolveOne(ctx context.Context, host string) (net.IP, error) {
 	ips, err := c.Resolve(ctx, host)
 	if err != nil {
@@ -105,17 +113,28 @@ func (c *Cache) ResolveOne(ctx context.Context, host string) (net.IP, error) {
 	if len(ips) == 0 {
 		return nil, &net.DNSError{Err: "no addresses found", Name: host}
 	}
-	// Return first IP (prefer IPv6 if available - modern browser behavior)
-	for _, ip := range ips {
-		if ip.To4() == nil && ip.To16() != nil {
-			return ip, nil
+
+	if c.preferIPv4 {
+		// Prefer IPv4
+		for _, ip := range ips {
+			if ip.To4() != nil {
+				return ip, nil
+			}
+		}
+	} else {
+		// Prefer IPv6 (default - modern browser behavior)
+		for _, ip := range ips {
+			if ip.To4() == nil && ip.To16() != nil {
+				return ip, nil
+			}
 		}
 	}
 	return ips[0], nil
 }
 
 // ResolveAllSorted returns all IPs sorted for Happy Eyeballs (RFC 8305)
-// IPv6 addresses first, interleaved with IPv4
+// By default IPv6 addresses first, interleaved with IPv4
+// If PreferIPv4 is set, IPv4 addresses come first
 func (c *Cache) ResolveAllSorted(ctx context.Context, host string) ([]net.IP, error) {
 	ips, err := c.Resolve(ctx, host)
 	if err != nil {
@@ -135,17 +154,33 @@ func (c *Cache) ResolveAllSorted(ctx context.Context, host string) ([]net.IP, er
 		}
 	}
 
-	// Interleave: IPv6, IPv4, IPv6, IPv4, ... (RFC 8305 recommendation)
+	// Interleave based on preference
 	result := make([]net.IP, 0, len(ips))
 	i, j := 0, 0
-	for i < len(ipv6) || j < len(ipv4) {
-		if i < len(ipv6) {
-			result = append(result, ipv6[i])
-			i++
+
+	if c.preferIPv4 {
+		// IPv4 first: IPv4, IPv6, IPv4, IPv6, ...
+		for i < len(ipv4) || j < len(ipv6) {
+			if i < len(ipv4) {
+				result = append(result, ipv4[i])
+				i++
+			}
+			if j < len(ipv6) {
+				result = append(result, ipv6[j])
+				j++
+			}
 		}
-		if j < len(ipv4) {
-			result = append(result, ipv4[j])
-			j++
+	} else {
+		// IPv6 first (default): IPv6, IPv4, IPv6, IPv4, ... (RFC 8305 recommendation)
+		for i < len(ipv6) || j < len(ipv4) {
+			if i < len(ipv6) {
+				result = append(result, ipv6[i])
+				i++
+			}
+			if j < len(ipv4) {
+				result = append(result, ipv4[j])
+				j++
+			}
 		}
 	}
 

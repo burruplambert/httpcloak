@@ -85,6 +85,11 @@ type ClientConfig struct {
 	// Useful if HTTP/3 causes issues with certain servers.
 	// Default: false.
 	DisableH3 bool
+
+	// PreferIPv4 makes the client prefer IPv4 addresses over IPv6.
+	// Useful on networks with poor IPv6 connectivity.
+	// Default: false (prefers IPv6 like modern browsers).
+	PreferIPv4 bool
 }
 
 // DefaultConfig returns default client configuration
@@ -233,6 +238,21 @@ func WithForceHTTP1() Option {
 	return func(c *ClientConfig) {
 		c.DisableH3 = true
 		// Note: Client will check for ForceHTTP1 flag
+	}
+}
+
+// WithPreferIPv4 makes the client prefer IPv4 addresses over IPv6.
+// Use this on networks with poor IPv6 connectivity.
+func WithPreferIPv4() Option {
+	return func(c *ClientConfig) {
+		c.PreferIPv4 = true
+	}
+}
+
+// WithDisableH3 disables HTTP/3 (alias for WithDisableHTTP3)
+func WithDisableH3() Option {
+	return func(c *ClientConfig) {
+		c.DisableH3 = true
 	}
 }
 
