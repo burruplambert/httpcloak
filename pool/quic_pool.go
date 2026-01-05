@@ -298,6 +298,7 @@ func (p *QUICHostPool) createConn(ctx context.Context) (*QUICConn, error) {
 		ChromeStyleInitialPackets:    true,  // Chrome-like frame patterns in Initial packets
 		ClientHelloID:                clientHelloID, // uTLS TLS fingerprinting
 		ECHConfigList:                echConfigList, // ECH from DNS HTTPS records
+		TransportParameterOrder:      quic.TransportParameterOrderChrome, // Chrome transport param ordering
 	}
 
 	// Get IPv6 and IPv4 addresses
