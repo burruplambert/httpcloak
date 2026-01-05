@@ -6,6 +6,7 @@ require (
 	github.com/andybalholm/brotli v1.1.1
 	github.com/klauspost/compress v1.18.2
 	github.com/miekg/dns v1.1.69
+	github.com/sardanioss/http v0.1.0
 	github.com/sardanioss/net v0.1.0
 	github.com/sardanioss/quic-go v0.1.0
 	github.com/sardanioss/utls v0.1.0

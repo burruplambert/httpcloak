@@ -2,7 +2,7 @@ package pool
 
 import (
 	"context"
-	"crypto/tls"
+	tls "github.com/sardanioss/utls"
 	"encoding/binary"
 	"fmt"
 	"math/rand"

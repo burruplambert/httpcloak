@@ -1,7 +1,7 @@
 package client
 
 import (
-	"net/http"
+	http "github.com/sardanioss/http"
 )
 
 // HookType represents the type of hook

@@ -2,12 +2,12 @@ package transport
 
 import (
 	"context"
-	"crypto/tls"
+	tls "github.com/sardanioss/utls"
 	"encoding/binary"
 	"fmt"
 	"math/rand"
 	"net"
-	"net/http"
+	http "github.com/sardanioss/http"
 	"os"
 	"sync"
 	"time"

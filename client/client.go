@@ -49,7 +49,7 @@ import (
 	"math"
 	"math/rand"
 	"net"
-	"net/http"
+	http "github.com/sardanioss/http"
 	"net/url"
 	"strings"
 	"sync"

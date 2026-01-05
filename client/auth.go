@@ -6,7 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
-	"net/http"
+	http "github.com/sardanioss/http"
 	"strings"
 )
 

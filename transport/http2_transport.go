@@ -3,11 +3,11 @@ package transport
 import (
 	"bufio"
 	"context"
-	"crypto/tls"
+	tls "github.com/sardanioss/utls"
 	"encoding/base64"
 	"fmt"
 	"net"
-	"net/http"
+	http "github.com/sardanioss/http"
 	"net/url"
 	"sync"
 	"time"
