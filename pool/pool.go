@@ -1,10 +1,8 @@
 package pool
 
 import (
-	"bytes"
 	"context"
 	"crypto/tls"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"net"
@@ -248,21 +246,52 @@ func (p *HostPool) createConn(ctx context.Context) (*Conn, error) {
 		return nil, fmt.Errorf("TLS handshake failed: %w", err)
 	}
 
-	// Wrap TLS connection with HTTP/2 frame interception for Chrome fingerprinting
-	wrappedConn := wrapTLSConn(tlsConn, p.preset)
+	// Build HTTP/2 settings from preset
+	settings := p.preset.HTTP2Settings
 
-	// Create HTTP/2 connection with Chrome-like settings
+	// Create HTTP/2 transport with native fingerprinting (no frame interception needed)
 	h2Transport := &http2.Transport{
 		AllowHTTP:                  false,
 		DisableCompression:         false,
 		StrictMaxConcurrentStreams: false,
-		MaxHeaderListSize:          p.preset.HTTP2Settings.MaxHeaderListSize,
-		MaxReadFrameSize:           p.preset.HTTP2Settings.MaxFrameSize,
-		MaxDecoderHeaderTableSize:  p.preset.HTTP2Settings.HeaderTableSize,
-		MaxEncoderHeaderTableSize:  p.preset.HTTP2Settings.HeaderTableSize,
+		MaxHeaderListSize:          settings.MaxHeaderListSize,
+		MaxReadFrameSize:           settings.MaxFrameSize,
+		MaxDecoderHeaderTableSize:  settings.HeaderTableSize,
+		MaxEncoderHeaderTableSize:  settings.HeaderTableSize,
+
+		// Native fingerprinting via sardanioss/net
+		ConnectionFlow: settings.ConnectionWindowUpdate,
+		Settings: map[http2.SettingID]uint32{
+			http2.SettingHeaderTableSize:   settings.HeaderTableSize,
+			http2.SettingEnablePush:        boolToUint32(settings.EnablePush),
+			http2.SettingInitialWindowSize: settings.InitialWindowSize,
+			http2.SettingMaxHeaderListSize: settings.MaxHeaderListSize,
+		},
+		SettingsOrder: []http2.SettingID{
+			http2.SettingHeaderTableSize,
+			http2.SettingEnablePush,
+			http2.SettingInitialWindowSize,
+			http2.SettingMaxHeaderListSize,
+		},
+		PseudoHeaderOrder: []string{":method", ":authority", ":scheme", ":path"}, // Chrome order (m,a,s,p)
+		HeaderPriority: &http2.PriorityParam{
+			Weight:    uint8(settings.StreamWeight - 1), // Wire format is weight-1
+			Exclusive: settings.StreamExclusive,
+			StreamDep: 0,
+		},
+		HeaderOrder: []string{
+			"sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform",
+			"upgrade-insecure-requests", "user-agent", "accept",
+			"sec-fetch-site", "sec-fetch-mode", "sec-fetch-user", "sec-fetch-dest",
+			"accept-encoding", "accept-language", "priority",
+			"cache-control", "cookie", "origin", "referer",
+		},
+		UserAgent:           p.preset.UserAgent,
+		StreamPriorityMode:  http2.StreamPriorityChrome,
+		HPACKIndexingPolicy: hpack.IndexingChrome,
 	}
 
-	h2Conn, err := h2Transport.NewClientConn(wrappedConn)
+	h2Conn, err := h2Transport.NewClientConn(tlsConn)
 	if err != nil {
 		tlsConn.Close()
 		return nil, fmt.Errorf("HTTP/2 setup failed: %w", err)
@@ -902,335 +931,10 @@ func (m *Manager) Stats() map[string]struct {
 	return stats
 }
 
-// HTTP/2 frame types
-const (
-	frameTypeSettings     = 0x4
-	frameTypeWindowUpdate = 0x8
-	frameTypeHeaders      = 0x1
-)
-
-// HTTP/2 settings identifiers
-const (
-	settingHeaderTableSize      = 0x1
-	settingEnablePush           = 0x2
-	settingMaxConcurrentStreams = 0x3
-	settingInitialWindowSize    = 0x4
-	settingMaxFrameSize         = 0x5
-	settingMaxHeaderListSize    = 0x6
-)
-
-// HTTP/2 frame header size
-const frameHeaderLen = 9
-
-// http2Conn wraps a connection to intercept and modify HTTP/2 frames
-type http2Conn struct {
-	net.Conn
-	preset        *fingerprint.Preset
-	buf           bytes.Buffer
-	mu            sync.Mutex
-	wrotePreface  bool
-	wroteSettings bool
-	wroteWindow   bool
-	hpackEncoder  *hpack.Encoder
-	hpackBuf      bytes.Buffer
-}
-
-// newHTTP2Conn creates a new HTTP/2 connection wrapper
-func newHTTP2Conn(conn net.Conn, preset *fingerprint.Preset) *http2Conn {
-	c := &http2Conn{
-		Conn:   conn,
-		preset: preset,
+// boolToUint32 converts a bool to uint32 (for HTTP/2 SETTINGS)
+func boolToUint32(b bool) uint32 {
+	if b {
+		return 1
 	}
-	c.hpackEncoder = hpack.NewEncoder(&c.hpackBuf)
-	return c
-}
-
-// Write intercepts writes to modify HTTP/2 frames
-func (c *http2Conn) Write(p []byte) (int, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	c.buf.Write(p)
-	originalLen := len(p)
-
-	for c.buf.Len() > 0 {
-		data := c.buf.Bytes()
-
-		if !c.wrotePreface {
-			preface := []byte("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n")
-			if len(data) >= len(preface) && bytes.Equal(data[:len(preface)], preface) {
-				if _, err := c.Conn.Write(preface); err != nil {
-					return 0, err
-				}
-				c.buf.Next(len(preface))
-				c.wrotePreface = true
-				continue
-			}
-			break
-		}
-
-		if len(data) < frameHeaderLen {
-			break
-		}
-
-		length := (uint32(data[0]) << 16) | (uint32(data[1]) << 8) | uint32(data[2])
-		frameType := data[3]
-
-		frameSize := int(frameHeaderLen + length)
-		if len(data) < frameSize {
-			break
-		}
-
-		switch frameType {
-		case frameTypeSettings:
-			if !c.wroteSettings {
-				customFrame := c.buildCustomSettingsFrame()
-				if _, err := c.Conn.Write(customFrame); err != nil {
-					return 0, err
-				}
-				c.wroteSettings = true
-				c.buf.Next(frameSize)
-				continue
-			}
-
-		case frameTypeWindowUpdate:
-			if !c.wroteWindow {
-				customFrame := c.buildCustomWindowUpdateFrame()
-				if _, err := c.Conn.Write(customFrame); err != nil {
-					return 0, err
-				}
-				c.wroteWindow = true
-				c.buf.Next(frameSize)
-				continue
-			}
-
-		case frameTypeHeaders:
-			flags := data[4]
-			streamID := binary.BigEndian.Uint32(data[5:9]) & 0x7FFFFFFF
-			hasEndHeaders := flags&0x4 != 0
-			if hasEndHeaders && streamID > 0 {
-				customFrame, err := c.buildCustomHeadersFrame(data[:frameSize])
-				if err == nil {
-					if _, err := c.Conn.Write(customFrame); err != nil {
-						return 0, err
-					}
-					c.buf.Next(frameSize)
-					continue
-				}
-			}
-		}
-
-		if _, err := c.Conn.Write(data[:frameSize]); err != nil {
-			return 0, err
-		}
-		c.buf.Next(frameSize)
-	}
-
-	return originalLen, nil
-}
-
-// buildCustomSettingsFrame builds a SETTINGS frame with Chrome values
-// Chrome order: HEADER_TABLE_SIZE, ENABLE_PUSH, MAX_CONCURRENT_STREAMS (if non-zero), INITIAL_WINDOW_SIZE, MAX_HEADER_LIST_SIZE
-// IMPORTANT: Chrome does NOT send MAX_CONCURRENT_STREAMS initially - sending 3:0 is a bot fingerprint!
-func (c *http2Conn) buildCustomSettingsFrame() []byte {
-	settings := c.preset.HTTP2Settings
-	var payload bytes.Buffer
-
-	// 1. HEADER_TABLE_SIZE (Chrome sends 65536)
-	if settings.HeaderTableSize > 0 {
-		binary.Write(&payload, binary.BigEndian, uint16(settingHeaderTableSize))
-		binary.Write(&payload, binary.BigEndian, settings.HeaderTableSize)
-	}
-
-	// 2. ENABLE_PUSH (Chrome sends 0)
-	binary.Write(&payload, binary.BigEndian, uint16(settingEnablePush))
-	if settings.EnablePush {
-		binary.Write(&payload, binary.BigEndian, uint32(1))
-	} else {
-		binary.Write(&payload, binary.BigEndian, uint32(0))
-	}
-
-	// 3. MAX_CONCURRENT_STREAMS - Chrome does NOT send this initially!
-	// Only send if explicitly set to a non-zero value (not for Chrome presets)
-	// This was causing bot detection - browsers never send 3:0
-	if settings.MaxConcurrentStreams > 0 {
-		binary.Write(&payload, binary.BigEndian, uint16(settingMaxConcurrentStreams))
-		binary.Write(&payload, binary.BigEndian, settings.MaxConcurrentStreams)
-	}
-
-	// 4. INITIAL_WINDOW_SIZE (Chrome sends 6291456)
-	if settings.InitialWindowSize > 0 {
-		binary.Write(&payload, binary.BigEndian, uint16(settingInitialWindowSize))
-		binary.Write(&payload, binary.BigEndian, settings.InitialWindowSize)
-	}
-
-	// 5. MAX_HEADER_LIST_SIZE (Chrome sends 262144)
-	if settings.MaxHeaderListSize > 0 {
-		binary.Write(&payload, binary.BigEndian, uint16(settingMaxHeaderListSize))
-		binary.Write(&payload, binary.BigEndian, settings.MaxHeaderListSize)
-	}
-
-	payloadLen := payload.Len()
-	frame := make([]byte, frameHeaderLen+payloadLen)
-	frame[0] = byte(payloadLen >> 16)
-	frame[1] = byte(payloadLen >> 8)
-	frame[2] = byte(payloadLen)
-	frame[3] = frameTypeSettings
-	frame[4] = 0
-	copy(frame[frameHeaderLen:], payload.Bytes())
-
-	return frame
-}
-
-// buildCustomHeadersFrame rebuilds HEADERS frame with Chrome pseudo-header order
-// Modern Chrome (131+) does NOT send explicit PRIORITY frames on stream 1
-// Sending priority data on stream 1 is a bot fingerprint!
-func (c *http2Conn) buildCustomHeadersFrame(originalFrame []byte) ([]byte, error) {
-	originalFlags := originalFrame[4]
-	streamID := binary.BigEndian.Uint32(originalFrame[5:9]) & 0x7FFFFFFF
-
-	hasPadding := originalFlags&0x8 != 0
-	hasPriority := originalFlags&0x20 != 0
-
-	headerBlockStart := frameHeaderLen
-	if hasPadding {
-		headerBlockStart++
-	}
-	if hasPriority {
-		headerBlockStart += 5
-	}
-
-	headerBlock := originalFrame[headerBlockStart:]
-	if hasPadding && len(originalFrame) > frameHeaderLen {
-		padLen := int(originalFrame[frameHeaderLen])
-		if padLen < len(headerBlock) {
-			headerBlock = headerBlock[:len(headerBlock)-padLen]
-		}
-	}
-
-	decoder := hpack.NewDecoder(65536, nil)
-	headers, err := decoder.DecodeFull(headerBlock)
-	if err != nil {
-		return nil, err
-	}
-
-	var method, authority, scheme, path string
-	headerMap := make(map[string]string)
-	for _, h := range headers {
-		switch h.Name {
-		case ":method":
-			method = h.Value
-		case ":authority":
-			authority = h.Value
-		case ":scheme":
-			scheme = h.Value
-		case ":path":
-			path = h.Value
-		default:
-			headerMap[h.Name] = h.Value
-		}
-	}
-
-	// Chrome 143 header order (extracted from real Chrome request to tls.peet.ws)
-	chromeHeaderOrder := []string{
-		"sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform",
-		"upgrade-insecure-requests", "user-agent", "accept",
-		"sec-fetch-site", "sec-fetch-mode", "sec-fetch-user", "sec-fetch-dest",
-		"accept-encoding", "accept-language", "priority",
-		// High-entropy Client Hints (only sent when requested via Accept-CH)
-		"sec-ch-ua-arch", "sec-ch-ua-bitness", "sec-ch-ua-full-version-list",
-		"sec-ch-ua-model", "sec-ch-ua-platform-version",
-		// Other headers
-		"cache-control", "cookie", "origin", "pragma", "referer",
-	}
-
-	c.hpackBuf.Reset()
-	c.hpackEncoder.WriteField(hpack.HeaderField{Name: ":method", Value: method})
-	c.hpackEncoder.WriteField(hpack.HeaderField{Name: ":authority", Value: authority})
-	c.hpackEncoder.WriteField(hpack.HeaderField{Name: ":scheme", Value: scheme})
-	c.hpackEncoder.WriteField(hpack.HeaderField{Name: ":path", Value: path})
-
-	written := make(map[string]bool)
-	for _, name := range chromeHeaderOrder {
-		if val, ok := headerMap[name]; ok {
-			c.hpackEncoder.WriteField(hpack.HeaderField{Name: name, Value: val})
-			written[name] = true
-		}
-	}
-
-	for name, val := range headerMap {
-		if !written[name] {
-			c.hpackEncoder.WriteField(hpack.HeaderField{Name: name, Value: val})
-		}
-	}
-	newHeaderBlock := c.hpackBuf.Bytes()
-
-	// Chrome 143 DOES send priority data on HEADERS frames
-	// Verified from real Chrome 143 request to tls.peet.ws:
-	// "priority": {"weight": 256, "depends_on": 0, "exclusive": 1}
-	priorityData := make([]byte, 5)
-	binary.BigEndian.PutUint32(priorityData[0:4], 0x80000000) // exclusive=1, depends_on=0
-	weight := c.preset.HTTP2Settings.StreamWeight
-	if weight == 0 {
-		weight = 256
-	}
-	priorityData[4] = byte(weight - 1) // Wire format is weight-1
-
-	newFlags := (originalFlags & 0x05) | 0x20 // Keep END_STREAM, END_HEADERS, add PRIORITY
-	newPayloadLen := 5 + len(newHeaderBlock)
-
-	frame := make([]byte, frameHeaderLen+newPayloadLen)
-	frame[0] = byte(newPayloadLen >> 16)
-	frame[1] = byte(newPayloadLen >> 8)
-	frame[2] = byte(newPayloadLen)
-	frame[3] = frameTypeHeaders
-	frame[4] = newFlags
-	binary.BigEndian.PutUint32(frame[5:9], streamID)
-	copy(frame[frameHeaderLen:], priorityData)
-	copy(frame[frameHeaderLen+5:], newHeaderBlock)
-
-	return frame, nil
-}
-
-// buildCustomWindowUpdateFrame builds WINDOW_UPDATE frame with Chrome value
-func (c *http2Conn) buildCustomWindowUpdateFrame() []byte {
-	increment := c.preset.HTTP2Settings.ConnectionWindowUpdate
-	if increment == 0 {
-		increment = 15663105
-	}
-
-	frame := make([]byte, frameHeaderLen+4)
-	frame[0] = 0
-	frame[1] = 0
-	frame[2] = 4
-	frame[3] = frameTypeWindowUpdate
-	frame[4] = 0
-	binary.BigEndian.PutUint32(frame[frameHeaderLen:], increment&0x7FFFFFFF)
-
-	return frame
-}
-
-func (c *http2Conn) Read(p []byte) (int, error)            { return c.Conn.Read(p) }
-func (c *http2Conn) Close() error                          { return c.Conn.Close() }
-func (c *http2Conn) LocalAddr() net.Addr                   { return c.Conn.LocalAddr() }
-func (c *http2Conn) RemoteAddr() net.Addr                  { return c.Conn.RemoteAddr() }
-func (c *http2Conn) SetDeadline(t time.Time) error         { return c.Conn.SetDeadline(t) }
-func (c *http2Conn) SetReadDeadline(t time.Time) error     { return c.Conn.SetReadDeadline(t) }
-func (c *http2Conn) SetWriteDeadline(t time.Time) error    { return c.Conn.SetWriteDeadline(t) }
-
-type tlsConnWrapper struct {
-	*http2Conn
-	tlsConn *utls.UConn
-}
-
-func (w *tlsConnWrapper) ConnectionState() utls.ConnectionState {
-	return w.tlsConn.ConnectionState()
-}
-
-func wrapTLSConn(tlsConn *utls.UConn, preset *fingerprint.Preset) net.Conn {
-	h2Conn := newHTTP2Conn(tlsConn, preset)
-	return &tlsConnWrapper{
-		http2Conn: h2Conn,
-		tlsConn:   tlsConn,
-	}
+	return 0
 }

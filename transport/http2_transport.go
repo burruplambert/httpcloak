@@ -15,6 +15,7 @@ import (
 	"github.com/sardanioss/httpcloak/dns"
 	"github.com/sardanioss/httpcloak/fingerprint"
 	"github.com/sardanioss/net/http2"
+	"github.com/sardanioss/net/http2/hpack"
 	utls "github.com/sardanioss/utls"
 )
 
@@ -247,19 +248,50 @@ func (t *HTTP2Transport) createConn(ctx context.Context, host, port string) (*pe
 		return nil, fmt.Errorf("server does not support HTTP/2 (got: %s)", state.NegotiatedProtocol)
 	}
 
-	// Wrap TLS connection with HTTP/2 frame interception for Chrome fingerprinting
-	wrappedConn := wrapTLSConn(tlsConn, t.preset)
+	// Build HTTP/2 settings from preset
+	settings := t.preset.HTTP2Settings
 
-	// Create HTTP/2 client connection with wrapped connection
+	// Create HTTP/2 transport with native fingerprinting (no frame interception needed)
 	h2Transport := &http2.Transport{
-		AllowHTTP:                    false,
-		DisableCompression:           false,
-		StrictMaxConcurrentStreams:   false,
-		ReadIdleTimeout:              t.maxIdleTime,
-		PingTimeout:                  15 * time.Second,
+		AllowHTTP:                  false,
+		DisableCompression:         false,
+		StrictMaxConcurrentStreams: false,
+		ReadIdleTimeout:            t.maxIdleTime,
+		PingTimeout:                15 * time.Second,
+
+		// Native fingerprinting via sardanioss/net
+		ConnectionFlow: settings.ConnectionWindowUpdate,
+		Settings: map[http2.SettingID]uint32{
+			http2.SettingHeaderTableSize:   settings.HeaderTableSize,
+			http2.SettingEnablePush:        boolToUint32(settings.EnablePush),
+			http2.SettingInitialWindowSize: settings.InitialWindowSize,
+			http2.SettingMaxHeaderListSize: settings.MaxHeaderListSize,
+		},
+		SettingsOrder: []http2.SettingID{
+			http2.SettingHeaderTableSize,
+			http2.SettingEnablePush,
+			http2.SettingInitialWindowSize,
+			http2.SettingMaxHeaderListSize,
+		},
+		PseudoHeaderOrder: []string{":method", ":authority", ":scheme", ":path"}, // Chrome order (m,a,s,p)
+		HeaderPriority: &http2.PriorityParam{
+			Weight:    uint8(settings.StreamWeight - 1), // Wire format is weight-1
+			Exclusive: settings.StreamExclusive,
+			StreamDep: 0,
+		},
+		HeaderOrder: []string{
+			"sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform",
+			"upgrade-insecure-requests", "user-agent", "accept",
+			"sec-fetch-site", "sec-fetch-mode", "sec-fetch-user", "sec-fetch-dest",
+			"accept-encoding", "accept-language", "priority",
+			"cache-control", "cookie", "origin", "referer",
+		},
+		UserAgent:           t.preset.UserAgent,
+		StreamPriorityMode:  http2.StreamPriorityChrome,
+		HPACKIndexingPolicy: hpack.IndexingChrome,
 	}
 
-	h2Conn, err := h2Transport.NewClientConn(wrappedConn)
+	h2Conn, err := h2Transport.NewClientConn(tlsConn)
 	if err != nil {
 		tlsConn.Close()
 		return nil, fmt.Errorf("HTTP/2 setup failed: %w", err)
@@ -518,4 +550,12 @@ type ConnStats struct {
 // GetDNSCache returns the DNS cache
 func (t *HTTP2Transport) GetDNSCache() *dns.Cache {
 	return t.dnsCache
+}
+
+// boolToUint32 converts a bool to uint32 (for HTTP/2 SETTINGS)
+func boolToUint32(b bool) uint32 {
+	if b {
+		return 1
+	}
+	return 0
 }
