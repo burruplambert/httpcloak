@@ -301,11 +301,14 @@ func (p *QUICHostPool) createConn(ctx context.Context) (*QUICConn, error) {
 		TransportParameterOrder:      quic.TransportParameterOrderChrome, // Chrome transport param ordering
 	}
 
-	// Get IPv6 and IPv4 addresses
+	// Get IPv6 and IPv4 addresses separately
 	ipv6, ipv4, err := p.dnsCache.ResolveIPv6First(ctx, p.host)
 	if err != nil {
 		return nil, fmt.Errorf("DNS resolution failed: %w", err)
 	}
+
+	// Check if user prefers IPv4
+	preferIPv4 := p.dnsCache != nil && p.dnsCache.PreferIPv4()
 
 	port, _ := net.LookupPort("udp", p.port)
 	if port == 0 {
@@ -324,8 +327,15 @@ func (p *QUICHostPool) createConn(ctx context.Context) (*QUICConn, error) {
 		greaseSettingID:              greaseSettingValue, // Randomized GREASE value
 	}
 
-	// Combine all IPs for racing (already sorted by preference from DNS cache)
-	allIPs := append(ipv6, ipv4...)
+	// Order IPs based on preference
+	var preferredIPs, fallbackIPs []net.IP
+	if preferIPv4 {
+		preferredIPs = ipv4
+		fallbackIPs = ipv6
+	} else {
+		preferredIPs = ipv6
+		fallbackIPs = ipv4
+	}
 
 	// Create HTTP/3 transport with Happy Eyeballs-style racing
 	h3Transport := &http3.Transport{
@@ -342,34 +352,47 @@ func (p *QUICHostPool) createConn(ctx context.Context) (*QUICConn, error) {
 				err     error
 			}
 
-			dialCtx, cancel := context.WithCancel(ctx)
-			defer cancel()
+			if len(preferredIPs)+len(fallbackIPs) == 0 {
+				return nil, fmt.Errorf("no IP addresses available for %s", addr)
+			}
 
-			resultCh := make(chan dialResult, len(allIPs))
+			dialCtx, cancel := context.WithCancel(ctx)
+			// Buffer for worst case: each remote IP tried from each local IPv6
+			resultCh := make(chan dialResult, (len(preferredIPs)+len(fallbackIPs))*10)
 			started := 0
 
-			// Race all addresses with 250ms stagger
-			for i, ip := range allIPs {
-				// Check for early success
-				select {
-				case result := <-resultCh:
-					if result.conn != nil {
-						cancel()
-						return result.conn, nil
+			// Get all local IPv6 addresses for source address selection
+			var localIPv6Addrs []net.IP
+			ifaces, _ := net.Interfaces()
+			for _, iface := range ifaces {
+				addrs, _ := iface.Addrs()
+				for _, addr := range addrs {
+					if ipnet, ok := addr.(*net.IPNet); ok {
+						if ipnet.IP.To4() == nil && ipnet.IP.IsGlobalUnicast() {
+							localIPv6Addrs = append(localIPv6Addrs, ipnet.IP)
+						}
 					}
-					if result.udpConn != nil {
-						result.udpConn.Close()
-					}
-				default:
 				}
+			}
 
-				go func(ip net.IP) {
+			// Helper to start a dial
+			startDial := func(remoteIP net.IP, localIP net.IP) {
+				go func(remoteIP, localIP net.IP) {
 					network := "udp4"
-					if ip.To4() == nil {
+					if remoteIP.To4() == nil {
 						network = "udp6"
 					}
-					udpAddr := &net.UDPAddr{IP: ip, Port: port}
-					udpConn, err := net.ListenUDP(network, nil)
+					udpAddr := &net.UDPAddr{IP: remoteIP, Port: port}
+
+					var udpConn *net.UDPConn
+					var err error
+					if localIP != nil {
+						// Bind to specific local address
+						localAddr := &net.UDPAddr{IP: localIP, Port: 0}
+						udpConn, err = net.ListenUDP(network, localAddr)
+					} else {
+						udpConn, err = net.ListenUDP(network, nil)
+					}
 					if err != nil {
 						resultCh <- dialResult{err: err}
 						return
@@ -381,28 +404,58 @@ func (p *QUICHostPool) createConn(ctx context.Context) (*QUICConn, error) {
 						return
 					}
 					resultCh <- dialResult{conn: conn, udpConn: udpConn}
-				}(ip)
-				started++
+				}(remoteIP, localIP)
+			}
 
-				// Wait 250ms before next attempt
-				if i < len(allIPs)-1 {
-					select {
-					case result := <-resultCh:
-						if result.conn != nil {
-							cancel()
-							return result.conn, nil
+			// Start preferred IPs in parallel
+			// For IPv6 remotes, try from each local IPv6 address
+			for _, remoteIP := range preferredIPs {
+				if remoteIP.To4() == nil && len(localIPv6Addrs) > 0 {
+					// IPv6: try from each local IPv6 address
+					for _, localIP := range localIPv6Addrs {
+						startDial(remoteIP, localIP)
+						started++
+					}
+				} else {
+					// IPv4: let kernel choose source
+					startDial(remoteIP, nil)
+					started++
+				}
+			}
+
+			// RFC 8305: Wait 250ms before starting fallback IPs
+			if len(fallbackIPs) > 0 {
+				select {
+				case result := <-resultCh:
+					if result.conn != nil {
+						cancel()
+						return result.conn, nil
+					}
+					if result.udpConn != nil {
+						result.udpConn.Close()
+					}
+					started--
+				case <-time.After(250 * time.Millisecond):
+					// Preferred IPs haven't succeeded, start fallback
+				case <-ctx.Done():
+					cancel()
+					return nil, ctx.Err()
+				}
+
+				for _, remoteIP := range fallbackIPs {
+					if remoteIP.To4() == nil && len(localIPv6Addrs) > 0 {
+						for _, localIP := range localIPv6Addrs {
+							startDial(remoteIP, localIP)
+							started++
 						}
-						if result.udpConn != nil {
-							result.udpConn.Close()
-						}
-					case <-time.After(250 * time.Millisecond):
-					case <-ctx.Done():
-						return nil, ctx.Err()
+					} else {
+						startDial(remoteIP, nil)
+						started++
 					}
 				}
 			}
 
-			// Wait for any success
+			// Wait for first success or all failures
 			var lastErr error
 			for i := 0; i < started; i++ {
 				select {
@@ -416,10 +469,12 @@ func (p *QUICHostPool) createConn(ctx context.Context) (*QUICConn, error) {
 					}
 					lastErr = result.err
 				case <-ctx.Done():
+					cancel()
 					return nil, ctx.Err()
 				}
 			}
 
+			cancel()
 			if lastErr != nil {
 				return nil, lastErr
 			}

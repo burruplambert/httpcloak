@@ -211,13 +211,23 @@ func (p *HostPool) createConn(ctx context.Context) (*Conn, error) {
 		}
 	} else {
 		// Direct connection - resolve DNS and use Happy Eyeballs
-		ips, err := p.dnsCache.ResolveAllSorted(ctx, p.host)
+		ipv6, ipv4, err := p.dnsCache.ResolveIPv6First(ctx, p.host)
 		if err != nil {
 			return nil, fmt.Errorf("DNS resolution failed: %w", err)
 		}
 
+		// Order IPs based on preference
+		var preferredIPs, fallbackIPs []net.IP
+		if p.dnsCache.PreferIPv4() {
+			preferredIPs = ipv4
+			fallbackIPs = ipv6
+		} else {
+			preferredIPs = ipv6
+			fallbackIPs = ipv4
+		}
+
 		// Use Happy Eyeballs to establish connection
-		rawConn, err = p.dialHappyEyeballs(ctx, ips)
+		rawConn, err = p.dialHappyEyeballs(ctx, preferredIPs, fallbackIPs)
 		if err != nil {
 			return nil, fmt.Errorf("TCP connect failed: %w", err)
 		}
@@ -324,9 +334,10 @@ func (p *HostPool) createConn(ctx context.Context) (*Conn, error) {
 }
 
 // dialHappyEyeballs implements RFC 8305 Happy Eyeballs v2
-// Races connections with 250ms stagger - doesn't wait for timeout on each address
-func (p *HostPool) dialHappyEyeballs(ctx context.Context, ips []net.IP) (net.Conn, error) {
-	if len(ips) == 0 {
+// Starts preferred IPs first, waits 250ms, then starts fallback IPs
+func (p *HostPool) dialHappyEyeballs(ctx context.Context, preferredIPs, fallbackIPs []net.IP) (net.Conn, error) {
+	totalIPs := len(preferredIPs) + len(fallbackIPs)
+	if totalIPs == 0 {
 		return nil, fmt.Errorf("no IP addresses available")
 	}
 
@@ -335,29 +346,13 @@ func (p *HostPool) dialHappyEyeballs(ctx context.Context, ips []net.IP) (net.Con
 		err  error
 	}
 
-	// Create cancellable context for racing
 	dialCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	resultCh := make(chan dialResult, len(ips))
+	resultCh := make(chan dialResult, totalIPs)
+	perAddrTimeout := 5 * time.Second
 	started := 0
 
-	// Per-address timeout (shorter than overall for racing)
-	perAddrTimeout := 5 * time.Second
-
-	// Start dialing with 250ms stagger between attempts (RFC 8305)
-	for i, ip := range ips {
-		// Check if we already got a connection before starting more
-		select {
-		case result := <-resultCh:
-			if result.conn != nil {
-				cancel() // Stop other dials
-				return result.conn, nil
-			}
-		default:
-		}
-
-		// Start this dial
+	// Helper to start a dial
+	startDial := func(ip net.IP) {
 		go func(ip net.IP) {
 			network := "tcp4"
 			if ip.To4() == nil {
@@ -374,25 +369,38 @@ func (p *HostPool) dialHappyEyeballs(ctx context.Context, ips []net.IP) (net.Con
 				}
 			}
 		}(ip)
-		started++
+	}
 
-		// Wait 250ms before starting next attempt (unless it's the last one)
-		if i < len(ips)-1 {
-			select {
-			case result := <-resultCh:
-				if result.conn != nil {
-					cancel()
-					return result.conn, nil
-				}
-			case <-time.After(250 * time.Millisecond):
-				// Continue to next address
-			case <-ctx.Done():
-				return nil, ctx.Err()
+	// Start preferred IPs (IPv6 by default) in parallel
+	for _, ip := range preferredIPs {
+		startDial(ip)
+		started++
+	}
+
+	// RFC 8305: Wait 250ms before starting fallback IPs
+	if len(fallbackIPs) > 0 {
+		select {
+		case result := <-resultCh:
+			if result.conn != nil {
+				cancel()
+				return result.conn, nil
 			}
+			started-- // One failed, adjust count
+		case <-time.After(250 * time.Millisecond):
+			// Preferred IPs haven't succeeded yet, start fallback
+		case <-ctx.Done():
+			cancel()
+			return nil, ctx.Err()
+		}
+
+		// Start fallback IPs in parallel
+		for _, ip := range fallbackIPs {
+			startDial(ip)
+			started++
 		}
 	}
 
-	// Wait for all started dials to complete or succeed
+	// Wait for first success or all failures
 	var lastErr error
 	for i := 0; i < started; i++ {
 		select {
@@ -403,10 +411,12 @@ func (p *HostPool) dialHappyEyeballs(ctx context.Context, ips []net.IP) (net.Con
 			}
 			lastErr = result.err
 		case <-ctx.Done():
+			cancel()
 			return nil, ctx.Err()
 		}
 	}
 
+	cancel()
 	if lastErr != nil {
 		return nil, lastErr
 	}

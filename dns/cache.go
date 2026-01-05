@@ -48,6 +48,11 @@ func (c *Cache) SetPreferIPv4(prefer bool) {
 	c.preferIPv4 = prefer
 }
 
+// PreferIPv4 returns whether IPv4 is preferred over IPv6
+func (c *Cache) PreferIPv4() bool {
+	return c.preferIPv4
+}
+
 // Resolve looks up the IP addresses for a hostname
 // Returns cached result if available and not expired
 func (c *Cache) Resolve(ctx context.Context, host string) ([]net.IP, error) {
