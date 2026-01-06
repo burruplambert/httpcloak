@@ -388,6 +388,7 @@ func (c *Client) Do(ctx context.Context, req *Request) (*Response, error) {
 
 // doWithRetry executes request with retry logic
 // Handles standard retries and cookie challenge retries (bot protection)
+// For Akamai: First request uses H2 (gets cookies), retry uses H3 (succeeds with cookies)
 func (c *Client) doWithRetry(ctx context.Context, req *Request) (*Response, error) {
 	var lastErr error
 	var lastResp *Response
@@ -404,21 +405,29 @@ func (c *Client) doWithRetry(ctx context.Context, req *Request) (*Response, erro
 			}
 		}
 
-		resp, err := c.doOnce(ctx, req, nil)
+		// Clone request for this attempt
+		reqCopy := *req
+
+		// After cookie challenge, switch to H3 for retry (Akamai pattern)
+		if cookieChallengeRetried && req.ForceProtocol == ProtocolAuto && c.quicManager != nil {
+			reqCopy.ForceProtocol = ProtocolHTTP3
+		}
+
+		resp, err := c.doOnce(ctx, &reqCopy, nil)
 		if err != nil {
 			lastErr = err
 			continue
 		}
 
-		// Check for cookie challenge (403 + Set-Cookie from bot protection)
+		// Check for cookie challenge (403/429 + Set-Cookie from bot protection)
 		// This handles Akamai, Cloudflare, PerimeterX, etc.
-		// Cookie challenge flow: first request gets 403 + cookies, retry with cookies succeeds
-		if resp.StatusCode == 403 && !cookieChallengeRetried && req.ForceProtocol == ProtocolAuto {
+		// Cookie challenge flow: H2 request gets 403/429 + cookies, H3 retry succeeds
+		isChallengeStatus := resp.StatusCode == 403 || resp.StatusCode == 429
+		if isChallengeStatus && !cookieChallengeRetried && req.ForceProtocol == ProtocolAuto {
 			if setCookie, hasCookies := resp.Headers["set-cookie"]; hasCookies && setCookie != "" {
 				cookieChallengeRetried = true
 				// Cookies are now stored in jar from first response
-				// Simply retry - cookies will be sent automatically
-				// No need to switch protocols; just having cookies is usually enough
+				// Next retry will use H3 with these cookies
 				continue
 			}
 		}
@@ -591,7 +600,8 @@ func (c *Client) doOnce(ctx context.Context, req *Request, redirectHistory []*Re
 			return nil, err
 		}
 	default:
-		// Auto: Try HTTP/3 -> HTTP/2 -> HTTP/1.1 with smart fallback
+		// Auto: Try HTTP/2 -> HTTP/3 -> HTTP/1.1 with smart fallback
+		// H2 first for bot protection (Akamai pattern: H2 gets cookies, H3 succeeds with cookies)
 		useH1 := c.shouldUseH1(hostKey)
 
 		if useH1 {
@@ -600,41 +610,31 @@ func (c *Client) doOnce(ctx context.Context, req *Request, redirectHistory []*Re
 			if err != nil {
 				return nil, err
 			}
-		} else if useH3 {
-			// Try HTTP/3 first
-			resp, usedProtocol, err = c.doHTTP3(ctx, host, port, httpReq, timing, startTime)
+		} else {
+			// Try HTTP/2 first (for bot protection cookie flow)
+			resp, usedProtocol, err = c.doHTTP2(ctx, host, port, httpReq, timing, startTime)
 			if err != nil {
-				// HTTP/3 failed, mark it and fall back to HTTP/2
-				c.markH3Failed(hostKey)
-
-				// Reset request body for retry
-				resetRequestBody(httpReq, req.Body)
-
-				resp, usedProtocol, err = c.doHTTP2(ctx, host, port, httpReq, timing, startTime)
-				if err != nil {
-					// HTTP/2 also failed, try HTTP/1.1
-					c.markH2Failed(hostKey)
-
+				// HTTP/2 failed, try HTTP/3 if available
+				if useH3 {
 					resetRequestBody(httpReq, req.Body)
-
+					resp, usedProtocol, err = c.doHTTP3(ctx, host, port, httpReq, timing, startTime)
+					if err != nil {
+						c.markH3Failed(hostKey)
+						// Both H2 and H3 failed, try HTTP/1.1
+						resetRequestBody(httpReq, req.Body)
+						resp, usedProtocol, err = c.doHTTP1(ctx, host, port, httpReq, timing, startTime)
+						if err != nil {
+							return nil, err
+						}
+					}
+				} else {
+					// No H3 available, try HTTP/1.1
+					c.markH2Failed(hostKey)
+					resetRequestBody(httpReq, req.Body)
 					resp, usedProtocol, err = c.doHTTP1(ctx, host, port, httpReq, timing, startTime)
 					if err != nil {
 						return nil, err
 					}
-				}
-			}
-		} else {
-			// Try HTTP/2 first
-			resp, usedProtocol, err = c.doHTTP2(ctx, host, port, httpReq, timing, startTime)
-			if err != nil {
-				// HTTP/2 failed, try HTTP/1.1
-				c.markH2Failed(hostKey)
-
-				resetRequestBody(httpReq, req.Body)
-
-				resp, usedProtocol, err = c.doHTTP1(ctx, host, port, httpReq, timing, startTime)
-				if err != nil {
-					return nil, err
 				}
 			}
 		}
