@@ -22,28 +22,28 @@ Go's standard `net/http` has a recognizable fingerprint that bot detection syste
 │                    FINGERPRINT COMPARISON (from tls.peet.ws)                    │
 ├─────────────────────────────────────────────────────────────────────────────────┤
 │                                                                                 │
-│  METRIC                    │ GO STDLIB         │ HTTPCLOAK         │ CHROME 143│
-│  ──────────────────────────┼───────────────────┼───────────────────┼───────────│
-│  Cipher Suites             │ 13                │ 16                │ 16        │
-│  TLS Extensions            │ 12                │ 18                │ 18        │
-│  GREASE Values             │ None              │ Yes (random)      │ Yes       │
-│  Post-Quantum (X25519MLKEM)│ No                │ Yes               │ Yes       │
-│  ECH Support               │ No                │ Yes               │ Yes       │
+│  METRIC                    │ GO STDLIB         │ HTTPCLOAK         │ CHROME 143 │
+│  ──────────────────────────┼───────────────────┼───────────────────┼─────────── │
+│  Cipher Suites             │ 13                │ 16                │ 16         │
+│  TLS Extensions            │ 12                │ 18                │ 18         │
+│  GREASE Values             │ None              │ Yes (random)      │ Yes        │
+│  Post-Quantum (X25519MLKEM)│ No                │ Yes               │ Yes        │
+│  ECH Support               │ No                │ Yes               │ Yes        │
 │                                                                                 │
 │  HTTP/2 SETTINGS                                                                │
-│  ──────────────────────────┼───────────────────┼───────────────────┼───────────│
-│  HEADER_TABLE_SIZE         │ 4,096             │ 65,536            │ 65,536    │
-│  ENABLE_PUSH               │ 1                 │ 0                 │ 0         │
-│  INITIAL_WINDOW_SIZE       │ 65,535 (64KB)     │ 6,291,456 (6MB)   │ 6,291,456 │
-│  MAX_HEADER_LIST_SIZE      │ 10,485,760        │ 262,144           │ 262,144   │
+│  ──────────────────────────┼───────────────────┼───────────────────┼────────────│
+│  HEADER_TABLE_SIZE         │ 4,096             │ 65,536            │ 65,536     │
+│  ENABLE_PUSH               │ 1                 │ 0                 │ 0          │
+│  INITIAL_WINDOW_SIZE       │ 65,535 (64KB)     │ 6,291,456 (6MB)   │ 6,291,456  │
+│  MAX_HEADER_LIST_SIZE      │ 10,485,760        │ 262,144           │ 262,144    │
 │                                                                                 │
 │  FINGERPRINT HASHES                                                             │
-│  ──────────────────────────┼───────────────────┼───────────────────┼───────────│
-│  JA4                       │ t13d1312h2_...    │ t13d1516h2_8daaf6...    MATCH │
-│  Akamai HTTP/2             │ cbcbfae223...     │ 52d84b11737d...         MATCH │
-│  peetprint                 │ (different)       │ 1d4ffe9b0e34...         MATCH │
+│  ──────────────────────────┼───────────────────┼───────────────────┼────────────│
+│  JA4                       │ t13d1312h2_...    │ t13d1516h2_8daaf6...    MATCH  │
+│  Akamai HTTP/2             │ cbcbfae223...     │ 52d84b11737d...         MATCH  │
+│  peetprint                 │ (different)       │ 1d4ffe9b0e34...         MATCH  │
 │                                                                                 │
-│  RESULT                    │ BLOCKED           │ PASSED            │ PASSED    │
+│  RESULT                    │ BLOCKED           │ PASSED            │ PASSED     │
 └─────────────────────────────────────────────────────────────────────────────────┘
 ```
 
