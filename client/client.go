@@ -41,6 +41,7 @@ package client
 
 import (
 	"bytes"
+	"compress/flate"
 	"compress/gzip"
 	"context"
 	"encoding/json"
@@ -1206,9 +1207,9 @@ func decompress(data []byte, encoding string) ([]byte, error) {
 		return io.ReadAll(decoder)
 
 	case "deflate":
-		// For deflate, just return as-is for now
-		// (proper deflate handling would need zlib)
-		return data, nil
+		reader := flate.NewReader(bytes.NewReader(data))
+		defer reader.Close()
+		return io.ReadAll(reader)
 
 	case "", "identity":
 		return data, nil

@@ -2,6 +2,7 @@ package client
 
 import (
 	"bytes"
+	"compress/flate"
 	"compress/gzip"
 	"context"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/andybalholm/brotli"
+	"github.com/klauspost/compress/zstd"
 	"github.com/sardanioss/httpcloak/fingerprint"
 	"github.com/sardanioss/httpcloak/protocol"
 )
@@ -126,9 +128,18 @@ func Decompress(data []byte, encoding string) ([]byte, error) {
 		reader := brotli.NewReader(bytes.NewReader(data))
 		return io.ReadAll(reader)
 
+	case "zstd":
+		decoder, err := zstd.NewReader(bytes.NewReader(data))
+		if err != nil {
+			return nil, err
+		}
+		defer decoder.Close()
+		return io.ReadAll(decoder)
+
 	case "deflate":
-		// For deflate, just return as-is for now
-		return data, nil
+		reader := flate.NewReader(bytes.NewReader(data))
+		defer reader.Close()
+		return io.ReadAll(reader)
 
 	case "", "identity":
 		return data, nil

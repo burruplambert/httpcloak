@@ -33,6 +33,7 @@ from .client import (
     Session,
     Response,
     HTTPCloakError,
+    Preset,
     # Configuration
     configure,
     # Module-level functions (requests-compatible)
@@ -53,6 +54,7 @@ __all__ = [
     "Session",
     "Response",
     "HTTPCloakError",
+    "Preset",
     "configure",
     "get",
     "post",
@@ -65,4 +67,4 @@ __all__ = [
     "available_presets",
     "version",
 ]
-__version__ = "1.0.1"
+__version__ = "1.0.2"

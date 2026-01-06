@@ -128,8 +128,76 @@ func (s *Session) Request(ctx context.Context, req *transport.Request) (*transpo
 	}
 	s.mu.Unlock()
 
-	// Execute request using session's dedicated transport
-	resp, err := s.transport.Do(ctx, req)
+	// Execute request with retry logic if configured
+	var resp *transport.Response
+	var err error
+
+	maxRetries := 0
+	retryWaitMin := 500 * time.Millisecond
+	retryWaitMax := 10 * time.Second
+	var retryOnStatus []int
+
+	if s.Config != nil && s.Config.RetryEnabled && s.Config.MaxRetries > 0 {
+		maxRetries = s.Config.MaxRetries
+		if s.Config.RetryWaitMin > 0 {
+			retryWaitMin = time.Duration(s.Config.RetryWaitMin) * time.Millisecond
+		}
+		if s.Config.RetryWaitMax > 0 {
+			retryWaitMax = time.Duration(s.Config.RetryWaitMax) * time.Millisecond
+		}
+		if len(s.Config.RetryOnStatus) > 0 {
+			retryOnStatus = s.Config.RetryOnStatus
+		} else {
+			// Default retry status codes
+			retryOnStatus = []int{429, 500, 502, 503, 504}
+		}
+	}
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		resp, err = s.transport.Do(ctx, req)
+
+		// If no error and no retry config, or this is the last attempt, break
+		if maxRetries == 0 {
+			break
+		}
+
+		// Check if we should retry
+		shouldRetry := false
+		if err != nil {
+			// Retry on network errors
+			shouldRetry = true
+		} else if resp != nil {
+			// Check if status code is in retry list
+			for _, status := range retryOnStatus {
+				if resp.StatusCode == status {
+					shouldRetry = true
+					break
+				}
+			}
+		}
+
+		if !shouldRetry || attempt >= maxRetries {
+			break
+		}
+
+		// Calculate wait time with exponential backoff and jitter
+		waitTime := retryWaitMin * time.Duration(1<<uint(attempt))
+		if waitTime > retryWaitMax {
+			waitTime = retryWaitMax
+		}
+
+		// Add some jitter (±25%)
+		jitter := time.Duration(float64(waitTime) * 0.25)
+		waitTime = waitTime - jitter + time.Duration(randInt64(int64(jitter*2)))
+
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(waitTime):
+			// Continue to next retry attempt
+		}
+	}
+
 	if err != nil {
 		return nil, err
 	}
@@ -141,6 +209,18 @@ func (s *Session) Request(ctx context.Context, req *transport.Request) (*transpo
 	s.storeCacheHeaders(req.URL, resp.Headers)
 
 	return resp, nil
+}
+
+// randInt64 generates a random int64 in range [0, n)
+func randInt64(n int64) int64 {
+	if n <= 0 {
+		return 0
+	}
+	b := make([]byte, 8)
+	rand.Read(b)
+	v := int64(b[0]) | int64(b[1])<<8 | int64(b[2])<<16 | int64(b[3])<<24 |
+		int64(b[4])<<32 | int64(b[5])<<40 | int64(b[6])<<48 | int64(b[7]&0x7f)<<56
+	return v % n
 }
 
 // Get performs a GET request

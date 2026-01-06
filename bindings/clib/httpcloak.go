@@ -327,6 +327,10 @@ func httpcloak_unregister_callback(callbackID C.int64_t) {
 func invokeCallback(callbackID int64, responseJSON string, errStr string) {
 	callbackMu.Lock()
 	callback, exists := asyncCallbacks[callbackID]
+	// Auto-cleanup: remove callback after retrieval to prevent memory leaks
+	if exists {
+		delete(asyncCallbacks, callbackID)
+	}
 	callbackMu.Unlock()
 
 	if !exists {

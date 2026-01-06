@@ -21,6 +21,48 @@ class HTTPCloakError extends Error {
 }
 
 /**
+ * Available browser presets for TLS fingerprinting.
+ *
+ * Use these constants instead of typing preset strings manually:
+ *   const httpcloak = require("httpcloak");
+ *   httpcloak.configure({ preset: httpcloak.Preset.CHROME_143 });
+ *
+ *   // Or with Session
+ *   const session = new httpcloak.Session({ preset: httpcloak.Preset.FIREFOX_133 });
+ */
+const Preset = {
+  // Chrome 143 (latest)
+  CHROME_143: "chrome-143",
+  CHROME_143_WINDOWS: "chrome-143-windows",
+  CHROME_143_LINUX: "chrome-143-linux",
+  CHROME_143_MACOS: "chrome-143-macos",
+
+  // Chrome 131
+  CHROME_131: "chrome-131",
+  CHROME_131_WINDOWS: "chrome-131-windows",
+  CHROME_131_LINUX: "chrome-131-linux",
+  CHROME_131_MACOS: "chrome-131-macos",
+
+  // Firefox
+  FIREFOX_133: "firefox-133",
+
+  // Safari
+  SAFARI_18: "safari-18",
+
+  /**
+   * Get all available preset names
+   * @returns {string[]} List of all preset names
+   */
+  all() {
+    return [
+      this.CHROME_143, this.CHROME_143_WINDOWS, this.CHROME_143_LINUX, this.CHROME_143_MACOS,
+      this.CHROME_131, this.CHROME_131_WINDOWS, this.CHROME_131_LINUX, this.CHROME_131_MACOS,
+      this.FIREFOX_133, this.SAFARI_18,
+    ];
+  },
+};
+
+/**
  * Response object returned from HTTP requests
  */
 class Response {
@@ -174,26 +216,45 @@ function getLib() {
     const libPath = getLibPath();
     const nativeLib = koffi.load(libPath);
 
+    // Use void* for string returns so we can free them properly
     lib = {
       httpcloak_session_new: nativeLib.func("httpcloak_session_new", "int64", ["str"]),
       httpcloak_session_free: nativeLib.func("httpcloak_session_free", "void", ["int64"]),
-      httpcloak_get: nativeLib.func("httpcloak_get", "str", ["int64", "str", "str"]),
-      httpcloak_post: nativeLib.func("httpcloak_post", "str", ["int64", "str", "str", "str"]),
-      httpcloak_request: nativeLib.func("httpcloak_request", "str", ["int64", "str"]),
-      httpcloak_get_cookies: nativeLib.func("httpcloak_get_cookies", "str", ["int64"]),
+      httpcloak_get: nativeLib.func("httpcloak_get", "void*", ["int64", "str", "str"]),
+      httpcloak_post: nativeLib.func("httpcloak_post", "void*", ["int64", "str", "str", "str"]),
+      httpcloak_request: nativeLib.func("httpcloak_request", "void*", ["int64", "str"]),
+      httpcloak_get_cookies: nativeLib.func("httpcloak_get_cookies", "void*", ["int64"]),
       httpcloak_set_cookie: nativeLib.func("httpcloak_set_cookie", "void", ["int64", "str", "str"]),
-      httpcloak_free_string: nativeLib.func("httpcloak_free_string", "void", ["str"]),
-      httpcloak_version: nativeLib.func("httpcloak_version", "str", []),
-      httpcloak_available_presets: nativeLib.func("httpcloak_available_presets", "str", []),
+      httpcloak_free_string: nativeLib.func("httpcloak_free_string", "void", ["void*"]),
+      httpcloak_version: nativeLib.func("httpcloak_version", "void*", []),
+      httpcloak_available_presets: nativeLib.func("httpcloak_available_presets", "void*", []),
     };
   }
   return lib;
 }
 
 /**
+ * Convert a C string pointer to JS string and free the memory
+ */
+function ptrToString(ptr) {
+  if (!ptr) {
+    return null;
+  }
+  try {
+    // Decode the C string from the pointer
+    const str = koffi.decode(ptr, "str");
+    return str;
+  } finally {
+    // Always free the C string to prevent memory leaks
+    getLib().httpcloak_free_string(ptr);
+  }
+}
+
+/**
  * Parse response from the native library
  */
-function parseResponse(result) {
+function parseResponse(resultPtr) {
+  const result = ptrToString(resultPtr);
   if (!result) {
     throw new HTTPCloakError("No response received");
   }
@@ -345,7 +406,9 @@ function encodeMultipart(data, files) {
  */
 function version() {
   const nativeLib = getLib();
-  return nativeLib.httpcloak_version() || "unknown";
+  const resultPtr = nativeLib.httpcloak_version();
+  const result = ptrToString(resultPtr);
+  return result || "unknown";
 }
 
 /**
@@ -353,7 +416,8 @@ function version() {
  */
 function availablePresets() {
   const nativeLib = getLib();
-  const result = nativeLib.httpcloak_available_presets();
+  const resultPtr = nativeLib.httpcloak_available_presets();
+  const result = ptrToString(resultPtr);
   if (result) {
     return JSON.parse(result);
   }
@@ -689,7 +753,8 @@ class Session {
    * @returns {Object} Cookies as key-value pairs
    */
   getCookies() {
-    const result = this._lib.httpcloak_get_cookies(this._handle);
+    const resultPtr = this._lib.httpcloak_get_cookies(this._handle);
+    const result = ptrToString(resultPtr);
     if (result) {
       return JSON.parse(result);
     }
@@ -891,6 +956,8 @@ module.exports = {
   Session,
   Response,
   HTTPCloakError,
+  // Presets
+  Preset,
   // Configuration
   configure,
   // Module-level functions

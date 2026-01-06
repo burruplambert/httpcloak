@@ -24,7 +24,7 @@ import mimetypes
 import os
 import platform
 import uuid
-from ctypes import c_char_p, c_int64, cdll
+from ctypes import c_char_p, c_int64, c_void_p, cdll, cast
 from io import IOBase
 from pathlib import Path
 from threading import Lock
@@ -117,6 +117,51 @@ def _encode_multipart(
 class HTTPCloakError(Exception):
     """Base exception for HTTPCloak errors."""
     pass
+
+
+class Preset:
+    """
+    Available browser presets for TLS fingerprinting.
+
+    Use these constants instead of typing preset strings manually:
+        import httpcloak
+        httpcloak.configure(preset=httpcloak.Preset.CHROME_143)
+
+        # Or with Session
+        session = httpcloak.Session(preset=httpcloak.Preset.FIREFOX_133)
+
+    All available presets:
+        Chrome: CHROME_143, CHROME_143_WINDOWS, CHROME_143_LINUX, CHROME_143_MACOS
+                CHROME_131, CHROME_131_WINDOWS, CHROME_131_LINUX, CHROME_131_MACOS
+        Firefox: FIREFOX_133
+        Safari: SAFARI_18
+    """
+    # Chrome 143 (latest)
+    CHROME_143 = "chrome-143"
+    CHROME_143_WINDOWS = "chrome-143-windows"
+    CHROME_143_LINUX = "chrome-143-linux"
+    CHROME_143_MACOS = "chrome-143-macos"
+
+    # Chrome 131
+    CHROME_131 = "chrome-131"
+    CHROME_131_WINDOWS = "chrome-131-windows"
+    CHROME_131_LINUX = "chrome-131-linux"
+    CHROME_131_MACOS = "chrome-131-macos"
+
+    # Firefox
+    FIREFOX_133 = "firefox-133"
+
+    # Safari
+    SAFARI_18 = "safari-18"
+
+    @classmethod
+    def all(cls) -> List[str]:
+        """Return list of all available preset names."""
+        return [
+            cls.CHROME_143, cls.CHROME_143_WINDOWS, cls.CHROME_143_LINUX, cls.CHROME_143_MACOS,
+            cls.CHROME_131, cls.CHROME_131_WINDOWS, cls.CHROME_131_LINUX, cls.CHROME_131_MACOS,
+            cls.FIREFOX_133, cls.SAFARI_18,
+        ]
 
 
 class Response:
@@ -252,29 +297,46 @@ def _setup_lib(lib):
     lib.httpcloak_session_new.restype = c_int64
     lib.httpcloak_session_free.argtypes = [c_int64]
     lib.httpcloak_session_free.restype = None
+    # Use c_void_p for string returns so we can free them properly
     lib.httpcloak_get.argtypes = [c_int64, c_char_p, c_char_p]
-    lib.httpcloak_get.restype = c_char_p
+    lib.httpcloak_get.restype = c_void_p
     lib.httpcloak_post.argtypes = [c_int64, c_char_p, c_char_p, c_char_p]
-    lib.httpcloak_post.restype = c_char_p
+    lib.httpcloak_post.restype = c_void_p
     lib.httpcloak_request.argtypes = [c_int64, c_char_p]
-    lib.httpcloak_request.restype = c_char_p
+    lib.httpcloak_request.restype = c_void_p
     lib.httpcloak_get_cookies.argtypes = [c_int64]
-    lib.httpcloak_get_cookies.restype = c_char_p
+    lib.httpcloak_get_cookies.restype = c_void_p
     lib.httpcloak_set_cookie.argtypes = [c_int64, c_char_p, c_char_p]
     lib.httpcloak_set_cookie.restype = None
-    lib.httpcloak_free_string.argtypes = [c_char_p]
+    lib.httpcloak_free_string.argtypes = [c_void_p]
     lib.httpcloak_free_string.restype = None
     lib.httpcloak_version.argtypes = []
-    lib.httpcloak_version.restype = c_char_p
+    lib.httpcloak_version.restype = c_void_p
     lib.httpcloak_available_presets.argtypes = []
-    lib.httpcloak_available_presets.restype = c_char_p
+    lib.httpcloak_available_presets.restype = c_void_p
 
 
-def _parse_response(result: bytes) -> Response:
+def _ptr_to_string(ptr) -> Optional[str]:
+    """Convert a C string pointer to Python string and free it."""
+    if ptr is None or ptr == 0:
+        return None
+    try:
+        # Cast void pointer to char pointer and get the value
+        result = cast(ptr, c_char_p).value
+        if result is None:
+            return None
+        return result.decode("utf-8")
+    finally:
+        # Always free the C string to prevent memory leaks
+        _get_lib().httpcloak_free_string(ptr)
+
+
+def _parse_response(result_ptr) -> Response:
     """Parse JSON response from library."""
+    result = _ptr_to_string(result_ptr)
     if result is None:
         raise HTTPCloakError("No response received")
-    data = json.loads(result.decode("utf-8"))
+    data = json.loads(result)
     if "error" in data:
         raise HTTPCloakError(data["error"])
     return Response._from_dict(data)
@@ -310,16 +372,18 @@ def _apply_auth(
 def version() -> str:
     """Get the httpcloak library version."""
     lib = _get_lib()
-    result = lib.httpcloak_version()
-    return result.decode("utf-8") if result else "unknown"
+    result_ptr = lib.httpcloak_version()
+    result = _ptr_to_string(result_ptr)
+    return result if result else "unknown"
 
 
 def available_presets() -> List[str]:
     """Get list of available browser presets."""
     lib = _get_lib()
-    result = lib.httpcloak_available_presets()
+    result_ptr = lib.httpcloak_available_presets()
+    result = _ptr_to_string(result_ptr)
     if result:
-        return json.loads(result.decode("utf-8"))
+        return json.loads(result)
     return []
 
 
@@ -682,9 +746,10 @@ class Session:
 
     def get_cookies(self) -> Dict[str, str]:
         """Get all cookies from the session."""
-        result = self._lib.httpcloak_get_cookies(self._handle)
+        result_ptr = self._lib.httpcloak_get_cookies(self._handle)
+        result = _ptr_to_string(result_ptr)
         if result:
-            return json.loads(result.decode("utf-8"))
+            return json.loads(result)
         return {}
 
     def set_cookie(self, name: str, value: str):
