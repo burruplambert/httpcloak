@@ -65,4 +65,4 @@ __all__ = [
     "available_presets",
     "version",
 ]
-__version__ = "1.0.0"
+__version__ = "1.0.1"
