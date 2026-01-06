@@ -190,9 +190,18 @@ type Session struct {
 type SessionOption func(*sessionConfig)
 
 type sessionConfig struct {
-	preset  string
-	proxy   string
-	timeout time.Duration
+	preset           string
+	proxy            string
+	timeout          time.Duration
+	forceHTTP1       bool
+	forceHTTP2       bool
+	insecureSkipVerify bool
+	disableRedirects bool
+	maxRedirects     int
+	retryCount       int
+	retryWaitMin     time.Duration
+	retryWaitMax     time.Duration
+	retryOnStatus    []int
 }
 
 // WithSessionProxy sets a proxy for the session
@@ -209,6 +218,59 @@ func WithSessionTimeout(d time.Duration) SessionOption {
 	}
 }
 
+// WithForceHTTP1 forces HTTP/1.1 protocol
+func WithForceHTTP1() SessionOption {
+	return func(c *sessionConfig) {
+		c.forceHTTP1 = true
+	}
+}
+
+// WithForceHTTP2 forces HTTP/2 protocol
+func WithForceHTTP2() SessionOption {
+	return func(c *sessionConfig) {
+		c.forceHTTP2 = true
+	}
+}
+
+// WithInsecureSkipVerify disables SSL certificate verification
+func WithInsecureSkipVerify() SessionOption {
+	return func(c *sessionConfig) {
+		c.insecureSkipVerify = true
+	}
+}
+
+// WithoutRedirects disables automatic redirect following
+func WithoutRedirects() SessionOption {
+	return func(c *sessionConfig) {
+		c.disableRedirects = true
+	}
+}
+
+// WithRedirects configures redirect behavior
+func WithRedirects(follow bool, maxRedirects int) SessionOption {
+	return func(c *sessionConfig) {
+		c.disableRedirects = !follow
+		c.maxRedirects = maxRedirects
+	}
+}
+
+// WithRetry enables retry with default settings
+func WithRetry(count int) SessionOption {
+	return func(c *sessionConfig) {
+		c.retryCount = count
+	}
+}
+
+// WithRetryConfig configures retry behavior
+func WithRetryConfig(count int, waitMin, waitMax time.Duration, retryOnStatus []int) SessionOption {
+	return func(c *sessionConfig) {
+		c.retryCount = count
+		c.retryWaitMin = waitMin
+		c.retryWaitMax = waitMax
+		c.retryOnStatus = retryOnStatus
+	}
+}
+
 // NewSession creates a new persistent session with cookie management
 func NewSession(preset string, opts ...SessionOption) *Session {
 	cfg := &sessionConfig{
@@ -219,11 +281,36 @@ func NewSession(preset string, opts ...SessionOption) *Session {
 		opt(cfg)
 	}
 
-	s := session.NewSession("", &protocol.SessionConfig{
-		Preset:  cfg.preset,
-		Proxy:   cfg.proxy,
-		Timeout: int(cfg.timeout.Seconds()),
-	})
+	sessionCfg := &protocol.SessionConfig{
+		Preset:             cfg.preset,
+		Proxy:              cfg.proxy,
+		Timeout:            int(cfg.timeout.Seconds()),
+		InsecureSkipVerify: cfg.insecureSkipVerify,
+		FollowRedirects:    !cfg.disableRedirects,
+		MaxRedirects:       cfg.maxRedirects,
+	}
+
+	// Retry configuration
+	if cfg.retryCount > 0 {
+		sessionCfg.RetryEnabled = true
+		sessionCfg.MaxRetries = cfg.retryCount
+		if cfg.retryWaitMin > 0 {
+			sessionCfg.RetryWaitMin = int(cfg.retryWaitMin.Milliseconds())
+		}
+		if cfg.retryWaitMax > 0 {
+			sessionCfg.RetryWaitMax = int(cfg.retryWaitMax.Milliseconds())
+		}
+		if len(cfg.retryOnStatus) > 0 {
+			sessionCfg.RetryOnStatus = cfg.retryOnStatus
+		}
+	}
+
+	// Protocol forcing via DisableHTTP3
+	if cfg.forceHTTP1 || cfg.forceHTTP2 {
+		sessionCfg.DisableHTTP3 = true
+	}
+
+	s := session.NewSession("", sessionCfg)
 	return &Session{inner: s}
 }
 
