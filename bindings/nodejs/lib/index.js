@@ -1,7 +1,8 @@
 /**
  * HTTPCloak Node.js Client
  *
- * Provides HTTP client with browser fingerprint emulation.
+ * A fetch/axios-compatible HTTP client with browser fingerprint emulation.
+ * Provides TLS fingerprinting for HTTP requests.
  */
 
 const koffi = require("koffi");
@@ -26,17 +27,51 @@ class Response {
   constructor(data) {
     this.statusCode = data.status_code || 0;
     this.headers = data.headers || {};
-    this.body = Buffer.from(data.body || "", "utf8");
-    this.text = data.body || "";
+    this._body = Buffer.from(data.body || "", "utf8");
+    this._text = data.body || "";
     this.finalUrl = data.final_url || "";
     this.protocol = data.protocol || "";
+  }
+
+  /** Response body as string */
+  get text() {
+    return this._text;
+  }
+
+  /** Response body as Buffer (requests compatibility) */
+  get body() {
+    return this._body;
+  }
+
+  /** Response body as Buffer (requests compatibility alias) */
+  get content() {
+    return this._body;
+  }
+
+  /** Final URL after redirects (requests compatibility alias) */
+  get url() {
+    return this.finalUrl;
+  }
+
+  /** True if status code < 400 (requests compatibility) */
+  get ok() {
+    return this.statusCode < 400;
   }
 
   /**
    * Parse response body as JSON
    */
   json() {
-    return JSON.parse(this.text);
+    return JSON.parse(this._text);
+  }
+
+  /**
+   * Raise error if status >= 400 (requests compatibility)
+   */
+  raiseForStatus() {
+    if (!this.ok) {
+      throw new HTTPCloakError(`HTTP ${this.statusCode}`);
+    }
   }
 }
 
@@ -47,7 +82,6 @@ function getPlatformPackageName() {
   const platform = os.platform();
   const arch = os.arch();
 
-  // Map to npm platform names
   let platName;
   if (platform === "darwin") {
     platName = "darwin";
@@ -76,13 +110,11 @@ function getLibPath() {
   const platform = os.platform();
   const arch = os.arch();
 
-  // Check environment variable first
   const envPath = process.env.HTTPCLOAK_LIB_PATH;
   if (envPath && fs.existsSync(envPath)) {
     return envPath;
   }
 
-  // Try to load from platform-specific optional dependency
   const packageName = getPlatformPackageName();
   try {
     const libPath = require(packageName);
@@ -90,10 +122,9 @@ function getLibPath() {
       return libPath;
     }
   } catch (e) {
-    // Optional dependency not installed, fall back to local search
+    // Optional dependency not installed
   }
 
-  // Normalize architecture for library name
   let archName;
   if (arch === "x64" || arch === "amd64") {
     archName = "amd64";
@@ -103,7 +134,6 @@ function getLibPath() {
     archName = arch;
   }
 
-  // Determine OS name and extension
   let osName, ext;
   if (platform === "darwin") {
     osName = "darwin";
@@ -118,7 +148,6 @@ function getLibPath() {
 
   const libName = `libhttpcloak-${osName}-${archName}${ext}`;
 
-  // Search paths (fallback for local development)
   const searchPaths = [
     path.join(__dirname, libName),
     path.join(__dirname, "..", libName),
@@ -179,6 +208,37 @@ function parseResponse(result) {
 }
 
 /**
+ * Add query parameters to URL
+ */
+function addParamsToUrl(url, params) {
+  if (!params || Object.keys(params).length === 0) {
+    return url;
+  }
+
+  const urlObj = new URL(url);
+  for (const [key, value] of Object.entries(params)) {
+    urlObj.searchParams.append(key, String(value));
+  }
+  return urlObj.toString();
+}
+
+/**
+ * Apply basic auth to headers
+ */
+function applyAuth(headers, auth) {
+  if (!auth) {
+    return headers;
+  }
+
+  const [username, password] = auth;
+  const credentials = Buffer.from(`${username}:${password}`).toString("base64");
+
+  headers = headers ? { ...headers } : {};
+  headers["Authorization"] = `Basic ${credentials}`;
+  return headers;
+}
+
+/**
  * Get the httpcloak library version
  */
 function version() {
@@ -208,15 +268,23 @@ class Session {
    * @param {string} [options.preset="chrome-143"] - Browser preset to use
    * @param {string} [options.proxy] - Proxy URL (e.g., "http://user:pass@host:port")
    * @param {number} [options.timeout=30] - Request timeout in seconds
+   * @param {string} [options.httpVersion="auto"] - HTTP version: "auto", "h1", "h2", "h3"
    */
   constructor(options = {}) {
-    const { preset = "chrome-143", proxy = null, timeout = 30 } = options;
+    const {
+      preset = "chrome-143",
+      proxy = null,
+      timeout = 30,
+      httpVersion = "auto",
+    } = options;
 
     this._lib = getLib();
+    this.headers = {}; // Default headers
 
     const config = {
       preset,
       timeout,
+      http_version: httpVersion,
     };
     if (proxy) {
       config.proxy = proxy;
@@ -239,6 +307,16 @@ class Session {
     }
   }
 
+  /**
+   * Merge session headers with request headers
+   */
+  _mergeHeaders(headers) {
+    if (!this.headers || Object.keys(this.headers).length === 0) {
+      return headers;
+    }
+    return { ...this.headers, ...headers };
+  }
+
   // ===========================================================================
   // Synchronous Methods
   // ===========================================================================
@@ -246,11 +324,20 @@ class Session {
   /**
    * Perform a synchronous GET request
    * @param {string} url - Request URL
-   * @param {Object} [headers] - Optional custom headers
+   * @param {Object} [options] - Request options
+   * @param {Object} [options.headers] - Custom headers
+   * @param {Object} [options.params] - Query parameters
+   * @param {Array} [options.auth] - Basic auth [username, password]
    * @returns {Response} Response object
    */
-  getSync(url, headers = null) {
-    const headersJson = headers ? JSON.stringify(headers) : null;
+  getSync(url, options = {}) {
+    const { headers = null, params = null, auth = null } = options;
+
+    url = addParamsToUrl(url, params);
+    let mergedHeaders = this._mergeHeaders(headers);
+    mergedHeaders = applyAuth(mergedHeaders, auth);
+
+    const headersJson = mergedHeaders ? JSON.stringify(mergedHeaders) : null;
     const result = this._lib.httpcloak_get(this._handle, url, headersJson);
     return parseResponse(result);
   }
@@ -258,58 +345,90 @@ class Session {
   /**
    * Perform a synchronous POST request
    * @param {string} url - Request URL
-   * @param {string|Buffer|Object} [body] - Request body
-   * @param {Object} [headers] - Optional custom headers
+   * @param {Object} [options] - Request options
+   * @param {string|Buffer|Object} [options.body] - Request body
+   * @param {Object} [options.json] - JSON body (will be serialized)
+   * @param {Object} [options.data] - Form data (will be URL encoded)
+   * @param {Object} [options.headers] - Custom headers
+   * @param {Object} [options.params] - Query parameters
+   * @param {Array} [options.auth] - Basic auth [username, password]
    * @returns {Response} Response object
    */
-  postSync(url, body = null, headers = null) {
-    if (typeof body === "object" && body !== null && !Buffer.isBuffer(body)) {
-      body = JSON.stringify(body);
-      headers = headers || {};
-      if (!headers["Content-Type"]) {
-        headers["Content-Type"] = "application/json";
+  postSync(url, options = {}) {
+    let { body = null, json = null, data = null, headers = null, params = null, auth = null } = options;
+
+    url = addParamsToUrl(url, params);
+    let mergedHeaders = this._mergeHeaders(headers);
+
+    // Handle JSON body
+    if (json !== null) {
+      body = JSON.stringify(json);
+      mergedHeaders = mergedHeaders || {};
+      if (!mergedHeaders["Content-Type"]) {
+        mergedHeaders["Content-Type"] = "application/json";
       }
     }
-
-    if (Buffer.isBuffer(body)) {
+    // Handle form data
+    else if (data !== null && typeof data === "object") {
+      body = new URLSearchParams(data).toString();
+      mergedHeaders = mergedHeaders || {};
+      if (!mergedHeaders["Content-Type"]) {
+        mergedHeaders["Content-Type"] = "application/x-www-form-urlencoded";
+      }
+    }
+    // Handle Buffer body
+    else if (Buffer.isBuffer(body)) {
       body = body.toString("utf8");
     }
 
-    const headersJson = headers ? JSON.stringify(headers) : null;
+    mergedHeaders = applyAuth(mergedHeaders, auth);
+
+    const headersJson = mergedHeaders ? JSON.stringify(mergedHeaders) : null;
     const result = this._lib.httpcloak_post(this._handle, url, body, headersJson);
     return parseResponse(result);
   }
 
   /**
    * Perform a synchronous custom HTTP request
-   * @param {Object} options - Request options
-   * @param {string} options.method - HTTP method
-   * @param {string} options.url - Request URL
-   * @param {Object} [options.headers] - Optional custom headers
-   * @param {string|Buffer|Object} [options.body] - Optional request body
-   * @param {number} [options.timeout] - Optional request timeout
+   * @param {string} method - HTTP method
+   * @param {string} url - Request URL
+   * @param {Object} [options] - Request options
    * @returns {Response} Response object
    */
-  requestSync(options) {
-    let { method, url, headers = null, body = null, timeout = null } = options;
+  requestSync(method, url, options = {}) {
+    let { body = null, json = null, data = null, headers = null, params = null, auth = null, timeout = null } = options;
 
-    if (typeof body === "object" && body !== null && !Buffer.isBuffer(body)) {
-      body = JSON.stringify(body);
-      headers = headers || {};
-      if (!headers["Content-Type"]) {
-        headers["Content-Type"] = "application/json";
+    url = addParamsToUrl(url, params);
+    let mergedHeaders = this._mergeHeaders(headers);
+
+    // Handle JSON body
+    if (json !== null) {
+      body = JSON.stringify(json);
+      mergedHeaders = mergedHeaders || {};
+      if (!mergedHeaders["Content-Type"]) {
+        mergedHeaders["Content-Type"] = "application/json";
       }
     }
-
-    if (Buffer.isBuffer(body)) {
+    // Handle form data
+    else if (data !== null && typeof data === "object") {
+      body = new URLSearchParams(data).toString();
+      mergedHeaders = mergedHeaders || {};
+      if (!mergedHeaders["Content-Type"]) {
+        mergedHeaders["Content-Type"] = "application/x-www-form-urlencoded";
+      }
+    }
+    // Handle Buffer body
+    else if (Buffer.isBuffer(body)) {
       body = body.toString("utf8");
     }
+
+    mergedHeaders = applyAuth(mergedHeaders, auth);
 
     const requestConfig = {
       method: method.toUpperCase(),
       url,
     };
-    if (headers) requestConfig.headers = headers;
+    if (mergedHeaders) requestConfig.headers = mergedHeaders;
     if (body) requestConfig.body = body;
     if (timeout) requestConfig.timeout = timeout;
 
@@ -327,14 +446,14 @@ class Session {
   /**
    * Perform an async GET request
    * @param {string} url - Request URL
-   * @param {Object} [headers] - Optional custom headers
+   * @param {Object} [options] - Request options
    * @returns {Promise<Response>} Response object
    */
-  get(url, headers = null) {
+  get(url, options = {}) {
     return new Promise((resolve, reject) => {
       setImmediate(() => {
         try {
-          resolve(this.getSync(url, headers));
+          resolve(this.getSync(url, options));
         } catch (err) {
           reject(err);
         }
@@ -345,15 +464,14 @@ class Session {
   /**
    * Perform an async POST request
    * @param {string} url - Request URL
-   * @param {string|Buffer|Object} [body] - Request body
-   * @param {Object} [headers] - Optional custom headers
+   * @param {Object} [options] - Request options
    * @returns {Promise<Response>} Response object
    */
-  post(url, body = null, headers = null) {
+  post(url, options = {}) {
     return new Promise((resolve, reject) => {
       setImmediate(() => {
         try {
-          resolve(this.postSync(url, body, headers));
+          resolve(this.postSync(url, options));
         } catch (err) {
           reject(err);
         }
@@ -363,14 +481,16 @@ class Session {
 
   /**
    * Perform an async custom HTTP request
-   * @param {Object} options - Request options
+   * @param {string} method - HTTP method
+   * @param {string} url - Request URL
+   * @param {Object} [options] - Request options
    * @returns {Promise<Response>} Response object
    */
-  request(options) {
+  request(method, url, options = {}) {
     return new Promise((resolve, reject) => {
       setImmediate(() => {
         try {
-          resolve(this.requestSync(options));
+          resolve(this.requestSync(method, url, options));
         } catch (err) {
           reject(err);
         }
@@ -380,133 +500,37 @@ class Session {
 
   /**
    * Perform an async PUT request
-   * @param {string} url - Request URL
-   * @param {string|Buffer|Object} [body] - Request body
-   * @param {Object} [headers] - Optional custom headers
-   * @returns {Promise<Response>} Response object
    */
-  put(url, body = null, headers = null) {
-    return this.request({ method: "PUT", url, body, headers });
+  put(url, options = {}) {
+    return this.request("PUT", url, options);
   }
 
   /**
    * Perform an async DELETE request
-   * @param {string} url - Request URL
-   * @param {Object} [headers] - Optional custom headers
-   * @returns {Promise<Response>} Response object
    */
-  delete(url, headers = null) {
-    return this.request({ method: "DELETE", url, headers });
+  delete(url, options = {}) {
+    return this.request("DELETE", url, options);
   }
 
   /**
    * Perform an async PATCH request
-   * @param {string} url - Request URL
-   * @param {string|Buffer|Object} [body] - Request body
-   * @param {Object} [headers] - Optional custom headers
-   * @returns {Promise<Response>} Response object
    */
-  patch(url, body = null, headers = null) {
-    return this.request({ method: "PATCH", url, body, headers });
+  patch(url, options = {}) {
+    return this.request("PATCH", url, options);
   }
 
   /**
    * Perform an async HEAD request
-   * @param {string} url - Request URL
-   * @param {Object} [headers] - Optional custom headers
-   * @returns {Promise<Response>} Response object
    */
-  head(url, headers = null) {
-    return this.request({ method: "HEAD", url, headers });
+  head(url, options = {}) {
+    return this.request("HEAD", url, options);
   }
 
   /**
    * Perform an async OPTIONS request
-   * @param {string} url - Request URL
-   * @param {Object} [headers] - Optional custom headers
-   * @returns {Promise<Response>} Response object
    */
-  options(url, headers = null) {
-    return this.request({ method: "OPTIONS", url, headers });
-  }
-
-  // ===========================================================================
-  // Callback-based Methods
-  // ===========================================================================
-
-  /**
-   * Perform a GET request with callback
-   * @param {string} url - Request URL
-   * @param {Object|Function} [headersOrCallback] - Headers or callback
-   * @param {Function} [callback] - Callback function (err, response)
-   */
-  getCb(url, headersOrCallback, callback) {
-    let headers = null;
-    let cb = callback;
-
-    if (typeof headersOrCallback === "function") {
-      cb = headersOrCallback;
-    } else {
-      headers = headersOrCallback;
-    }
-
-    setImmediate(() => {
-      try {
-        const response = this.getSync(url, headers);
-        cb(null, response);
-      } catch (err) {
-        cb(err, null);
-      }
-    });
-  }
-
-  /**
-   * Perform a POST request with callback
-   * @param {string} url - Request URL
-   * @param {string|Buffer|Object} [body] - Request body
-   * @param {Object|Function} [headersOrCallback] - Headers or callback
-   * @param {Function} [callback] - Callback function (err, response)
-   */
-  postCb(url, body, headersOrCallback, callback) {
-    let headers = null;
-    let cb = callback;
-
-    if (typeof headersOrCallback === "function") {
-      cb = headersOrCallback;
-    } else {
-      headers = headersOrCallback;
-      cb = callback;
-    }
-
-    if (typeof body === "function") {
-      cb = body;
-      body = null;
-    }
-
-    setImmediate(() => {
-      try {
-        const response = this.postSync(url, body, headers);
-        cb(null, response);
-      } catch (err) {
-        cb(err, null);
-      }
-    });
-  }
-
-  /**
-   * Perform a custom request with callback
-   * @param {Object} options - Request options
-   * @param {Function} callback - Callback function (err, response)
-   */
-  requestCb(options, callback) {
-    setImmediate(() => {
-      try {
-        const response = this.requestSync(options);
-        callback(null, response);
-      } catch (err) {
-        callback(err, null);
-      }
-    });
+  options(url, options = {}) {
+    return this.request("OPTIONS", url, options);
   }
 
   // ===========================================================================
@@ -542,10 +566,156 @@ class Session {
   }
 }
 
+// =============================================================================
+// Module-level convenience functions
+// =============================================================================
+
+let _defaultSession = null;
+let _defaultConfig = {};
+
+/**
+ * Configure defaults for module-level functions
+ * @param {Object} options - Configuration options
+ * @param {string} [options.preset="chrome-143"] - Browser preset
+ * @param {Object} [options.headers] - Default headers
+ * @param {Array} [options.auth] - Default basic auth [username, password]
+ * @param {string} [options.proxy] - Proxy URL
+ * @param {number} [options.timeout=30] - Default timeout in seconds
+ * @param {string} [options.httpVersion="auto"] - HTTP version: "auto", "h1", "h2", "h3"
+ */
+function configure(options = {}) {
+  const {
+    preset = "chrome-143",
+    headers = null,
+    auth = null,
+    proxy = null,
+    timeout = 30,
+    httpVersion = "auto",
+  } = options;
+
+  // Close existing session
+  if (_defaultSession) {
+    _defaultSession.close();
+    _defaultSession = null;
+  }
+
+  // Apply auth to headers
+  let finalHeaders = applyAuth(headers, auth) || {};
+
+  // Store config
+  _defaultConfig = {
+    preset,
+    proxy,
+    timeout,
+    httpVersion,
+    headers: finalHeaders,
+  };
+
+  // Create new session
+  _defaultSession = new Session({ preset, proxy, timeout, httpVersion });
+  if (Object.keys(finalHeaders).length > 0) {
+    Object.assign(_defaultSession.headers, finalHeaders);
+  }
+}
+
+/**
+ * Get or create the default session
+ */
+function _getDefaultSession() {
+  if (!_defaultSession) {
+    const preset = _defaultConfig.preset || "chrome-143";
+    const proxy = _defaultConfig.proxy || null;
+    const timeout = _defaultConfig.timeout || 30;
+    const httpVersion = _defaultConfig.httpVersion || "auto";
+    const headers = _defaultConfig.headers || {};
+
+    _defaultSession = new Session({ preset, proxy, timeout, httpVersion });
+    if (Object.keys(headers).length > 0) {
+      Object.assign(_defaultSession.headers, headers);
+    }
+  }
+  return _defaultSession;
+}
+
+/**
+ * Perform a GET request
+ * @param {string} url - Request URL
+ * @param {Object} [options] - Request options
+ * @returns {Promise<Response>}
+ */
+function get(url, options = {}) {
+  return _getDefaultSession().get(url, options);
+}
+
+/**
+ * Perform a POST request
+ * @param {string} url - Request URL
+ * @param {Object} [options] - Request options
+ * @returns {Promise<Response>}
+ */
+function post(url, options = {}) {
+  return _getDefaultSession().post(url, options);
+}
+
+/**
+ * Perform a PUT request
+ */
+function put(url, options = {}) {
+  return _getDefaultSession().put(url, options);
+}
+
+/**
+ * Perform a DELETE request
+ */
+function del(url, options = {}) {
+  return _getDefaultSession().delete(url, options);
+}
+
+/**
+ * Perform a PATCH request
+ */
+function patch(url, options = {}) {
+  return _getDefaultSession().patch(url, options);
+}
+
+/**
+ * Perform a HEAD request
+ */
+function head(url, options = {}) {
+  return _getDefaultSession().head(url, options);
+}
+
+/**
+ * Perform an OPTIONS request
+ */
+function options(url, opts = {}) {
+  return _getDefaultSession().options(url, opts);
+}
+
+/**
+ * Perform a custom HTTP request
+ */
+function request(method, url, options = {}) {
+  return _getDefaultSession().request(method, url, options);
+}
+
 module.exports = {
+  // Classes
   Session,
   Response,
   HTTPCloakError,
+  // Configuration
+  configure,
+  // Module-level functions
+  get,
+  post,
+  put,
+  delete: del,
+  patch,
+  head,
+  options,
+  request,
+  // Utility
   version,
   availablePresets,
 };

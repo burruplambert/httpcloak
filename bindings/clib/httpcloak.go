@@ -59,9 +59,10 @@ type ResponseData struct {
 
 // Session configuration
 type SessionConfig struct {
-	Preset  string `json:"preset"`
-	Proxy   string `json:"proxy,omitempty"`
-	Timeout int    `json:"timeout,omitempty"` // seconds
+	Preset      string `json:"preset"`
+	Proxy       string `json:"proxy,omitempty"`
+	Timeout     int    `json:"timeout,omitempty"`      // seconds
+	HTTPVersion string `json:"http_version,omitempty"` // "auto", "h1", "h2", "h3"
 }
 
 // Error response
@@ -96,8 +97,9 @@ func makeResponseJSON(resp *httpcloak.Response) *C.char {
 //export httpcloak_session_new
 func httpcloak_session_new(configJSON *C.char) C.int64_t {
 	config := SessionConfig{
-		Preset:  "chrome-143",
-		Timeout: 30,
+		Preset:      "chrome-143",
+		Timeout:     30,
+		HTTPVersion: "auto",
 	}
 
 	if configJSON != nil {
@@ -113,6 +115,17 @@ func httpcloak_session_new(configJSON *C.char) C.int64_t {
 	}
 	if config.Timeout > 0 {
 		opts = append(opts, httpcloak.WithSessionTimeout(time.Duration(config.Timeout)*time.Second))
+	}
+
+	// Handle HTTP version preference
+	switch config.HTTPVersion {
+	case "h1", "http1", "1", "1.1":
+		opts = append(opts, httpcloak.WithForceHTTP1())
+	case "h2", "http2", "2":
+		opts = append(opts, httpcloak.WithForceHTTP2())
+	case "h3", "http3", "3":
+		// H3 is default/auto, nothing to do (auto will try H3 first)
+	// "auto" or empty = default behavior
 	}
 
 	session := httpcloak.NewSession(config.Preset, opts...)

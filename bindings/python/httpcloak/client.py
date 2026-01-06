@@ -249,11 +249,16 @@ class Session:
         preset: Browser preset (default: "chrome-143")
         proxy: Proxy URL (e.g., "http://user:pass@host:port")
         timeout: Default request timeout in seconds (default: 30)
+        http_version: Force HTTP version - "auto", "h1", "h2", "h3" (default: "auto")
 
     Example:
         with httpcloak.Session(preset="chrome-143") as session:
             r = session.get("https://example.com")
             print(r.json())
+
+        # Force HTTP/2
+        with httpcloak.Session(preset="chrome-143", http_version="h2") as session:
+            r = session.get("https://example.com")
     """
 
     def __init__(
@@ -261,12 +266,13 @@ class Session:
         preset: str = "chrome-143",
         proxy: Optional[str] = None,
         timeout: int = 30,
+        http_version: str = "auto",
     ):
         self._lib = _get_lib()
         self._default_timeout = timeout
         self.headers: Dict[str, str] = {}  # Default headers
 
-        config = {"preset": preset, "timeout": timeout}
+        config = {"preset": preset, "timeout": timeout, "http_version": http_version}
         if proxy:
             config["proxy"] = proxy
 
@@ -570,6 +576,7 @@ def configure(
     auth: Optional[Tuple[str, str]] = None,
     proxy: Optional[str] = None,
     timeout: int = 30,
+    http_version: str = "auto",
 ) -> None:
     """
     Configure defaults for module-level functions.
@@ -583,6 +590,7 @@ def configure(
         auth: Default basic auth tuple (username, password)
         proxy: Proxy URL (e.g., "http://user:pass@host:port")
         timeout: Default request timeout in seconds (default: 30)
+        http_version: Force HTTP version - "auto", "h1", "h2", "h3" (default: "auto")
 
     Example:
         import httpcloak
@@ -590,8 +598,7 @@ def configure(
         httpcloak.configure(
             preset="chrome-143-windows",
             headers={"Authorization": "Bearer token"},
-            auth=("user", "pass"),
-            proxy="http://proxy:8080",
+            http_version="h2",  # Force HTTP/2
         )
 
         r = httpcloak.get("https://example.com")  # uses configured defaults
@@ -612,11 +619,12 @@ def configure(
             "preset": preset,
             "proxy": proxy,
             "timeout": timeout,
+            "http_version": http_version,
             "headers": final_headers,
         }
 
         # Create new session with config
-        _default_session = Session(preset=preset, proxy=proxy, timeout=timeout)
+        _default_session = Session(preset=preset, proxy=proxy, timeout=timeout, http_version=http_version)
         if final_headers:
             _default_session.headers.update(final_headers)
 
@@ -630,9 +638,10 @@ def _get_default_session() -> Session:
                 preset = _default_config.get("preset", "chrome-143")
                 proxy = _default_config.get("proxy")
                 timeout = _default_config.get("timeout", 30)
+                http_version = _default_config.get("http_version", "auto")
                 headers = _default_config.get("headers", {})
 
-                _default_session = Session(preset=preset, proxy=proxy, timeout=timeout)
+                _default_session = Session(preset=preset, proxy=proxy, timeout=timeout, http_version=http_version)
                 if headers:
                     _default_session.headers.update(headers)
     return _default_session
