@@ -239,6 +239,108 @@ function applyAuth(headers, auth) {
 }
 
 /**
+ * Detect MIME type from filename
+ */
+function detectMimeType(filename) {
+  const ext = path.extname(filename).toLowerCase();
+  const mimeTypes = {
+    ".html": "text/html",
+    ".htm": "text/html",
+    ".css": "text/css",
+    ".js": "application/javascript",
+    ".json": "application/json",
+    ".xml": "application/xml",
+    ".txt": "text/plain",
+    ".csv": "text/csv",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".svg": "image/svg+xml",
+    ".ico": "image/x-icon",
+    ".bmp": "image/bmp",
+    ".mp3": "audio/mpeg",
+    ".wav": "audio/wav",
+    ".ogg": "audio/ogg",
+    ".mp4": "video/mp4",
+    ".webm": "video/webm",
+    ".pdf": "application/pdf",
+    ".zip": "application/zip",
+    ".gz": "application/gzip",
+    ".tar": "application/x-tar",
+  };
+  return mimeTypes[ext] || "application/octet-stream";
+}
+
+/**
+ * Encode multipart form data
+ * @param {Object} data - Form fields (key-value pairs)
+ * @param {Object} files - Files to upload
+ *   Each key is the field name, value can be:
+ *   - Buffer: raw file content
+ *   - { filename, content, contentType? }: file with metadata
+ * @returns {{ body: Buffer, contentType: string }}
+ */
+function encodeMultipart(data, files) {
+  const boundary = `----HTTPCloakBoundary${Date.now().toString(16)}${Math.random().toString(16).slice(2)}`;
+  const parts = [];
+
+  // Add form fields
+  if (data) {
+    for (const [key, value] of Object.entries(data)) {
+      parts.push(
+        `--${boundary}\r\n` +
+        `Content-Disposition: form-data; name="${key}"\r\n\r\n` +
+        `${value}\r\n`
+      );
+    }
+  }
+
+  // Add files
+  if (files) {
+    for (const [fieldName, fileValue] of Object.entries(files)) {
+      let filename, content, contentType;
+
+      if (Buffer.isBuffer(fileValue)) {
+        filename = fieldName;
+        content = fileValue;
+        contentType = "application/octet-stream";
+      } else if (typeof fileValue === "object" && fileValue !== null) {
+        filename = fileValue.filename || fieldName;
+        content = fileValue.content;
+        contentType = fileValue.contentType || detectMimeType(filename);
+
+        if (!Buffer.isBuffer(content)) {
+          content = Buffer.from(content);
+        }
+      } else {
+        throw new HTTPCloakError(`Invalid file value for field '${fieldName}'`);
+      }
+
+      parts.push(Buffer.from(
+        `--${boundary}\r\n` +
+        `Content-Disposition: form-data; name="${fieldName}"; filename="${filename}"\r\n` +
+        `Content-Type: ${contentType}\r\n\r\n`
+      ));
+      parts.push(content);
+      parts.push(Buffer.from("\r\n"));
+    }
+  }
+
+  parts.push(Buffer.from(`--${boundary}--\r\n`));
+
+  // Combine all parts
+  const bodyParts = parts.map(p => Buffer.isBuffer(p) ? p : Buffer.from(p));
+  const body = Buffer.concat(bodyParts);
+
+  return {
+    body,
+    contentType: `multipart/form-data; boundary=${boundary}`,
+  };
+}
+
+/**
  * Get the httpcloak library version
  */
 function version() {
@@ -373,19 +475,31 @@ class Session {
    * @param {string|Buffer|Object} [options.body] - Request body
    * @param {Object} [options.json] - JSON body (will be serialized)
    * @param {Object} [options.data] - Form data (will be URL encoded)
+   * @param {Object} [options.files] - Files to upload as multipart/form-data
+   *   Each key is the field name, value can be:
+   *   - Buffer: raw file content
+   *   - { filename, content, contentType? }: file with metadata
    * @param {Object} [options.headers] - Custom headers
    * @param {Object} [options.params] - Query parameters
    * @param {Array} [options.auth] - Basic auth [username, password]
    * @returns {Response} Response object
    */
   postSync(url, options = {}) {
-    let { body = null, json = null, data = null, headers = null, params = null, auth = null } = options;
+    let { body = null, json = null, data = null, files = null, headers = null, params = null, auth = null } = options;
 
     url = addParamsToUrl(url, params);
     let mergedHeaders = this._mergeHeaders(headers);
 
+    // Handle multipart file upload
+    if (files !== null) {
+      const formData = (data !== null && typeof data === "object") ? data : null;
+      const multipart = encodeMultipart(formData, files);
+      body = multipart.body.toString("latin1"); // Preserve binary data
+      mergedHeaders = mergedHeaders || {};
+      mergedHeaders["Content-Type"] = multipart.contentType;
+    }
     // Handle JSON body
-    if (json !== null) {
+    else if (json !== null) {
       body = JSON.stringify(json);
       mergedHeaders = mergedHeaders || {};
       if (!mergedHeaders["Content-Type"]) {
@@ -417,16 +531,25 @@ class Session {
    * @param {string} method - HTTP method
    * @param {string} url - Request URL
    * @param {Object} [options] - Request options
+   * @param {Object} [options.files] - Files to upload as multipart/form-data
    * @returns {Response} Response object
    */
   requestSync(method, url, options = {}) {
-    let { body = null, json = null, data = null, headers = null, params = null, auth = null, timeout = null } = options;
+    let { body = null, json = null, data = null, files = null, headers = null, params = null, auth = null, timeout = null } = options;
 
     url = addParamsToUrl(url, params);
     let mergedHeaders = this._mergeHeaders(headers);
 
+    // Handle multipart file upload
+    if (files !== null) {
+      const formData = (data !== null && typeof data === "object") ? data : null;
+      const multipart = encodeMultipart(formData, files);
+      body = multipart.body.toString("latin1"); // Preserve binary data
+      mergedHeaders = mergedHeaders || {};
+      mergedHeaders["Content-Type"] = multipart.contentType;
+    }
     // Handle JSON body
-    if (json !== null) {
+    else if (json !== null) {
       body = JSON.stringify(json);
       mergedHeaders = mergedHeaders || {};
       if (!mergedHeaders["Content-Type"]) {

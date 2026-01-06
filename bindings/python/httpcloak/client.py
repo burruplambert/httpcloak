@@ -20,13 +20,98 @@ Example:
 import asyncio
 import base64
 import json
+import mimetypes
 import os
 import platform
+import uuid
 from ctypes import c_char_p, c_int64, cdll
+from io import IOBase
 from pathlib import Path
 from threading import Lock
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, BinaryIO, Dict, List, Optional, Tuple, Union
 from urllib.parse import urlencode, urlparse, urlunparse, parse_qs
+
+
+# File type for files parameter
+FileValue = Union[
+    bytes,                                          # Raw bytes
+    BinaryIO,                                       # File-like object
+    Tuple[str, bytes],                              # (filename, content)
+    Tuple[str, bytes, str],                         # (filename, content, content_type)
+    Tuple[str, BinaryIO],                           # (filename, file_object)
+    Tuple[str, BinaryIO, str],                      # (filename, file_object, content_type)
+]
+FilesType = Dict[str, FileValue]
+
+
+def _encode_multipart(
+    data: Optional[Dict[str, str]] = None,
+    files: Optional[FilesType] = None,
+) -> Tuple[bytes, str]:
+    """
+    Encode data and files as multipart/form-data.
+
+    Returns:
+        Tuple of (body_bytes, content_type_with_boundary)
+    """
+    boundary = f"----HTTPCloakBoundary{uuid.uuid4().hex}"
+    lines: List[bytes] = []
+
+    # Add form fields
+    if data:
+        for key, value in data.items():
+            lines.append(f"--{boundary}\r\n".encode())
+            lines.append(f'Content-Disposition: form-data; name="{key}"\r\n\r\n'.encode())
+            lines.append(f"{value}\r\n".encode())
+
+    # Add files
+    if files:
+        for field_name, file_value in files.items():
+            filename: str
+            content: bytes
+            content_type: str
+
+            if isinstance(file_value, bytes):
+                # Just raw bytes
+                filename = field_name
+                content = file_value
+                content_type = "application/octet-stream"
+            elif isinstance(file_value, IOBase):
+                # File-like object
+                filename = getattr(file_value, "name", field_name)
+                if isinstance(filename, (bytes, bytearray)):
+                    filename = filename.decode()
+                filename = os.path.basename(filename)
+                content = file_value.read()
+                content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+            elif isinstance(file_value, tuple):
+                if len(file_value) == 2:
+                    filename, file_content = file_value
+                    content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+                else:
+                    filename, file_content, content_type = file_value
+
+                if isinstance(file_content, IOBase):
+                    content = file_content.read()
+                else:
+                    content = file_content
+            else:
+                raise ValueError(f"Invalid file value for field '{field_name}'")
+
+            lines.append(f"--{boundary}\r\n".encode())
+            lines.append(
+                f'Content-Disposition: form-data; name="{field_name}"; filename="{filename}"\r\n'.encode()
+            )
+            lines.append(f"Content-Type: {content_type}\r\n\r\n".encode())
+            lines.append(content)
+            lines.append(b"\r\n")
+
+    lines.append(f"--{boundary}--\r\n".encode())
+
+    body = b"".join(lines)
+    content_type_header = f"multipart/form-data; boundary={boundary}"
+
+    return body, content_type_header
 
 
 class HTTPCloakError(Exception):
@@ -364,6 +449,7 @@ class Session:
         url: str,
         data: Union[str, bytes, Dict, None] = None,
         json: Optional[Dict] = None,
+        files: Optional[FilesType] = None,
         params: Optional[Dict[str, Any]] = None,
         headers: Optional[Dict[str, str]] = None,
         auth: Optional[Tuple[str, str]] = None,
@@ -376,10 +462,26 @@ class Session:
             url: Request URL
             data: Request body (string, bytes, or dict for form data)
             json: JSON body (will be serialized)
+            files: Files to upload as multipart/form-data.
+                   Dict mapping field names to file values:
+                   - bytes: Raw file content
+                   - file object: Open file
+                   - (filename, content): Tuple with filename and bytes
+                   - (filename, content, content_type): With explicit MIME type
             params: URL query parameters
             headers: Request headers
             auth: Basic auth tuple (username, password)
             timeout: Request timeout in seconds
+
+        Example:
+            # Upload a file
+            session.post(url, files={"file": open("image.png", "rb")})
+
+            # Upload with custom filename
+            session.post(url, files={"file": ("photo.jpg", image_bytes, "image/jpeg")})
+
+            # Upload with form data
+            session.post(url, data={"name": "test"}, files={"file": file_bytes})
         """
         import json as json_module
 
@@ -387,7 +489,14 @@ class Session:
         merged_headers = self._merge_headers(headers)
 
         body = None
-        if json is not None:
+
+        # Handle multipart file upload
+        if files is not None:
+            form_data = data if isinstance(data, dict) else None
+            body, content_type = _encode_multipart(data=form_data, files=files)
+            merged_headers = merged_headers or {}
+            merged_headers["Content-Type"] = content_type
+        elif json is not None:
             body = json_module.dumps(json).encode("utf-8")
             merged_headers = merged_headers or {}
             merged_headers.setdefault("Content-Type", "application/json")
@@ -422,6 +531,7 @@ class Session:
         params: Optional[Dict[str, Any]] = None,
         data: Union[str, bytes, Dict, None] = None,
         json: Optional[Dict] = None,
+        files: Optional[FilesType] = None,
         headers: Optional[Dict[str, str]] = None,
         auth: Optional[Tuple[str, str]] = None,
         timeout: Optional[int] = None,
@@ -435,6 +545,7 @@ class Session:
             params: URL query parameters
             data: Request body
             json: JSON body (will be serialized)
+            files: Files to upload as multipart/form-data
             headers: Request headers
             auth: Basic auth tuple (username, password)
             timeout: Request timeout in seconds
@@ -445,7 +556,14 @@ class Session:
         merged_headers = self._merge_headers(headers)
 
         body = None
-        if json is not None:
+        # Handle multipart file upload
+        if files is not None:
+            form_data = data if isinstance(data, dict) else None
+            body_bytes, content_type = _encode_multipart(data=form_data, files=files)
+            body = body_bytes.decode("latin-1")  # Preserve binary data
+            merged_headers = merged_headers or {}
+            merged_headers["Content-Type"] = content_type
+        elif json is not None:
             body = json_module.dumps(json)
             merged_headers = merged_headers or {}
             merged_headers.setdefault("Content-Type", "application/json")
@@ -483,13 +601,14 @@ class Session:
         url: str,
         data: Union[str, bytes, Dict, None] = None,
         json: Optional[Dict] = None,
+        files: Optional[FilesType] = None,
         params: Optional[Dict[str, Any]] = None,
         headers: Optional[Dict[str, str]] = None,
         auth: Optional[Tuple[str, str]] = None,
         timeout: Optional[int] = None,
     ) -> Response:
         """Perform a PUT request."""
-        return self.request("PUT", url, params=params, data=data, json=json, headers=headers, auth=auth, timeout=timeout)
+        return self.request("PUT", url, params=params, data=data, json=json, files=files, headers=headers, auth=auth, timeout=timeout)
 
     def delete(
         self,
@@ -507,13 +626,14 @@ class Session:
         url: str,
         data: Union[str, bytes, Dict, None] = None,
         json: Optional[Dict] = None,
+        files: Optional[FilesType] = None,
         params: Optional[Dict[str, Any]] = None,
         headers: Optional[Dict[str, str]] = None,
         auth: Optional[Tuple[str, str]] = None,
         timeout: Optional[int] = None,
     ) -> Response:
         """Perform a PATCH request."""
-        return self.request("PATCH", url, params=params, data=data, json=json, headers=headers, auth=auth, timeout=timeout)
+        return self.request("PATCH", url, params=params, data=data, json=json, files=files, headers=headers, auth=auth, timeout=timeout)
 
     def head(
         self,
@@ -719,20 +839,23 @@ def get(url: str, **kwargs) -> Response:
     return _get_default_session().get(url, **kwargs)
 
 
-def post(url: str, data=None, json=None, **kwargs) -> Response:
+def post(url: str, data=None, json=None, files=None, **kwargs) -> Response:
     """
     Perform a POST request.
 
     Example:
         r = httpcloak.post("https://api.example.com", json={"key": "value"})
         print(r.json())
+
+        # With file upload
+        r = httpcloak.post("https://api.example.com/upload", files={"file": open("image.png", "rb")})
     """
-    return _get_default_session().post(url, data=data, json=json, **kwargs)
+    return _get_default_session().post(url, data=data, json=json, files=files, **kwargs)
 
 
-def put(url: str, data=None, json=None, **kwargs) -> Response:
+def put(url: str, data=None, json=None, files=None, **kwargs) -> Response:
     """Perform a PUT request."""
-    return _get_default_session().put(url, data=data, json=json, **kwargs)
+    return _get_default_session().put(url, data=data, json=json, files=files, **kwargs)
 
 
 def delete(url: str, **kwargs) -> Response:
@@ -740,9 +863,9 @@ def delete(url: str, **kwargs) -> Response:
     return _get_default_session().delete(url, **kwargs)
 
 
-def patch(url: str, data=None, json=None, **kwargs) -> Response:
+def patch(url: str, data=None, json=None, files=None, **kwargs) -> Response:
     """Perform a PATCH request."""
-    return _get_default_session().patch(url, data=data, json=json, **kwargs)
+    return _get_default_session().patch(url, data=data, json=json, files=files, **kwargs)
 
 
 def head(url: str, **kwargs) -> Response:
