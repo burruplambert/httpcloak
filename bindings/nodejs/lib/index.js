@@ -269,6 +269,11 @@ class Session {
    * @param {string} [options.proxy] - Proxy URL (e.g., "http://user:pass@host:port")
    * @param {number} [options.timeout=30] - Request timeout in seconds
    * @param {string} [options.httpVersion="auto"] - HTTP version: "auto", "h1", "h2", "h3"
+   * @param {boolean} [options.verify=true] - SSL certificate verification
+   * @param {boolean} [options.allowRedirects=true] - Follow redirects
+   * @param {number} [options.maxRedirects=10] - Maximum number of redirects to follow
+   * @param {number} [options.retry=0] - Number of retries on failure
+   * @param {number[]} [options.retryOnStatus] - Status codes to retry on
    */
   constructor(options = {}) {
     const {
@@ -276,6 +281,11 @@ class Session {
       proxy = null,
       timeout = 30,
       httpVersion = "auto",
+      verify = true,
+      allowRedirects = true,
+      maxRedirects = 10,
+      retry = 0,
+      retryOnStatus = null,
     } = options;
 
     this._lib = getLib();
@@ -288,6 +298,20 @@ class Session {
     };
     if (proxy) {
       config.proxy = proxy;
+    }
+    if (!verify) {
+      config.verify = false;
+    }
+    if (!allowRedirects) {
+      config.allow_redirects = false;
+    } else if (maxRedirects !== 10) {
+      config.max_redirects = maxRedirects;
+    }
+    if (retry > 0) {
+      config.retry = retry;
+      if (retryOnStatus) {
+        config.retry_on_status = retryOnStatus;
+      }
     }
 
     this._handle = this._lib.httpcloak_session_new(JSON.stringify(config));
@@ -582,6 +606,11 @@ let _defaultConfig = {};
  * @param {string} [options.proxy] - Proxy URL
  * @param {number} [options.timeout=30] - Default timeout in seconds
  * @param {string} [options.httpVersion="auto"] - HTTP version: "auto", "h1", "h2", "h3"
+ * @param {boolean} [options.verify=true] - SSL certificate verification
+ * @param {boolean} [options.allowRedirects=true] - Follow redirects
+ * @param {number} [options.maxRedirects=10] - Maximum number of redirects to follow
+ * @param {number} [options.retry=0] - Number of retries on failure
+ * @param {number[]} [options.retryOnStatus] - Status codes to retry on
  */
 function configure(options = {}) {
   const {
@@ -591,6 +620,11 @@ function configure(options = {}) {
     proxy = null,
     timeout = 30,
     httpVersion = "auto",
+    verify = true,
+    allowRedirects = true,
+    maxRedirects = 10,
+    retry = 0,
+    retryOnStatus = null,
   } = options;
 
   // Close existing session
@@ -608,11 +642,26 @@ function configure(options = {}) {
     proxy,
     timeout,
     httpVersion,
+    verify,
+    allowRedirects,
+    maxRedirects,
+    retry,
+    retryOnStatus,
     headers: finalHeaders,
   };
 
   // Create new session
-  _defaultSession = new Session({ preset, proxy, timeout, httpVersion });
+  _defaultSession = new Session({
+    preset,
+    proxy,
+    timeout,
+    httpVersion,
+    verify,
+    allowRedirects,
+    maxRedirects,
+    retry,
+    retryOnStatus,
+  });
   if (Object.keys(finalHeaders).length > 0) {
     Object.assign(_defaultSession.headers, finalHeaders);
   }
@@ -627,9 +676,24 @@ function _getDefaultSession() {
     const proxy = _defaultConfig.proxy || null;
     const timeout = _defaultConfig.timeout || 30;
     const httpVersion = _defaultConfig.httpVersion || "auto";
+    const verify = _defaultConfig.verify !== undefined ? _defaultConfig.verify : true;
+    const allowRedirects = _defaultConfig.allowRedirects !== undefined ? _defaultConfig.allowRedirects : true;
+    const maxRedirects = _defaultConfig.maxRedirects || 10;
+    const retry = _defaultConfig.retry || 0;
+    const retryOnStatus = _defaultConfig.retryOnStatus || null;
     const headers = _defaultConfig.headers || {};
 
-    _defaultSession = new Session({ preset, proxy, timeout, httpVersion });
+    _defaultSession = new Session({
+      preset,
+      proxy,
+      timeout,
+      httpVersion,
+      verify,
+      allowRedirects,
+      maxRedirects,
+      retry,
+      retryOnStatus,
+    });
     if (Object.keys(headers).length > 0) {
       Object.assign(_defaultSession.headers, headers);
     }

@@ -250,14 +250,19 @@ class Session:
         proxy: Proxy URL (e.g., "http://user:pass@host:port")
         timeout: Default request timeout in seconds (default: 30)
         http_version: Force HTTP version - "auto", "h1", "h2", "h3" (default: "auto")
+        verify: SSL certificate verification (default: True)
+        allow_redirects: Follow redirects (default: True)
+        max_redirects: Maximum number of redirects to follow (default: 10)
+        retry: Number of retries on failure (default: 0)
+        retry_on_status: List of status codes to retry on (default: [429, 500, 502, 503, 504])
 
     Example:
         with httpcloak.Session(preset="chrome-143") as session:
             r = session.get("https://example.com")
             print(r.json())
 
-        # Force HTTP/2
-        with httpcloak.Session(preset="chrome-143", http_version="h2") as session:
+        # With retry and no SSL verification
+        with httpcloak.Session(preset="chrome-143", verify=False, retry=3) as session:
             r = session.get("https://example.com")
     """
 
@@ -267,6 +272,11 @@ class Session:
         proxy: Optional[str] = None,
         timeout: int = 30,
         http_version: str = "auto",
+        verify: bool = True,
+        allow_redirects: bool = True,
+        max_redirects: int = 10,
+        retry: int = 0,
+        retry_on_status: Optional[List[int]] = None,
     ):
         self._lib = _get_lib()
         self._default_timeout = timeout
@@ -275,6 +285,16 @@ class Session:
         config = {"preset": preset, "timeout": timeout, "http_version": http_version}
         if proxy:
             config["proxy"] = proxy
+        if not verify:
+            config["verify"] = False
+        if not allow_redirects:
+            config["allow_redirects"] = False
+        elif max_redirects != 10:
+            config["max_redirects"] = max_redirects
+        if retry > 0:
+            config["retry"] = retry
+            if retry_on_status:
+                config["retry_on_status"] = retry_on_status
 
         config_json = json.dumps(config).encode("utf-8")
         self._handle = self._lib.httpcloak_session_new(config_json)
@@ -577,6 +597,11 @@ def configure(
     proxy: Optional[str] = None,
     timeout: int = 30,
     http_version: str = "auto",
+    verify: bool = True,
+    allow_redirects: bool = True,
+    max_redirects: int = 10,
+    retry: int = 0,
+    retry_on_status: Optional[List[int]] = None,
 ) -> None:
     """
     Configure defaults for module-level functions.
@@ -591,6 +616,11 @@ def configure(
         proxy: Proxy URL (e.g., "http://user:pass@host:port")
         timeout: Default request timeout in seconds (default: 30)
         http_version: Force HTTP version - "auto", "h1", "h2", "h3" (default: "auto")
+        verify: SSL certificate verification (default: True)
+        allow_redirects: Follow redirects (default: True)
+        max_redirects: Maximum number of redirects to follow (default: 10)
+        retry: Number of retries on failure (default: 0)
+        retry_on_status: List of status codes to retry on (default: None)
 
     Example:
         import httpcloak
@@ -599,6 +629,7 @@ def configure(
             preset="chrome-143-windows",
             headers={"Authorization": "Bearer token"},
             http_version="h2",  # Force HTTP/2
+            retry=3,  # Retry failed requests 3 times
         )
 
         r = httpcloak.get("https://example.com")  # uses configured defaults
@@ -620,11 +651,26 @@ def configure(
             "proxy": proxy,
             "timeout": timeout,
             "http_version": http_version,
+            "verify": verify,
+            "allow_redirects": allow_redirects,
+            "max_redirects": max_redirects,
+            "retry": retry,
+            "retry_on_status": retry_on_status,
             "headers": final_headers,
         }
 
         # Create new session with config
-        _default_session = Session(preset=preset, proxy=proxy, timeout=timeout, http_version=http_version)
+        _default_session = Session(
+            preset=preset,
+            proxy=proxy,
+            timeout=timeout,
+            http_version=http_version,
+            verify=verify,
+            allow_redirects=allow_redirects,
+            max_redirects=max_redirects,
+            retry=retry,
+            retry_on_status=retry_on_status,
+        )
         if final_headers:
             _default_session.headers.update(final_headers)
 
@@ -639,9 +685,24 @@ def _get_default_session() -> Session:
                 proxy = _default_config.get("proxy")
                 timeout = _default_config.get("timeout", 30)
                 http_version = _default_config.get("http_version", "auto")
+                verify = _default_config.get("verify", True)
+                allow_redirects = _default_config.get("allow_redirects", True)
+                max_redirects = _default_config.get("max_redirects", 10)
+                retry = _default_config.get("retry", 0)
+                retry_on_status = _default_config.get("retry_on_status")
                 headers = _default_config.get("headers", {})
 
-                _default_session = Session(preset=preset, proxy=proxy, timeout=timeout, http_version=http_version)
+                _default_session = Session(
+                    preset=preset,
+                    proxy=proxy,
+                    timeout=timeout,
+                    http_version=http_version,
+                    verify=verify,
+                    allow_redirects=allow_redirects,
+                    max_redirects=max_redirects,
+                    retry=retry,
+                    retry_on_status=retry_on_status,
+                )
                 if headers:
                     _default_session.headers.update(headers)
     return _default_session

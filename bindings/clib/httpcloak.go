@@ -59,10 +59,17 @@ type ResponseData struct {
 
 // Session configuration
 type SessionConfig struct {
-	Preset      string `json:"preset"`
-	Proxy       string `json:"proxy,omitempty"`
-	Timeout     int    `json:"timeout,omitempty"`      // seconds
-	HTTPVersion string `json:"http_version,omitempty"` // "auto", "h1", "h2", "h3"
+	Preset          string `json:"preset"`
+	Proxy           string `json:"proxy,omitempty"`
+	Timeout         int    `json:"timeout,omitempty"`           // seconds
+	HTTPVersion     string `json:"http_version,omitempty"`      // "auto", "h1", "h2", "h3"
+	Verify          *bool  `json:"verify,omitempty"`            // SSL verification (default: true)
+	AllowRedirects  *bool  `json:"allow_redirects,omitempty"`   // Follow redirects (default: true)
+	MaxRedirects    int    `json:"max_redirects,omitempty"`     // Max redirects (default: 10)
+	Retry           int    `json:"retry,omitempty"`             // Retry count (default: 0)
+	RetryWaitMin    int    `json:"retry_wait_min,omitempty"`    // Min wait between retries in ms
+	RetryWaitMax    int    `json:"retry_wait_max,omitempty"`    // Max wait between retries in ms
+	RetryOnStatus   []int  `json:"retry_on_status,omitempty"`   // Status codes to retry on
 }
 
 // Error response
@@ -126,6 +133,35 @@ func httpcloak_session_new(configJSON *C.char) C.int64_t {
 	case "h3", "http3", "3":
 		// H3 is default/auto, nothing to do (auto will try H3 first)
 	// "auto" or empty = default behavior
+	}
+
+	// Handle SSL verification
+	if config.Verify != nil && !*config.Verify {
+		opts = append(opts, httpcloak.WithInsecureSkipVerify())
+	}
+
+	// Handle redirects
+	if config.AllowRedirects != nil && !*config.AllowRedirects {
+		opts = append(opts, httpcloak.WithoutRedirects())
+	} else if config.MaxRedirects > 0 {
+		opts = append(opts, httpcloak.WithRedirects(true, config.MaxRedirects))
+	}
+
+	// Handle retry configuration
+	if config.Retry > 0 {
+		if config.RetryWaitMin > 0 || config.RetryWaitMax > 0 || len(config.RetryOnStatus) > 0 {
+			waitMin := time.Duration(config.RetryWaitMin) * time.Millisecond
+			waitMax := time.Duration(config.RetryWaitMax) * time.Millisecond
+			if waitMin == 0 {
+				waitMin = 500 * time.Millisecond
+			}
+			if waitMax == 0 {
+				waitMax = 10 * time.Second
+			}
+			opts = append(opts, httpcloak.WithRetryConfig(config.Retry, waitMin, waitMax, config.RetryOnStatus))
+		} else {
+			opts = append(opts, httpcloak.WithRetry(config.Retry))
+		}
 	}
 
 	session := httpcloak.NewSession(config.Preset, opts...)
