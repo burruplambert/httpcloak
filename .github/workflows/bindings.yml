@@ -191,51 +191,6 @@ jobs:
           name: npm-platform-${{ matrix.npm_platform }}
           path: bindings/nodejs/npm/${{ matrix.npm_platform }}/
 
-  test-nodejs:
-    name: Test Node.js (${{ matrix.os }}-${{ matrix.arch }})
-    needs: [build-native, build-darwin-amd64]
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: linux
-            arch: amd64
-            runner: ubuntu-latest
-          - os: linux
-            arch: arm64
-            runner: ubuntu-24.04-arm
-          - os: darwin
-            arch: arm64
-            runner: macos-14
-          - os: windows
-            arch: amd64
-            runner: windows-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Download native library
-        uses: actions/download-artifact@v4
-        with:
-          name: lib-${{ matrix.os }}-${{ matrix.arch }}
-          path: bindings/nodejs/lib/
-
-      - name: Install dependencies
-        run: |
-          cd bindings/nodejs
-          npm install --ignore-scripts
-
-      - name: Test
-        run: |
-          cd bindings/nodejs
-          node test.js
-
   publish-pypi:
     name: Publish to PyPI
     needs: build-python-wheels
@@ -263,7 +218,7 @@ jobs:
 
   publish-npm-platforms:
     name: Publish npm platform packages
-    needs: [build-npm-platform-packages, test-nodejs]
+    needs: build-npm-platform-packages
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     environment: npm

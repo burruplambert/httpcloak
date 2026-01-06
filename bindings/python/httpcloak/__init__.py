@@ -24,4 +24,4 @@ Example:
 from .client import Session, Response, HTTPCloakError, available_presets, version
 
 __all__ = ["Session", "Response", "HTTPCloakError", "available_presets", "version"]
-__version__ = "1.4.0"
+__version__ = "1.0.0"
