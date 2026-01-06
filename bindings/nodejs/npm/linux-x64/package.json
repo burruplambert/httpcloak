@@ -1,0 +1,20 @@
+{
+  "name": "@httpcloak/linux-x64",
+  "version": "1.4.0",
+  "description": "HTTPCloak native binary for linux x64",
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "main": "lib.js",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sardanioss/httpcloak"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

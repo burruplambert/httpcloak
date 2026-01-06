@@ -1,0 +1,45 @@
+{
+  "name": "httpcloak",
+  "version": "1.4.0",
+  "description": "Browser fingerprint emulation HTTP client with HTTP/1.1, HTTP/2, and HTTP/3 support",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "scripts": {
+    "test": "node test.js",
+    "setup-packages": "node scripts/setup-npm-packages.js"
+  },
+  "keywords": [
+    "http",
+    "http2",
+    "http3",
+    "quic",
+    "tls",
+    "fingerprint",
+    "browser",
+    "scraping",
+    "bot-detection"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sardanioss/httpcloak"
+  },
+  "bugs": {
+    "url": "https://github.com/sardanioss/httpcloak/issues"
+  },
+  "homepage": "https://github.com/sardanioss/httpcloak#readme",
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "dependencies": {
+    "koffi": "^2.9.0"
+  },
+  "optionalDependencies": {
+    "@httpcloak/linux-x64": "1.4.0",
+    "@httpcloak/linux-arm64": "1.4.0",
+    "@httpcloak/darwin-x64": "1.4.0",
+    "@httpcloak/darwin-arm64": "1.4.0",
+    "@httpcloak/win32-x64": "1.4.0",
+    "@httpcloak/win32-arm64": "1.4.0"
+  }
+}
