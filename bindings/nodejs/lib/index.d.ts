@@ -31,6 +31,18 @@ export interface SessionOptions {
   proxy?: string;
   /** Request timeout in seconds (default: 30) */
   timeout?: number;
+  /** HTTP version: "auto", "h1", "h2", "h3" (default: "auto") */
+  httpVersion?: string;
+  /** SSL certificate verification (default: true) */
+  verify?: boolean;
+  /** Follow redirects (default: true) */
+  allowRedirects?: boolean;
+  /** Maximum number of redirects to follow (default: 10) */
+  maxRedirects?: number;
+  /** Number of retries on failure (default: 3, set to 0 to disable) */
+  retry?: number;
+  /** Status codes to retry on (default: [429, 500, 502, 503, 504]) */
+  retryOnStatus?: number[];
 }
 
 export interface RequestOptions {
@@ -150,3 +162,56 @@ export function version(): string;
 
 /** Get list of available browser presets */
 export function availablePresets(): string[];
+
+export interface ConfigureOptions extends SessionOptions {
+  /** Default headers for all requests */
+  headers?: Record<string, string>;
+  /** Default basic auth [username, password] */
+  auth?: [string, string];
+}
+
+/** Configure defaults for module-level functions */
+export function configure(options?: ConfigureOptions): void;
+
+/** Perform a GET request */
+export function get(url: string, options?: RequestOptions): Promise<Response>;
+
+/** Perform a POST request */
+export function post(url: string, options?: RequestOptions): Promise<Response>;
+
+/** Perform a PUT request */
+export function put(url: string, options?: RequestOptions): Promise<Response>;
+
+/** Perform a DELETE request */
+declare function del(url: string, options?: RequestOptions): Promise<Response>;
+export { del as delete };
+
+/** Perform a PATCH request */
+export function patch(url: string, options?: RequestOptions): Promise<Response>;
+
+/** Perform a HEAD request */
+export function head(url: string, options?: RequestOptions): Promise<Response>;
+
+/** Perform an OPTIONS request */
+export function options(url: string, options?: RequestOptions): Promise<Response>;
+
+/** Perform a custom HTTP request */
+export function request(method: string, url: string, options?: RequestOptions): Promise<Response>;
+
+/** Available browser presets */
+export const Preset: {
+  CHROME_143: string;
+  CHROME_143_WINDOWS: string;
+  CHROME_143_LINUX: string;
+  CHROME_143_MACOS: string;
+  CHROME_131: string;
+  CHROME_131_WINDOWS: string;
+  CHROME_131_LINUX: string;
+  CHROME_131_MACOS: string;
+  IOS_CHROME_143: string;
+  ANDROID_CHROME_143: string;
+  FIREFOX_133: string;
+  SAFARI_18: string;
+  IOS_SAFARI_17: string;
+  all(): string[];
+};

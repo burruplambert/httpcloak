@@ -135,7 +135,7 @@ func NewClient(presetName string, opts ...Option) *Client {
 	h1Transport := transport.NewHTTP1TransportWithProxy(preset, h2Manager.GetDNSCache(), proxyConfig)
 	h1Transport.SetInsecureSkipVerify(config.InsecureSkipVerify)
 
-	return &Client{
+	client := &Client{
 		poolManager: h2Manager,
 		quicManager: quicManager,
 		h1Transport: h1Transport,
@@ -144,11 +144,25 @@ func NewClient(presetName string, opts ...Option) *Client {
 		h3Failures:  make(map[string]time.Time),
 		h2Failures:  make(map[string]time.Time),
 	}
+
+	// Auto-enable cookies when retry is enabled
+	// (required for handling cookie challenges from bot protection)
+	if config.RetryEnabled {
+		client.cookies = NewCookieJar()
+	}
+
+	return client
 }
 
-// NewSession creates a new HTTP client with cookie jar enabled (like requests.Session())
-// Cookies are automatically persisted between requests
+// NewSession creates a new HTTP client with cookie jar and retry enabled (like requests.Session())
+// Cookies are automatically persisted between requests.
+// Retry is enabled by default (3 retries) to handle bot protection cookie challenges.
+// This mimics browser behavior where cookies are accepted and requests are retried.
 func NewSession(presetName string, opts ...Option) *Client {
+	// Prepend default retry so user opts can override if needed
+	defaultOpts := []Option{WithRetry(3)}
+	opts = append(defaultOpts, opts...)
+
 	client := NewClient(presetName, opts...)
 	client.cookies = NewCookieJar()
 	return client
@@ -373,9 +387,11 @@ func (c *Client) Do(ctx context.Context, req *Request) (*Response, error) {
 }
 
 // doWithRetry executes request with retry logic
+// Handles standard retries and cookie challenge retries (bot protection)
 func (c *Client) doWithRetry(ctx context.Context, req *Request) (*Response, error) {
 	var lastErr error
 	var lastResp *Response
+	var cookieChallengeRetried bool
 
 	for attempt := 0; attempt <= c.config.MaxRetries; attempt++ {
 		if attempt > 0 {
@@ -392,6 +408,19 @@ func (c *Client) doWithRetry(ctx context.Context, req *Request) (*Response, erro
 		if err != nil {
 			lastErr = err
 			continue
+		}
+
+		// Check for cookie challenge (403 + Set-Cookie from bot protection)
+		// This handles Akamai, Cloudflare, PerimeterX, etc.
+		// Cookie challenge flow: first request gets 403 + cookies, retry with cookies succeeds
+		if resp.StatusCode == 403 && !cookieChallengeRetried && req.ForceProtocol == ProtocolAuto {
+			if setCookie, hasCookies := resp.Headers["set-cookie"]; hasCookies && setCookie != "" {
+				cookieChallengeRetried = true
+				// Cookies are now stored in jar from first response
+				// Simply retry - cookies will be sent automatically
+				// No need to switch protocols; just having cookies is usually enough
+				continue
+			}
 		}
 
 		// Check if we should retry based on status code
@@ -628,11 +657,9 @@ func (c *Client) doOnce(ctx context.Context, req *Request, redirectHistory []*Re
 	}
 
 	// Store cookies from response
-	if c.cookies != nil {
-		setCookies := resp.Header["Set-Cookie"]
-		if len(setCookies) > 0 {
-			c.cookies.SetCookiesFromHeaderList(parsedURL, setCookies)
-		}
+	setCookies := resp.Header["Set-Cookie"]
+	if c.cookies != nil && len(setCookies) > 0 {
+		c.cookies.SetCookiesFromHeaderList(parsedURL, setCookies)
 	}
 
 	// Handle redirects

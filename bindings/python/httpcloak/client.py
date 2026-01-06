@@ -410,7 +410,7 @@ class Session:
         verify: SSL certificate verification (default: True)
         allow_redirects: Follow redirects (default: True)
         max_redirects: Maximum number of redirects to follow (default: 10)
-        retry: Number of retries on failure (default: 0)
+        retry: Number of retries on failure (default: 3, set to 0 to disable)
         retry_on_status: List of status codes to retry on (default: [429, 500, 502, 503, 504])
 
     Example:
@@ -432,7 +432,7 @@ class Session:
         verify: bool = True,
         allow_redirects: bool = True,
         max_redirects: int = 10,
-        retry: int = 0,
+        retry: int = 3,
         retry_on_status: Optional[List[int]] = None,
     ):
         self._lib = _get_lib()
@@ -448,10 +448,10 @@ class Session:
             config["allow_redirects"] = False
         elif max_redirects != 10:
             config["max_redirects"] = max_redirects
-        if retry > 0:
-            config["retry"] = retry
-            if retry_on_status:
-                config["retry_on_status"] = retry_on_status
+        # Always pass retry to clib (even if 0 to explicitly disable)
+        config["retry"] = retry
+        if retry_on_status:
+            config["retry_on_status"] = retry_on_status
 
         config_json = json.dumps(config).encode("utf-8")
         self._handle = self._lib.httpcloak_session_new(config_json)
@@ -793,7 +793,7 @@ def configure(
     verify: bool = True,
     allow_redirects: bool = True,
     max_redirects: int = 10,
-    retry: int = 0,
+    retry: int = 3,
     retry_on_status: Optional[List[int]] = None,
 ) -> None:
     """
@@ -812,7 +812,7 @@ def configure(
         verify: SSL certificate verification (default: True)
         allow_redirects: Follow redirects (default: True)
         max_redirects: Maximum number of redirects to follow (default: 10)
-        retry: Number of retries on failure (default: 0)
+        retry: Number of retries on failure (default: 3, set to 0 to disable)
         retry_on_status: List of status codes to retry on (default: None)
 
     Example:

@@ -148,6 +148,8 @@ func httpcloak_session_new(configJSON *C.char) C.int64_t {
 	}
 
 	// Handle retry configuration
+	// Note: We need to explicitly handle retry=0 to disable retry,
+	// since Go's NewSession enables retry by default
 	if config.Retry > 0 {
 		if config.RetryWaitMin > 0 || config.RetryWaitMax > 0 || len(config.RetryOnStatus) > 0 {
 			waitMin := time.Duration(config.RetryWaitMin) * time.Millisecond
@@ -162,6 +164,9 @@ func httpcloak_session_new(configJSON *C.char) C.int64_t {
 		} else {
 			opts = append(opts, httpcloak.WithRetry(config.Retry))
 		}
+	} else if config.Retry == 0 {
+		// Explicitly disable retry when retry=0 is passed
+		opts = append(opts, httpcloak.WithoutRetry())
 	}
 
 	session := httpcloak.NewSession(config.Preset, opts...)

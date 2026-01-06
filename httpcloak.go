@@ -261,6 +261,13 @@ func WithRetry(count int) SessionOption {
 	}
 }
 
+// WithoutRetry explicitly disables retry
+func WithoutRetry() SessionOption {
+	return func(c *sessionConfig) {
+		c.retryCount = 0
+	}
+}
+
 // WithRetryConfig configures retry behavior
 func WithRetryConfig(count int, waitMin, waitMax time.Duration, retryOnStatus []int) SessionOption {
 	return func(c *sessionConfig) {

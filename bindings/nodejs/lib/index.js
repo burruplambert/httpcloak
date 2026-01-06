@@ -445,7 +445,7 @@ class Session {
    * @param {boolean} [options.verify=true] - SSL certificate verification
    * @param {boolean} [options.allowRedirects=true] - Follow redirects
    * @param {number} [options.maxRedirects=10] - Maximum number of redirects to follow
-   * @param {number} [options.retry=0] - Number of retries on failure
+   * @param {number} [options.retry=3] - Number of retries on failure (set to 0 to disable)
    * @param {number[]} [options.retryOnStatus] - Status codes to retry on
    */
   constructor(options = {}) {
@@ -457,7 +457,7 @@ class Session {
       verify = true,
       allowRedirects = true,
       maxRedirects = 10,
-      retry = 0,
+      retry = 3,
       retryOnStatus = null,
     } = options;
 
@@ -480,11 +480,10 @@ class Session {
     } else if (maxRedirects !== 10) {
       config.max_redirects = maxRedirects;
     }
-    if (retry > 0) {
-      config.retry = retry;
-      if (retryOnStatus) {
-        config.retry_on_status = retryOnStatus;
-      }
+    // Always pass retry to clib (even if 0 to explicitly disable)
+    config.retry = retry;
+    if (retryOnStatus) {
+      config.retry_on_status = retryOnStatus;
     }
 
     this._handle = this._lib.httpcloak_session_new(JSON.stringify(config));
@@ -804,7 +803,7 @@ let _defaultConfig = {};
  * @param {boolean} [options.verify=true] - SSL certificate verification
  * @param {boolean} [options.allowRedirects=true] - Follow redirects
  * @param {number} [options.maxRedirects=10] - Maximum number of redirects to follow
- * @param {number} [options.retry=0] - Number of retries on failure
+ * @param {number} [options.retry=3] - Number of retries on failure (set to 0 to disable)
  * @param {number[]} [options.retryOnStatus] - Status codes to retry on
  */
 function configure(options = {}) {
@@ -818,7 +817,7 @@ function configure(options = {}) {
     verify = true,
     allowRedirects = true,
     maxRedirects = 10,
-    retry = 0,
+    retry = 3,
     retryOnStatus = null,
   } = options;
 
@@ -874,7 +873,7 @@ function _getDefaultSession() {
     const verify = _defaultConfig.verify !== undefined ? _defaultConfig.verify : true;
     const allowRedirects = _defaultConfig.allowRedirects !== undefined ? _defaultConfig.allowRedirects : true;
     const maxRedirects = _defaultConfig.maxRedirects || 10;
-    const retry = _defaultConfig.retry || 0;
+    const retry = _defaultConfig.retry !== undefined ? _defaultConfig.retry : 3;
     const retryOnStatus = _defaultConfig.retryOnStatus || null;
     const headers = _defaultConfig.headers || {};
 

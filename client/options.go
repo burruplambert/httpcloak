@@ -157,6 +157,14 @@ func WithRetry(maxRetries int) Option {
 	}
 }
 
+// WithoutRetry explicitly disables retry
+func WithoutRetry() Option {
+	return func(c *ClientConfig) {
+		c.RetryEnabled = false
+		c.MaxRetries = 0
+	}
+}
+
 // WithRetryConfig configures retry behavior
 func WithRetryConfig(maxRetries int, waitMin, waitMax time.Duration, retryOnStatus []int) Option {
 	return func(c *ClientConfig) {
