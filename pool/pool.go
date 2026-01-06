@@ -110,6 +110,11 @@ type HostPool struct {
 	// Chrome reuses sessions - this makes subsequent connections look like real browser
 	sessionCache utls.ClientSessionCache
 
+	// Cached ClientHelloSpec - shuffled once on pool creation, reused for all connections
+	// This matches Chrome's behavior: shuffle TLS extensions once per session, not per connection
+	cachedSpec    *utls.ClientHelloSpec
+	cachedPSKSpec *utls.ClientHelloSpec
+
 	// Configuration
 	maxConns           int
 	maxIdleTime        time.Duration
@@ -126,7 +131,7 @@ func NewHostPool(host, port string, preset *fingerprint.Preset, dnsCache *dns.Ca
 
 // NewHostPoolWithConfig creates a pool with TLS and proxy configuration
 func NewHostPoolWithConfig(host, port string, preset *fingerprint.Preset, dnsCache *dns.Cache, insecureSkipVerify bool, proxyURL string) *HostPool {
-	return &HostPool{
+	pool := &HostPool{
 		host:               host,
 		port:               port,
 		preset:             preset,
@@ -140,6 +145,22 @@ func NewHostPoolWithConfig(host, port string, preset *fingerprint.Preset, dnsCac
 		insecureSkipVerify: insecureSkipVerify,
 		proxyURL:           proxyURL,
 	}
+
+	// Generate and cache ClientHelloSpec once - this includes TLS extension shuffle
+	// Chrome shuffles extensions once at startup, not per connection
+	// This makes our fingerprint consistent within a session like real Chrome
+	if spec, err := utls.UTLSIdToSpec(preset.ClientHelloID); err == nil {
+		pool.cachedSpec = &spec
+	}
+
+	// Also cache PSK variant if available
+	if preset.PSKClientHelloID.Client != "" {
+		if spec, err := utls.UTLSIdToSpec(preset.PSKClientHelloID); err == nil {
+			pool.cachedPSKSpec = &spec
+		}
+	}
+
+	return pool
 }
 
 // SetMaxConns sets the maximum connections for this pool (0 = unlimited)
@@ -245,19 +266,41 @@ func (p *HostPool) createConn(ctx context.Context) (*Conn, error) {
 		OmitEmptyPsk:           true,           // Chrome doesn't send empty PSK on first connection
 	}
 
-	// Determine which ClientHelloID to use:
-	// - If we have a cached session for this host and a PSK variant available, use PSK variant
-	// - Otherwise use the regular ClientHelloID
-	clientHelloID := p.preset.ClientHelloID
-	if p.preset.PSKClientHelloID.Client != "" {
+	// Determine which cached spec to use:
+	// - If we have a cached session for this host and PSK spec available, use PSK spec
+	// - Otherwise use the regular cached spec
+	// Using cached specs ensures TLS extension order is consistent (shuffled once per session, like Chrome)
+	var specToUse *utls.ClientHelloSpec
+	usePSK := false
+	if p.cachedPSKSpec != nil {
 		// Check if there's a cached session (key is ServerName)
 		if session, ok := p.sessionCache.Get(p.host); ok && session != nil {
-			// We have a cached session - use PSK variant for session resumption
-			clientHelloID = p.preset.PSKClientHelloID
+			specToUse = p.cachedPSKSpec
+			usePSK = true
 		}
 	}
+	if specToUse == nil {
+		specToUse = p.cachedSpec
+	}
 
-	tlsConn := utls.UClient(rawConn, tlsConfig, clientHelloID)
+	// Create UClient with HelloCustom and apply our cached spec
+	// This ensures the TLS extension order is consistent across all connections
+	var tlsConn *utls.UConn
+	if specToUse != nil {
+		// Use cached spec - extension order is preserved from pool creation
+		tlsConn = utls.UClient(rawConn, tlsConfig, utls.HelloCustom)
+		if err := tlsConn.ApplyPreset(specToUse); err != nil {
+			rawConn.Close()
+			return nil, fmt.Errorf("failed to apply TLS preset: %w", err)
+		}
+	} else {
+		// Fallback to ClientHelloID if spec caching failed
+		clientHelloID := p.preset.ClientHelloID
+		if usePSK && p.preset.PSKClientHelloID.Client != "" {
+			clientHelloID = p.preset.PSKClientHelloID
+		}
+		tlsConn = utls.UClient(rawConn, tlsConfig, clientHelloID)
+	}
 
 	// Set session cache on the connection for PSK/resumption
 	// This enables pre_shared_key extension on subsequent connections
@@ -306,8 +349,8 @@ func (p *HostPool) createConn(ctx context.Context) (*Conn, error) {
 			"sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform",
 			"upgrade-insecure-requests", "user-agent", "accept",
 			"sec-fetch-site", "sec-fetch-mode", "sec-fetch-user", "sec-fetch-dest",
-			"accept-encoding", "accept-language", "priority",
-			"cache-control", "cookie", "origin", "referer",
+			"accept-encoding", "accept-language",
+			"cookie", "priority",
 		},
 		UserAgent:           p.preset.UserAgent,
 		StreamPriorityMode:  http2.StreamPriorityChrome,

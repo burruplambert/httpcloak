@@ -51,8 +51,8 @@ func buildChromeTransportParams() map[uint64][]byte {
 	versionInfo := make([]byte, 0, 16)
 	versionInfo = binary.BigEndian.AppendUint32(versionInfo, 0x00000001) // QUICv1 chosen
 	versionInfo = binary.BigEndian.AppendUint32(versionInfo, 0x00000001) // QUICv1 available
-	greaseVersion := generateGREASEVersion()
-	versionInfo = binary.BigEndian.AppendUint32(versionInfo, greaseVersion) // GREASE version
+	// Chrome uses consistent GREASE version pattern: 0xdadadada is common
+	versionInfo = binary.BigEndian.AppendUint32(versionInfo, 0xdadadada)
 	params[transportParamVersionInfo] = versionInfo
 
 	// google_version (0x4752): QUICv1
@@ -60,16 +60,17 @@ func buildChromeTransportParams() map[uint64][]byte {
 	binary.BigEndian.PutUint32(googleVer, 0x00000001) // QUICv1
 	params[transportParamGoogleVer] = googleVer
 
-	// initial_rtt (12583/0x3127): varies, use ~230ms in microseconds
+	// initial_rtt (12583/0x3127): Chrome typically uses values around 100-300ms
+	// Use a consistent value to avoid fingerprint variation
 	initialRTT := make([]byte, 0, 8)
-	initialRTT = quicvarint.Append(initialRTT, 230000+uint64(rand.Intn(10000))) // ~230-240ms
+	initialRTT = quicvarint.Append(initialRTT, 100000) // 100ms in microseconds
 	params[transportParamInitialRTT] = initialRTT
 
-	// GREASE transport parameter
-	greaseID := generateGREASETransportParamID()
-	greaseData := make([]byte, 9)
-	rand.Read(greaseData)
-	params[greaseID] = greaseData
+	// GREASE transport parameter - use consistent ID and empty data like Chrome often does
+	// Chrome commonly uses small N values for GREASE IDs (27 + 31*N)
+	// N=0 gives 27, N=1 gives 58, N=2 gives 89, etc.
+	greaseID := uint64(27 + 31*2) // 89 (0x59) - a common Chrome GREASE ID
+	params[greaseID] = []byte{}   // Empty GREASE data is valid and common
 
 	return params
 }
@@ -114,7 +115,7 @@ func (c *QUICConn) IsHealthy() bool {
 		return false
 	}
 
-	// Check if QUIC connection context is still valid
+	// Check if we have a raw QUIC connection (set when Dial completes)
 	if c.QUICConn != nil {
 		select {
 		case <-c.QUICConn.Context().Done():
@@ -122,6 +123,12 @@ func (c *QUICConn) IsHealthy() bool {
 		default:
 			return true
 		}
+	}
+
+	// If we only have the HTTP3 transport, it handles its own connection pooling
+	// The transport will dial a new connection if needed
+	if c.HTTP3RT != nil {
+		return true
 	}
 
 	return false
@@ -184,6 +191,10 @@ type QUICHostPool struct {
 	connections []*QUICConn
 	mu          sync.Mutex
 
+	// Cached ClientHelloSpec for consistent TLS fingerprint
+	// Chrome shuffles TLS extensions once per session, not per connection
+	cachedClientHelloSpec *utls.ClientHelloSpec
+
 	// Configuration
 	maxConns       int
 	maxIdleTime    time.Duration
@@ -193,7 +204,7 @@ type QUICHostPool struct {
 
 // NewQUICHostPool creates a new QUIC pool for a specific host
 func NewQUICHostPool(host, port string, preset *fingerprint.Preset, dnsCache *dns.Cache) *QUICHostPool {
-	return &QUICHostPool{
+	pool := &QUICHostPool{
 		host:           host,
 		port:           port,
 		preset:         preset,
@@ -204,6 +215,17 @@ func NewQUICHostPool(host, port string, preset *fingerprint.Preset, dnsCache *dn
 		maxConnAge:     5 * time.Minute,
 		connectTimeout: 30 * time.Second,
 	}
+
+	// Cache the ClientHelloSpec for consistent TLS fingerprint across connections
+	// Chrome shuffles TLS extensions once per session, not per connection
+	if preset != nil && preset.QUICClientHelloID.Client != "" {
+		spec, err := utls.UTLSIdToSpec(preset.QUICClientHelloID)
+		if err == nil {
+			pool.cachedClientHelloSpec = &spec
+		}
+	}
+
+	return pool
 }
 
 // SetMaxConns sets the maximum connections for this pool (0 = unlimited)
@@ -296,8 +318,9 @@ func (p *QUICHostPool) createConn(ctx context.Context) (*QUICConn, error) {
 		InitialPacketSize:            1250,  // Chrome uses ~1250
 		DisableClientHelloScrambling: true,  // Chrome doesn't scramble SNI, sends fewer packets
 		ChromeStyleInitialPackets:    true,  // Chrome-like frame patterns in Initial packets
-		ClientHelloID:                clientHelloID, // uTLS TLS fingerprinting
-		ECHConfigList:                echConfigList, // ECH from DNS HTTPS records
+		ClientHelloID:                clientHelloID,            // Fallback if cached spec fails
+		CachedClientHelloSpec:        p.cachedClientHelloSpec,  // Cached spec for consistent fingerprint
+		ECHConfigList:                echConfigList,            // ECH from DNS HTTPS records
 		TransportParameterOrder:      quic.TransportParameterOrderChrome, // Chrome transport param ordering
 	}
 
@@ -315,16 +338,16 @@ func (p *QUICHostPool) createConn(ctx context.Context) (*QUICConn, error) {
 		port = 443
 	}
 
-	// Generate GREASE setting ID (must be of form 0x1f * N + 0x21)
-	greaseSettingID := generateGREASESettingID()
-	// Chrome uses random GREASE values, not static 0
-	greaseSettingValue := rand.Uint64() & 0xFFFFFFFF // Random 32-bit value
+	// GREASE setting ID (must be of form 0x1f * N + 0x21)
+	// Chrome commonly uses small N values. N=1 gives 0x40, N=2 gives 0x5f
+	// Using 0x40 (N=1) which is a common Chrome GREASE setting ID
+	greaseSettingID := uint64(0x1f*1 + 0x21) // 0x40
 
 	// Chrome-like HTTP/3 additional settings
 	additionalSettings := map[uint64]uint64{
-		settingQPACKMaxTableCapacity: 65536,            // Chrome's QPACK table capacity
-		settingQPACKBlockedStreams:   100,              // Chrome's blocked streams limit
-		greaseSettingID:              greaseSettingValue, // Randomized GREASE value
+		settingQPACKMaxTableCapacity: 4096, // Chrome's QPACK table capacity
+		settingQPACKBlockedStreams:   100,  // Chrome's blocked streams limit
+		greaseSettingID:              0,    // Chrome uses 0 for GREASE setting value
 	}
 
 	// Order IPs based on preference
@@ -337,144 +360,45 @@ func (p *QUICHostPool) createConn(ctx context.Context) (*QUICConn, error) {
 		fallbackIPs = ipv4
 	}
 
-	// Create HTTP/3 transport with Happy Eyeballs-style racing
+	// Create HTTP/3 transport - simple sequential dial (no racing for fingerprint consistency)
 	h3Transport := &http3.Transport{
 		TLSClientConfig:        tlsConfig,
 		QUICConfig:             quicConfig,
 		EnableDatagrams:        true,       // Chrome enables H3_DATAGRAM
 		AdditionalSettings:     additionalSettings,
-		MaxResponseHeaderBytes: 262144,     // Chrome's MAX_FIELD_SECTION_SIZE
+		MaxResponseHeaderBytes: 16384,      // Chrome's actual MAX_FIELD_SECTION_SIZE (16KB)
 		SendGreaseFrames:       true,       // Chrome sends GREASE frames
 		Dial: func(ctx context.Context, addr string, tlsCfg *tls.Config, cfg *quic.Config) (*quic.Conn, error) {
-			type dialResult struct {
-				conn    *quic.Conn
-				udpConn *net.UDPConn
-				err     error
-			}
-
-			if len(preferredIPs)+len(fallbackIPs) == 0 {
+			// Combine all IPs, preferred first
+			allIPs := append(preferredIPs, fallbackIPs...)
+			if len(allIPs) == 0 {
 				return nil, fmt.Errorf("no IP addresses available for %s", addr)
 			}
 
-			dialCtx, cancel := context.WithCancel(ctx)
-			// Buffer for worst case: each remote IP tried from each local IPv6
-			resultCh := make(chan dialResult, (len(preferredIPs)+len(fallbackIPs))*10)
-			started := 0
-
-			// Get all local IPv6 addresses for source address selection
-			var localIPv6Addrs []net.IP
-			ifaces, _ := net.Interfaces()
-			for _, iface := range ifaces {
-				addrs, _ := iface.Addrs()
-				for _, addr := range addrs {
-					if ipnet, ok := addr.(*net.IPNet); ok {
-						if ipnet.IP.To4() == nil && ipnet.IP.IsGlobalUnicast() {
-							localIPv6Addrs = append(localIPv6Addrs, ipnet.IP)
-						}
-					}
-				}
-			}
-
-			// Helper to start a dial
-			startDial := func(remoteIP net.IP, localIP net.IP) {
-				go func(remoteIP, localIP net.IP) {
-					network := "udp4"
-					if remoteIP.To4() == nil {
-						network = "udp6"
-					}
-					udpAddr := &net.UDPAddr{IP: remoteIP, Port: port}
-
-					var udpConn *net.UDPConn
-					var err error
-					if localIP != nil {
-						// Bind to specific local address
-						localAddr := &net.UDPAddr{IP: localIP, Port: 0}
-						udpConn, err = net.ListenUDP(network, localAddr)
-					} else {
-						udpConn, err = net.ListenUDP(network, nil)
-					}
-					if err != nil {
-						resultCh <- dialResult{err: err}
-						return
-					}
-					conn, err := quic.Dial(dialCtx, udpConn, udpAddr, tlsCfg, cfg)
-					if err != nil {
-						udpConn.Close()
-						resultCh <- dialResult{err: err}
-						return
-					}
-					resultCh <- dialResult{conn: conn, udpConn: udpConn}
-				}(remoteIP, localIP)
-			}
-
-			// Start preferred IPs in parallel
-			// For IPv6 remotes, try from each local IPv6 address
-			for _, remoteIP := range preferredIPs {
-				if remoteIP.To4() == nil && len(localIPv6Addrs) > 0 {
-					// IPv6: try from each local IPv6 address
-					for _, localIP := range localIPv6Addrs {
-						startDial(remoteIP, localIP)
-						started++
-					}
-				} else {
-					// IPv4: let kernel choose source
-					startDial(remoteIP, nil)
-					started++
-				}
-			}
-
-			// RFC 8305: Wait 250ms before starting fallback IPs
-			if len(fallbackIPs) > 0 {
-				select {
-				case result := <-resultCh:
-					if result.conn != nil {
-						cancel()
-						return result.conn, nil
-					}
-					if result.udpConn != nil {
-						result.udpConn.Close()
-					}
-					started--
-				case <-time.After(250 * time.Millisecond):
-					// Preferred IPs haven't succeeded, start fallback
-				case <-ctx.Done():
-					cancel()
-					return nil, ctx.Err()
-				}
-
-				for _, remoteIP := range fallbackIPs {
-					if remoteIP.To4() == nil && len(localIPv6Addrs) > 0 {
-						for _, localIP := range localIPv6Addrs {
-							startDial(remoteIP, localIP)
-							started++
-						}
-					} else {
-						startDial(remoteIP, nil)
-						started++
-					}
-				}
-			}
-
-			// Wait for first success or all failures
 			var lastErr error
-			for i := 0; i < started; i++ {
-				select {
-				case result := <-resultCh:
-					if result.conn != nil {
-						cancel()
-						return result.conn, nil
-					}
-					if result.udpConn != nil {
-						result.udpConn.Close()
-					}
-					lastErr = result.err
-				case <-ctx.Done():
-					cancel()
-					return nil, ctx.Err()
+			for _, remoteIP := range allIPs {
+				network := "udp4"
+				if remoteIP.To4() == nil {
+					network = "udp6"
 				}
+				udpAddr := &net.UDPAddr{IP: remoteIP, Port: port}
+
+				udpConn, err := net.ListenUDP(network, nil)
+				if err != nil {
+					lastErr = err
+					continue
+				}
+
+				conn, err := quic.Dial(ctx, udpConn, udpAddr, tlsCfg, cfg)
+				if err != nil {
+					udpConn.Close()
+					lastErr = err
+					continue
+				}
+
+				return conn, nil
 			}
 
-			cancel()
 			if lastErr != nil {
 				return nil, lastErr
 			}

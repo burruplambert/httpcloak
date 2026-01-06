@@ -979,6 +979,19 @@ func applyModeHeaders(httpReq *http.Request, preset *fingerprint.Preset, req *Re
 		}
 		httpReq.Header.Set(key, value)
 	}
+
+	// Set header order for HTTP/2 and HTTP/3 fingerprinting
+	// This ensures headers are sent in the same order as Chrome
+	httpReq.Header[http.HeaderOrderKey] = []string{
+		"sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform",
+		"upgrade-insecure-requests", "user-agent", "accept",
+		"sec-fetch-site", "sec-fetch-mode", "sec-fetch-user", "sec-fetch-dest",
+		"accept-encoding", "accept-language",
+		"cookie", "priority", "origin", "referer",
+	}
+
+	// Set pseudo-header order (Chrome uses :method, :authority, :scheme, :path)
+	httpReq.Header[http.PHeaderOrderKey] = []string{":method", ":authority", ":scheme", ":path"}
 }
 
 // isAPIAcceptHeader returns true if the Accept header looks like an API request
@@ -1022,10 +1035,10 @@ func applyNavigationModeHeaders(httpReq *http.Request, preset *fingerprint.Prese
 	}
 
 	// Navigation headers - THE coherent set for "human clicked a link"
+	// Note: cache-control is NOT sent on normal navigation, only on hard refresh (Ctrl+F5)
 	httpReq.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
 	httpReq.Header.Set("Accept-Encoding", "gzip, deflate, br, zstd")
 	httpReq.Header.Set("Accept-Language", "en-US,en;q=0.9")
-	httpReq.Header.Set("Cache-Control", "max-age=0")
 	httpReq.Header.Set("Sec-Fetch-Dest", "document")
 	httpReq.Header.Set("Sec-Fetch-Mode", "navigate")
 	httpReq.Header.Set("Sec-Fetch-User", "?1")

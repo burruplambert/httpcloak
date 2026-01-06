@@ -33,6 +33,11 @@ type HTTP1Transport struct {
 	// TLS session cache for resumption
 	sessionCache utls.ClientSessionCache
 
+	// Cached ClientHelloSpec - shuffled once on transport creation, reused for all connections
+	// This matches Chrome's behavior: shuffle TLS extensions once per session, not per connection
+	cachedSpec    *utls.ClientHelloSpec
+	cachedPSKSpec *utls.ClientHelloSpec
+
 	// Configuration
 	maxIdleConnsPerHost int
 	maxIdleTime         time.Duration
@@ -79,6 +84,20 @@ func NewHTTP1TransportWithProxy(preset *fingerprint.Preset, dnsCache *dns.Cache,
 		connectTimeout:      30 * time.Second,
 		responseTimeout:     60 * time.Second,
 		stopCleanup:         make(chan struct{}),
+	}
+
+	// Generate and cache ClientHelloSpec once - this includes TLS extension shuffle
+	// Chrome shuffles extensions once at startup, not per connection
+	// This makes our fingerprint consistent within a session like real Chrome
+	if spec, err := utls.UTLSIdToSpec(preset.ClientHelloID); err == nil {
+		t.cachedSpec = &spec
+	}
+
+	// Also cache PSK variant if available
+	if preset.PSKClientHelloID.Client != "" {
+		if spec, err := utls.UTLSIdToSpec(preset.PSKClientHelloID); err == nil {
+			t.cachedPSKSpec = &spec
+		}
 	}
 
 	go t.cleanupLoop()
@@ -212,10 +231,33 @@ func (t *HTTP1Transport) createConn(ctx context.Context, host, port, scheme stri
 			NextProtos: []string{"http/1.1"},
 		}
 
-		// Use HTTP/1.1 specific ClientHelloID if available, otherwise use preset
-		clientHelloID := t.getHTTP1ClientHelloID()
+		// Determine which cached spec to use
+		// Using cached specs ensures TLS extension order is consistent (shuffled once per session, like Chrome)
+		var specToUse *utls.ClientHelloSpec
+		if t.cachedPSKSpec != nil {
+			// Check if there's a cached session
+			if session, ok := t.sessionCache.Get(host); ok && session != nil {
+				specToUse = t.cachedPSKSpec
+			}
+		}
+		if specToUse == nil {
+			specToUse = t.cachedSpec
+		}
 
-		tlsConn := utls.UClient(rawConn, tlsConfig, clientHelloID)
+		// Create UClient with HelloCustom and apply our cached spec
+		var tlsConn *utls.UConn
+		if specToUse != nil {
+			// Use cached spec - extension order is preserved from transport creation
+			tlsConn = utls.UClient(rawConn, tlsConfig, utls.HelloCustom)
+			if err := tlsConn.ApplyPreset(specToUse); err != nil {
+				rawConn.Close()
+				return nil, NewTLSError("tls_preset", host, port, "h1", err)
+			}
+		} else {
+			// Fallback to ClientHelloID if spec caching failed
+			clientHelloID := t.getHTTP1ClientHelloID()
+			tlsConn = utls.UClient(rawConn, tlsConfig, clientHelloID)
+		}
 		tlsConn.SetSessionCache(t.sessionCache)
 
 		if err := tlsConn.HandshakeContext(ctx); err != nil {

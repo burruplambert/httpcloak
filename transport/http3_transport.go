@@ -87,6 +87,10 @@ type HTTP3Transport struct {
 	// TLS session cache for 0-RTT resumption
 	sessionCache tls.ClientSessionCache
 
+	// Cached ClientHelloSpec for consistent TLS fingerprint
+	// Chrome shuffles TLS extensions once per session, not per connection
+	cachedClientHelloSpec *utls.ClientHelloSpec
+
 	// Track requests for timing
 	requestCount int64
 	dialCount    int64 // Number of times dialQUIC was called (new connections)
@@ -124,6 +128,15 @@ func NewHTTP3Transport(preset *fingerprint.Preset, dnsCache *dns.Cache) *HTTP3Tr
 		clientHelloID = &preset.ClientHelloID
 	}
 
+	// Cache the ClientHelloSpec for consistent TLS fingerprint across connections
+	// Chrome shuffles TLS extensions once per session, not per connection
+	if clientHelloID != nil {
+		spec, err := utls.UTLSIdToSpec(*clientHelloID)
+		if err == nil {
+			t.cachedClientHelloSpec = &spec
+		}
+	}
+
 	// Create QUIC config with connection reuse settings and TLS fingerprinting
 	t.quicConfig = &quic.Config{
 		MaxIdleTimeout:               30 * time.Second, // Chrome uses 30s, not 90s
@@ -136,7 +149,8 @@ func NewHTTP3Transport(preset *fingerprint.Preset, dnsCache *dns.Cache) *HTTP3Tr
 		DisablePathMTUDiscovery:      false, // Still allow PMTUD for optimal performance
 		DisableClientHelloScrambling: true,  // Chrome doesn't scramble SNI, sends fewer packets
 		ChromeStyleInitialPackets:    true,  // Chrome-like frame patterns in Initial packets
-		ClientHelloID:                clientHelloID, // uTLS for TLS fingerprinting
+		ClientHelloID:                clientHelloID,           // Fallback if cached spec fails
+		CachedClientHelloSpec:        t.cachedClientHelloSpec, // Cached spec for consistent fingerprint
 	}
 
 	// Generate GREASE setting ID (must be of form 0x1f * N + 0x21)
