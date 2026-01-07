@@ -8,12 +8,12 @@ require (
 	github.com/miekg/dns v1.1.69
 	github.com/sardanioss/http v1.1.0
 	github.com/sardanioss/net v1.1.0
-	github.com/sardanioss/quic-go v1.2.10
-	github.com/sardanioss/utls v1.9.1
+	github.com/sardanioss/quic-go v1.2.12
+	github.com/sardanioss/utls v1.9.4
 )
 
 require (
-	github.com/sardanioss/qpack v0.6.1 // indirect
+	github.com/sardanioss/qpack v0.6.2 // indirect
 	golang.org/x/crypto v0.46.0 // indirect
 	golang.org/x/mod v0.30.0 // indirect
 	golang.org/x/net v0.48.0 // indirect
