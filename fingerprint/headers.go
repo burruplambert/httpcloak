@@ -266,7 +266,7 @@ func (h *HeaderCoherence) ApplyToHeaders(headers map[string]string, ctx RequestC
 	switch ctx.Mode {
 	case FetchModeNavigate:
 		headers["Upgrade-Insecure-Requests"] = "1"
-		headers["Cache-Control"] = "max-age=0"
+		// Note: Cache-Control is NOT sent on normal navigation, only on hard refresh (Ctrl+F5)
 		headers["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
 	case FetchModeCORS, FetchModeSameOrigin:
 		headers["Accept"] = "*/*"

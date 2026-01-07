@@ -88,7 +88,7 @@ func Chrome131() *Preset {
 			"sec-ch-ua-mobile":   "?0",
 			"sec-ch-ua-platform": `"` + p.Platform + `"`,
 			// Standard navigation headers (human clicked link)
-			"Cache-Control":             "max-age=0", // Browser sends this on fresh navigation
+			// Note: Cache-Control is NOT sent on normal navigation, only on hard refresh (Ctrl+F5)
 			"Upgrade-Insecure-Requests": "1",
 			"Accept":                    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
 			"Sec-Fetch-Site":            "none",
@@ -128,7 +128,7 @@ func Chrome133() *Preset {
 			"sec-ch-ua-mobile":   "?0",
 			"sec-ch-ua-platform": `"` + p.Platform + `"`,
 			// Standard navigation headers (human clicked link)
-			"Cache-Control":             "max-age=0",
+			// Note: Cache-Control is NOT sent on normal navigation, only on hard refresh (Ctrl+F5)
 			"Upgrade-Insecure-Requests": "1",
 			"Accept":                    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
 			"Sec-Fetch-Site":            "none",
@@ -168,7 +168,7 @@ func Chrome141() *Preset {
 			"sec-ch-ua-mobile":   "?0",
 			"sec-ch-ua-platform": `"` + p.Platform + `"`,
 			// Standard navigation headers (human clicked link)
-			"Cache-Control":             "max-age=0",
+			// Note: Cache-Control is NOT sent on normal navigation, only on hard refresh (Ctrl+F5)
 			"Upgrade-Insecure-Requests": "1",
 			"Accept":                    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
 			"Sec-Fetch-Site":            "none",
@@ -254,7 +254,7 @@ func Chrome143() *Preset {
 			"sec-ch-ua-mobile":   "?0",
 			"sec-ch-ua-platform": `"` + p.Platform + `"`,
 			// Standard navigation headers (human clicked link)
-			"Cache-Control":             "max-age=0",
+			// Note: Cache-Control is NOT sent on normal navigation, only on hard refresh (Ctrl+F5)
 			"Upgrade-Insecure-Requests": "1",
 			"Accept":                    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
 			"Sec-Fetch-Site":            "none",
@@ -295,7 +295,7 @@ func Chrome143Windows() *Preset {
 			"sec-ch-ua-mobile":   "?0",
 			"sec-ch-ua-platform": `"Windows"`,
 			// Standard navigation headers (human clicked link)
-			"Cache-Control":             "max-age=0",
+			// Note: Cache-Control is NOT sent on normal navigation, only on hard refresh (Ctrl+F5)
 			"Upgrade-Insecure-Requests": "1",
 			"Accept":                    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
 			"Sec-Fetch-Site":            "none",
@@ -336,7 +336,7 @@ func Chrome143Linux() *Preset {
 			"sec-ch-ua-mobile":   "?0",
 			"sec-ch-ua-platform": `"Linux"`,
 			// Standard navigation headers (human clicked link)
-			"Cache-Control":             "max-age=0",
+			// Note: Cache-Control is NOT sent on normal navigation, only on hard refresh (Ctrl+F5)
 			"Upgrade-Insecure-Requests": "1",
 			"Accept":                    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
 			"Sec-Fetch-Site":            "none",
@@ -377,7 +377,7 @@ func Chrome143macOS() *Preset {
 			"sec-ch-ua-mobile":   "?0",
 			"sec-ch-ua-platform": `"macOS"`,
 			// Standard navigation headers (human clicked link)
-			"Cache-Control":             "max-age=0",
+			// Note: Cache-Control is NOT sent on normal navigation, only on hard refresh (Ctrl+F5)
 			"Upgrade-Insecure-Requests": "1",
 			"Accept":                    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
 			"Sec-Fetch-Site":            "none",
