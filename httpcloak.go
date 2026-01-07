@@ -195,6 +195,7 @@ type sessionConfig struct {
 	timeout          time.Duration
 	forceHTTP1       bool
 	forceHTTP2       bool
+	forceHTTP3       bool
 	insecureSkipVerify bool
 	disableRedirects bool
 	maxRedirects     int
@@ -229,6 +230,13 @@ func WithForceHTTP1() SessionOption {
 func WithForceHTTP2() SessionOption {
 	return func(c *sessionConfig) {
 		c.forceHTTP2 = true
+	}
+}
+
+// WithForceHTTP3 forces HTTP/3 protocol (QUIC)
+func WithForceHTTP3() SessionOption {
+	return func(c *sessionConfig) {
+		c.forceHTTP3 = true
 	}
 }
 
@@ -312,9 +320,12 @@ func NewSession(preset string, opts ...SessionOption) *Session {
 		}
 	}
 
-	// Protocol forcing via DisableHTTP3
+	// Protocol forcing
 	if cfg.forceHTTP1 || cfg.forceHTTP2 {
 		sessionCfg.DisableHTTP3 = true
+	}
+	if cfg.forceHTTP3 {
+		sessionCfg.ForceHTTP3 = true
 	}
 
 	s := session.NewSession("", sessionCfg)

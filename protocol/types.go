@@ -159,6 +159,7 @@ type SessionConfig struct {
 	// Connection options
 	DisableKeepAlives bool `json:"disableKeepAlives,omitempty"`
 	DisableHTTP3      bool `json:"disableHttp3,omitempty"`
+	ForceHTTP3        bool `json:"forceHttp3,omitempty"`
 
 	// Default authentication (can be overridden per-request)
 	Auth *AuthConfig `json:"auth,omitempty"`

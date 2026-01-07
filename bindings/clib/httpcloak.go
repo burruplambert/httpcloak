@@ -131,7 +131,7 @@ func httpcloak_session_new(configJSON *C.char) C.int64_t {
 	case "h2", "http2", "2":
 		opts = append(opts, httpcloak.WithForceHTTP2())
 	case "h3", "http3", "3":
-		// H3 is default/auto, nothing to do (auto will try H3 first)
+		opts = append(opts, httpcloak.WithForceHTTP3())
 	// "auto" or empty = default behavior
 	}
 

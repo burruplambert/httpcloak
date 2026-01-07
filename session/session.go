@@ -77,6 +77,13 @@ func NewSession(id string, config *protocol.SessionConfig) *Session {
 		t = transport.NewTransport(presetName)
 	}
 
+	// Set protocol preference
+	if config.ForceHTTP3 {
+		t.SetProtocol(transport.ProtocolHTTP3)
+	} else if config.DisableHTTP3 {
+		t.SetProtocol(transport.ProtocolHTTP2)
+	}
+
 	return &Session{
 		ID:           id,
 		CreatedAt:    time.Now(),
