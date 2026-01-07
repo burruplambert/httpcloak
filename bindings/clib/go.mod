@@ -11,7 +11,7 @@ require (
 	github.com/sardanioss/http v1.1.0 // indirect
 	github.com/sardanioss/net v1.1.0 // indirect
 	github.com/sardanioss/qpack v0.6.1 // indirect
-	github.com/sardanioss/quic-go v1.2.9 // indirect
+	github.com/sardanioss/quic-go v1.2.10 // indirect
 	github.com/sardanioss/utls v1.9.1 // indirect
 	golang.org/x/crypto v0.46.0 // indirect
 	golang.org/x/mod v0.30.0 // indirect
@@ -22,11 +22,5 @@ require (
 	golang.org/x/tools v0.39.0 // indirect
 )
 
-// Use local packages with latest fixes
+// Use local httpcloak package
 replace github.com/sardanioss/httpcloak => ../..
-
-replace github.com/sardanioss/quic-go => /home/saksham/own_tools/quic-go
-
-replace github.com/sardanioss/qpack => /home/saksham/own_tools/qpack
-
-replace github.com/sardanioss/utls => /home/saksham/own_tools/utls

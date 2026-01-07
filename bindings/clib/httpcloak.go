@@ -70,6 +70,7 @@ type SessionConfig struct {
 	RetryWaitMin    int    `json:"retry_wait_min,omitempty"`    // Min wait between retries in ms
 	RetryWaitMax    int    `json:"retry_wait_max,omitempty"`    // Max wait between retries in ms
 	RetryOnStatus   []int  `json:"retry_on_status,omitempty"`   // Status codes to retry on
+	PreferIPv4      bool   `json:"prefer_ipv4,omitempty"`       // Prefer IPv4 over IPv6
 }
 
 // Error response
@@ -145,6 +146,11 @@ func httpcloak_session_new(configJSON *C.char) C.int64_t {
 		opts = append(opts, httpcloak.WithoutRedirects())
 	} else if config.MaxRedirects > 0 {
 		opts = append(opts, httpcloak.WithRedirects(true, config.MaxRedirects))
+	}
+
+	// Handle IPv4 preference
+	if config.PreferIPv4 {
+		opts = append(opts, httpcloak.WithSessionPreferIPv4())
 	}
 
 	// Handle retry configuration
@@ -552,7 +558,7 @@ func httpcloak_free_string(str *C.char) {
 
 //export httpcloak_version
 func httpcloak_version() *C.char {
-	return C.CString("1.1.1")
+	return C.CString("1.1.2")
 }
 
 //export httpcloak_available_presets

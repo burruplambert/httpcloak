@@ -454,6 +454,7 @@ class Session {
       maxRedirects = 10,
       retry = 3,
       retryOnStatus = null,
+      preferIpv4 = false,
     } = options;
 
     this._lib = getLib();
@@ -479,6 +480,9 @@ class Session {
     config.retry = retry;
     if (retryOnStatus) {
       config.retry_on_status = retryOnStatus;
+    }
+    if (preferIpv4) {
+      config.prefer_ipv4 = true;
     }
 
     this._handle = this._lib.httpcloak_session_new(JSON.stringify(config));

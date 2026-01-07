@@ -23,6 +23,7 @@ public sealed class Session : IDisposable
     /// <param name="allowRedirects">Follow redirects (default: true)</param>
     /// <param name="maxRedirects">Maximum number of redirects (default: 10)</param>
     /// <param name="retry">Number of retries on failure (default: 0)</param>
+    /// <param name="preferIpv4">Prefer IPv4 addresses over IPv6 (default: false)</param>
     public Session(
         string preset = "chrome-143",
         string? proxy = null,
@@ -31,7 +32,8 @@ public sealed class Session : IDisposable
         bool verify = true,
         bool allowRedirects = true,
         int maxRedirects = 10,
-        int retry = 0)
+        int retry = 0,
+        bool preferIpv4 = false)
     {
         var config = new SessionConfig
         {
@@ -42,7 +44,8 @@ public sealed class Session : IDisposable
             Verify = verify,
             AllowRedirects = allowRedirects,
             MaxRedirects = maxRedirects,
-            Retry = retry
+            Retry = retry,
+            PreferIpv4 = preferIpv4
         };
 
         string configJson = JsonSerializer.Serialize(config, JsonContext.Default.SessionConfig);
@@ -331,6 +334,10 @@ internal class SessionConfig
 
     [JsonPropertyName("retry")]
     public int Retry { get; set; }
+
+    [JsonPropertyName("prefer_ipv4")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool PreferIpv4 { get; set; }
 }
 
 internal class RequestConfig

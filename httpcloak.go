@@ -190,19 +190,20 @@ type Session struct {
 type SessionOption func(*sessionConfig)
 
 type sessionConfig struct {
-	preset           string
-	proxy            string
-	timeout          time.Duration
-	forceHTTP1       bool
-	forceHTTP2       bool
-	forceHTTP3       bool
+	preset             string
+	proxy              string
+	timeout            time.Duration
+	forceHTTP1         bool
+	forceHTTP2         bool
+	forceHTTP3         bool
 	insecureSkipVerify bool
-	disableRedirects bool
-	maxRedirects     int
-	retryCount       int
-	retryWaitMin     time.Duration
-	retryWaitMax     time.Duration
-	retryOnStatus    []int
+	disableRedirects   bool
+	maxRedirects       int
+	retryCount         int
+	retryWaitMin       time.Duration
+	retryWaitMax       time.Duration
+	retryOnStatus      []int
+	preferIPv4         bool
 }
 
 // WithSessionProxy sets a proxy for the session
@@ -286,6 +287,14 @@ func WithRetryConfig(count int, waitMin, waitMax time.Duration, retryOnStatus []
 	}
 }
 
+// WithSessionPreferIPv4 makes the session prefer IPv4 addresses over IPv6.
+// Use this on networks with poor IPv6 connectivity.
+func WithSessionPreferIPv4() SessionOption {
+	return func(c *sessionConfig) {
+		c.preferIPv4 = true
+	}
+}
+
 // NewSession creates a new persistent session with cookie management
 func NewSession(preset string, opts ...SessionOption) *Session {
 	cfg := &sessionConfig{
@@ -303,6 +312,7 @@ func NewSession(preset string, opts ...SessionOption) *Session {
 		InsecureSkipVerify: cfg.insecureSkipVerify,
 		FollowRedirects:    !cfg.disableRedirects,
 		MaxRedirects:       cfg.maxRedirects,
+		PreferIPv4:         cfg.preferIPv4,
 	}
 
 	// Retry configuration

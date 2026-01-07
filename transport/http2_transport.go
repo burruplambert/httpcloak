@@ -216,21 +216,41 @@ func (t *HTTP2Transport) createConn(ctx context.Context, host, port string) (*pe
 			return nil, fmt.Errorf("proxy connection failed: %w", err)
 		}
 	} else {
-		// Direct connection
-		ip, err := t.dnsCache.ResolveOne(ctx, host)
+		// Direct connection with DNS resolution and IPv4/IPv6 fallback
+		ips, err := t.dnsCache.ResolveAllSorted(ctx, host)
 		if err != nil {
 			return nil, fmt.Errorf("DNS resolution failed: %w", err)
 		}
+		if len(ips) == 0 {
+			return nil, fmt.Errorf("DNS resolution failed: no IP addresses found")
+		}
 
-		addr := net.JoinHostPort(ip.String(), port)
 		dialer := &net.Dialer{
 			Timeout:   t.connectTimeout,
 			KeepAlive: 30 * time.Second,
 		}
 
-		rawConn, err = dialer.DialContext(ctx, "tcp", addr)
-		if err != nil {
-			return nil, fmt.Errorf("TCP connect failed: %w", err)
+		// Try each IP address in order (preferred first based on PreferIPv4 setting)
+		var lastErr error
+		for _, ip := range ips {
+			network := "tcp4"
+			if ip.To4() == nil {
+				network = "tcp6"
+			}
+			addr := net.JoinHostPort(ip.String(), port)
+
+			rawConn, err = dialer.DialContext(ctx, network, addr)
+			if err == nil {
+				break // Connection successful
+			}
+			lastErr = err
+		}
+
+		if rawConn == nil {
+			if lastErr != nil {
+				return nil, fmt.Errorf("TCP connect failed: %w", lastErr)
+			}
+			return nil, fmt.Errorf("TCP connect failed: all connection attempts failed")
 		}
 	}
 

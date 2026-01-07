@@ -412,6 +412,7 @@ class Session:
         max_redirects: Maximum number of redirects to follow (default: 10)
         retry: Number of retries on failure (default: 3, set to 0 to disable)
         retry_on_status: List of status codes to retry on (default: [429, 500, 502, 503, 504])
+        prefer_ipv4: Prefer IPv4 addresses over IPv6 (default: False)
 
     Example:
         with httpcloak.Session(preset="chrome-143") as session:
@@ -420,6 +421,10 @@ class Session:
 
         # With retry and no SSL verification
         with httpcloak.Session(preset="chrome-143", verify=False, retry=3) as session:
+            r = session.get("https://example.com")
+
+        # Force IPv4 on networks with poor IPv6 connectivity
+        with httpcloak.Session(preset="chrome-143", prefer_ipv4=True) as session:
             r = session.get("https://example.com")
     """
 
@@ -434,6 +439,7 @@ class Session:
         max_redirects: int = 10,
         retry: int = 3,
         retry_on_status: Optional[List[int]] = None,
+        prefer_ipv4: bool = False,
     ):
         self._lib = _get_lib()
         self._default_timeout = timeout
@@ -452,6 +458,8 @@ class Session:
         config["retry"] = retry
         if retry_on_status:
             config["retry_on_status"] = retry_on_status
+        if prefer_ipv4:
+            config["prefer_ipv4"] = True
 
         config_json = json.dumps(config).encode("utf-8")
         self._handle = self._lib.httpcloak_session_new(config_json)
@@ -795,6 +803,7 @@ def configure(
     max_redirects: int = 10,
     retry: int = 3,
     retry_on_status: Optional[List[int]] = None,
+    prefer_ipv4: bool = False,
 ) -> None:
     """
     Configure defaults for module-level functions.
@@ -814,6 +823,7 @@ def configure(
         max_redirects: Maximum number of redirects to follow (default: 10)
         retry: Number of retries on failure (default: 3, set to 0 to disable)
         retry_on_status: List of status codes to retry on (default: None)
+        prefer_ipv4: Prefer IPv4 addresses over IPv6 (default: False)
 
     Example:
         import httpcloak
@@ -850,6 +860,7 @@ def configure(
             "retry": retry,
             "retry_on_status": retry_on_status,
             "headers": final_headers,
+            "prefer_ipv4": prefer_ipv4,
         }
 
         # Create new session with config
@@ -863,6 +874,7 @@ def configure(
             max_redirects=max_redirects,
             retry=retry,
             retry_on_status=retry_on_status,
+            prefer_ipv4=prefer_ipv4,
         )
         if final_headers:
             _default_session.headers.update(final_headers)
@@ -884,6 +896,7 @@ def _get_default_session() -> Session:
                 retry = _default_config.get("retry", 0)
                 retry_on_status = _default_config.get("retry_on_status")
                 headers = _default_config.get("headers", {})
+                prefer_ipv4 = _default_config.get("prefer_ipv4", False)
 
                 _default_session = Session(
                     preset=preset,
@@ -895,6 +908,7 @@ def _get_default_session() -> Session:
                     max_redirects=max_redirects,
                     retry=retry,
                     retry_on_status=retry_on_status,
+                    prefer_ipv4=prefer_ipv4,
                 )
                 if headers:
                     _default_session.headers.update(headers)

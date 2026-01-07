@@ -161,6 +161,9 @@ type SessionConfig struct {
 	DisableHTTP3      bool `json:"disableHttp3,omitempty"`
 	ForceHTTP3        bool `json:"forceHttp3,omitempty"`
 
+	// Network options
+	PreferIPv4 bool `json:"preferIpv4,omitempty"` // Prefer IPv4 addresses over IPv6
+
 	// Default authentication (can be overridden per-request)
 	Auth *AuthConfig `json:"auth,omitempty"`
 }

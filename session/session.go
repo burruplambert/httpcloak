@@ -84,6 +84,13 @@ func NewSession(id string, config *protocol.SessionConfig) *Session {
 		t.SetProtocol(transport.ProtocolHTTP2)
 	}
 
+	// Set IPv4 preference
+	if config.PreferIPv4 {
+		if dnsCache := t.GetDNSCache(); dnsCache != nil {
+			dnsCache.SetPreferIPv4(true)
+		}
+	}
+
 	return &Session{
 		ID:           id,
 		CreatedAt:    time.Now(),
