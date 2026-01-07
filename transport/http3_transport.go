@@ -189,7 +189,8 @@ func generateGREASESettingID() uint64 {
 	return 0x1f*n + 0x21
 }
 
-// dialQUIC provides DNS resolution - http3.Transport handles connection caching
+// dialQUIC provides DNS resolution and ECH config fetching
+// http3.Transport handles connection caching
 func (t *HTTP3Transport) dialQUIC(ctx context.Context, addr string, tlsCfg *tls.Config, cfg *quic.Config) (*quic.Conn, error) {
 	// Track dial calls - each call = new connection
 	t.mu.Lock()
@@ -216,11 +217,21 @@ func (t *HTTP3Transport) dialQUIC(ctx context.Context, addr string, tlsCfg *tls.
 	tlsCfgCopy := tlsCfg.Clone()
 	tlsCfgCopy.ServerName = host
 
+	// Fetch ECH configs from DNS HTTPS records
+	// This is non-blocking - if it fails, we proceed without ECH
+	echConfigList, _ := dns.FetchECHConfigs(ctx, host)
+
+	// Clone the QUIC config and add ECH
+	cfgCopy := cfg.Clone()
+	if echConfigList != nil {
+		cfgCopy.ECHConfigList = echConfigList
+	}
+
 	// Log for debugging (this is called only for NEW connections)
 	_ = currentDialCount // Dial #N means this is the Nth new connection
 
 	// Dial QUIC connection - http3.Transport will cache this
-	return quic.DialAddr(ctx, resolvedAddr, tlsCfgCopy, cfg)
+	return quic.DialAddr(ctx, resolvedAddr, tlsCfgCopy, cfgCopy)
 }
 
 // RoundTrip implements http.RoundTripper
@@ -308,13 +319,18 @@ func (t *HTTP3Transport) Connect(ctx context.Context, host, port string) error {
 		InsecureSkipVerify: false,
 	}
 
-	// QUIC config with Chrome-like settings
+	// Fetch ECH configs from DNS HTTPS records
+	// This is non-blocking - if it fails, we proceed without ECH
+	echConfigList, _ := dns.FetchECHConfigs(ctx, host)
+
+	// QUIC config with Chrome-like settings and ECH
 	quicCfg := &quic.Config{
-		MaxIdleTimeout:               30 * time.Second,
-		InitialStreamReceiveWindow:   512 * 1024,
-		MaxStreamReceiveWindow:       6 * 1024 * 1024,
+		MaxIdleTimeout:                 30 * time.Second,
+		InitialStreamReceiveWindow:    512 * 1024,
+		MaxStreamReceiveWindow:        6 * 1024 * 1024,
 		InitialConnectionReceiveWindow: 15 * 1024 * 1024 / 2,
-		MaxConnectionReceiveWindow:   15 * 1024 * 1024,
+		MaxConnectionReceiveWindow:    15 * 1024 * 1024,
+		ECHConfigList:                 echConfigList,
 	}
 
 	// Try to establish QUIC connection
