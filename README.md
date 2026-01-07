@@ -2,7 +2,7 @@
 
 A Go HTTP client library with **browser-identical TLS/HTTP fingerprinting**. Makes HTTP requests indistinguishable from real browsers, bypassing bot detection systems that fingerprint TLS handshakes, HTTP/2 settings, and header patterns.
 
-**Bindings available for:** Go (native) | Python | Node.js
+**Bindings available for:** Go (native) | Python | Node.js | C#
 
 ## Why This Library?
 
@@ -104,6 +104,11 @@ pip install httpcloak
 ### Node.js
 ```bash
 npm install httpcloak
+```
+
+### C# / .NET
+```bash
+dotnet add package HttpCloak
 ```
 
 ---
@@ -429,6 +434,75 @@ const session = new httpcloak.Session({
 
 ---
 
+### C# / .NET
+
+```csharp
+using HttpCloak;
+
+// Simple GET request
+using var session = new Session(Presets.Chrome143);
+var r = session.Get("https://www.cloudflare.com/cdn-cgi/trace");
+Console.WriteLine(r.StatusCode);
+Console.WriteLine(r.Text);
+Console.WriteLine(r.Protocol); // "h2" or "h3"
+```
+
+#### POST with JSON
+
+```csharp
+using var session = new Session(Presets.Chrome143);
+var r = session.Post("https://api.example.com/login",
+    body: """{"username": "test", "password": "secret"}""",
+    headers: new Dictionary<string, string> {
+        ["Content-Type"] = "application/json"
+    });
+Console.WriteLine(r.Json<LoginResponse>());
+```
+
+#### Session with Cookies
+
+```csharp
+// Sessions persist cookies between requests
+using var session = new Session(Presets.Chrome143);
+
+// Login - cookies are saved automatically
+session.Post("https://example.com/login",
+    body: """{"user": "test"}""",
+    headers: new Dictionary<string, string> {
+        ["Content-Type"] = "application/json"
+    });
+
+// Subsequent requests include cookies
+var r = session.Get("https://example.com/dashboard");
+```
+
+#### With Proxy
+
+```csharp
+using var session = new Session(
+    preset: Presets.Chrome143,
+    proxy: "http://user:pass@proxy.example.com:8080",
+    timeout: 30
+);
+```
+
+#### Session Options
+
+```csharp
+using var session = new Session(
+    preset: Presets.Chrome143,
+    proxy: "http://proxy:8080",
+    timeout: 30,
+    httpVersion: "auto",      // "auto", "h1", "h2", "h3"
+    verify: true,
+    allowRedirects: true,
+    maxRedirects: 10,
+    retry: 3
+);
+```
+
+---
+
 ## Available Presets
 
 | Preset | Browser | Post-Quantum | HTTP/2 | HTTP/3 |
@@ -519,6 +593,19 @@ r.url              // final URL after redirects
 r.protocol         // "h1", "h2", or "h3"
 r.ok               // true if status < 400
 r.raiseForStatus() // throws on 4xx/5xx
+```
+
+### C#
+```csharp
+r.StatusCode       // int
+r.Headers          // Dictionary<string, string>
+r.Content          // byte[]
+r.Text             // string
+r.Json<T>()        // deserialized JSON
+r.Url              // final URL after redirects
+r.Protocol         // "h1", "h2", or "h3"
+r.Ok               // true if status < 400
+r.RaiseForStatus() // throws on 4xx/5xx
 ```
 
 ---
