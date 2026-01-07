@@ -222,13 +222,13 @@ func (t *HTTP1Transport) createConn(ctx context.Context, host, port, scheme stri
 	// For HTTPS, wrap with uTLS
 	if scheme == "https" {
 		tlsConfig := &utls.Config{
-			ServerName:         host,
-			InsecureSkipVerify: t.insecureSkipVerify,
-			MinVersion:         tls.VersionTLS12,
-			MaxVersion:         tls.VersionTLS13,
-			ClientSessionCache: t.sessionCache,
-			// Force HTTP/1.1 by not including h2 in ALPN
-			NextProtos: []string{"http/1.1"},
+			ServerName:                         host,
+			InsecureSkipVerify:                 t.insecureSkipVerify,
+			MinVersion:                         tls.VersionTLS12,
+			MaxVersion:                         tls.VersionTLS13,
+			ClientSessionCache:                 t.sessionCache,
+			NextProtos:                         []string{"http/1.1"},
+			PreferSkipResumptionOnNilExtension: true, // Skip resumption if spec has no PSK extension
 		}
 
 		// Determine which cached spec to use
@@ -252,6 +252,14 @@ func (t *HTTP1Transport) createConn(ctx context.Context, host, port, scheme stri
 			if err := tlsConn.ApplyPreset(specToUse); err != nil {
 				rawConn.Close()
 				return nil, NewTLSError("tls_preset", host, port, "h1", err)
+			}
+			// Force HTTP/1.1 ALPN after ApplyPreset (which overwrites it with Chrome's default h2,http/1.1)
+			tlsConn.SetSNI(host) // Refresh SNI after preset
+			for _, ext := range tlsConn.Extensions {
+				if alpn, ok := ext.(*utls.ALPNExtension); ok {
+					alpn.AlpnProtocols = []string{"http/1.1"}
+					break
+				}
 			}
 		} else {
 			// Fallback to ClientHelloID if spec caching failed

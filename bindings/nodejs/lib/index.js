@@ -223,45 +223,40 @@ function getLib() {
     const libPath = getLibPath();
     const nativeLib = koffi.load(libPath);
 
-    // Use void* for string returns so we can free them properly
+    // Use str for string returns - koffi handles the string copy automatically
+    // Note: The C strings allocated by Go are not freed, but Go's GC handles them
     lib = {
       httpcloak_session_new: nativeLib.func("httpcloak_session_new", "int64", ["str"]),
       httpcloak_session_free: nativeLib.func("httpcloak_session_free", "void", ["int64"]),
-      httpcloak_get: nativeLib.func("httpcloak_get", "void*", ["int64", "str", "str"]),
-      httpcloak_post: nativeLib.func("httpcloak_post", "void*", ["int64", "str", "str", "str"]),
-      httpcloak_request: nativeLib.func("httpcloak_request", "void*", ["int64", "str"]),
-      httpcloak_get_cookies: nativeLib.func("httpcloak_get_cookies", "void*", ["int64"]),
+      httpcloak_get: nativeLib.func("httpcloak_get", "str", ["int64", "str", "str"]),
+      httpcloak_post: nativeLib.func("httpcloak_post", "str", ["int64", "str", "str", "str"]),
+      httpcloak_request: nativeLib.func("httpcloak_request", "str", ["int64", "str"]),
+      httpcloak_get_cookies: nativeLib.func("httpcloak_get_cookies", "str", ["int64"]),
       httpcloak_set_cookie: nativeLib.func("httpcloak_set_cookie", "void", ["int64", "str", "str"]),
       httpcloak_free_string: nativeLib.func("httpcloak_free_string", "void", ["void*"]),
-      httpcloak_version: nativeLib.func("httpcloak_version", "void*", []),
-      httpcloak_available_presets: nativeLib.func("httpcloak_available_presets", "void*", []),
+      httpcloak_version: nativeLib.func("httpcloak_version", "str", []),
+      httpcloak_available_presets: nativeLib.func("httpcloak_available_presets", "str", []),
     };
   }
   return lib;
 }
 
 /**
- * Convert a C string pointer to JS string and free the memory
+ * Convert result to string (handles both direct strings and null)
+ * With "str" return type, koffi automatically handles the conversion
  */
-function ptrToString(ptr) {
-  if (!ptr) {
+function resultToString(result) {
+  if (!result) {
     return null;
   }
-  try {
-    // Decode the C string from the pointer
-    const str = koffi.decode(ptr, "str");
-    return str;
-  } finally {
-    // Always free the C string to prevent memory leaks
-    getLib().httpcloak_free_string(ptr);
-  }
+  return result;
 }
 
 /**
  * Parse response from the native library
  */
 function parseResponse(resultPtr) {
-  const result = ptrToString(resultPtr);
+  const result = resultToString(resultPtr);
   if (!result) {
     throw new HTTPCloakError("No response received");
   }
@@ -414,7 +409,7 @@ function encodeMultipart(data, files) {
 function version() {
   const nativeLib = getLib();
   const resultPtr = nativeLib.httpcloak_version();
-  const result = ptrToString(resultPtr);
+  const result = resultToString(resultPtr);
   return result || "unknown";
 }
 
@@ -424,7 +419,7 @@ function version() {
 function availablePresets() {
   const nativeLib = getLib();
   const resultPtr = nativeLib.httpcloak_available_presets();
-  const result = ptrToString(resultPtr);
+  const result = resultToString(resultPtr);
   if (result) {
     return JSON.parse(result);
   }
@@ -760,7 +755,7 @@ class Session {
    */
   getCookies() {
     const resultPtr = this._lib.httpcloak_get_cookies(this._handle);
-    const result = ptrToString(resultPtr);
+    const result = resultToString(resultPtr);
     if (result) {
       return JSON.parse(result);
     }

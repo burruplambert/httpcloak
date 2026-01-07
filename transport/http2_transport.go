@@ -240,28 +240,29 @@ func (t *HTTP2Transport) createConn(ctx context.Context, host, port string) (*pe
 		tcpConn.SetKeepAlivePeriod(30 * time.Second)
 	}
 
-	// Wrap with uTLS for fingerprinting
-	tlsConfig := &utls.Config{
-		ServerName:         host,
-		InsecureSkipVerify: false,
-		MinVersion:         tls.VersionTLS12,
-		MaxVersion:         tls.VersionTLS13,
-		ClientSessionCache: t.sessionCache, // Enable TLS session resumption
-	}
-
 	// Determine which cached spec to use:
 	// - If we have a cached session for this host and PSK spec available, use PSK spec
 	// - Otherwise use the regular cached spec
 	// Using cached specs ensures TLS extension order is consistent (shuffled once per session, like Chrome)
 	var specToUse *utls.ClientHelloSpec
 	if t.cachedPSKSpec != nil {
-		// Check if there's a cached session
+		// Check if there's a cached session - if so, use PSK spec for resumption
 		if session, ok := t.sessionCache.Get(host); ok && session != nil {
 			specToUse = t.cachedPSKSpec
 		}
 	}
 	if specToUse == nil {
 		specToUse = t.cachedSpec
+	}
+
+	// Wrap with uTLS for fingerprinting
+	tlsConfig := &utls.Config{
+		ServerName:                         host,
+		InsecureSkipVerify:                 false,
+		MinVersion:                         tls.VersionTLS12,
+		MaxVersion:                         tls.VersionTLS13,
+		ClientSessionCache:                 t.sessionCache,
+		PreferSkipResumptionOnNilExtension: true, // Skip resumption if spec has no PSK extension instead of panicking
 	}
 
 	// Create UClient with HelloCustom and apply our cached spec
