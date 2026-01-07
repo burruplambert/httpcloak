@@ -8,16 +8,17 @@ require (
 	github.com/miekg/dns v1.1.69
 	github.com/sardanioss/http v1.1.0
 	github.com/sardanioss/net v1.1.0
-	github.com/sardanioss/qpack v0.6.1
-	github.com/sardanioss/quic-go v1.2.8
+	github.com/sardanioss/quic-go v1.2.9
 	github.com/sardanioss/utls v1.9.1
 )
 
 // Use local forks with dynamic table support
 replace github.com/sardanioss/qpack => /home/saksham/own_tools/qpack
+
 replace github.com/sardanioss/quic-go => /home/saksham/own_tools/quic-go
 
 require (
+	github.com/sardanioss/qpack v0.6.1 // indirect
 	golang.org/x/crypto v0.46.0 // indirect
 	golang.org/x/mod v0.30.0 // indirect
 	golang.org/x/net v0.48.0 // indirect
