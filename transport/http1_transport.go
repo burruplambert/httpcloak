@@ -213,19 +213,24 @@ func (t *HTTP1Transport) createConn(ctx context.Context, host, port, scheme stri
 		}
 
 		// For HTTP/1.1 transport, use ClientHelloID directly
-		// Note: ClientHelloID includes ALPN with [h2, http/1.1], so we must modify it after creation
+		// Note: ClientHelloID includes ALPN with [h2, http/1.1], so we must modify it
 		tlsConn := utls.UClient(rawConn, tlsConfig, t.preset.ClientHelloID)
+		tlsConn.SetSessionCache(t.sessionCache)
+
+		// Build handshake state first - this populates Extensions from ClientHelloID
+		if err := tlsConn.BuildHandshakeState(); err != nil {
+			rawConn.Close()
+			return nil, NewTLSError("build_handshake", host, port, "h1", err)
+		}
 
 		// Force HTTP/1.1 only ALPN to prevent h2 negotiation
-		// This is safe to modify since ClientHelloID creates a fresh spec each time (not shared)
+		// Must be done AFTER BuildHandshakeState() which generates the extensions
 		for _, ext := range tlsConn.Extensions {
 			if alpn, ok := ext.(*utls.ALPNExtension); ok {
 				alpn.AlpnProtocols = []string{"http/1.1"}
 				break
 			}
 		}
-
-		tlsConn.SetSessionCache(t.sessionCache)
 
 		if err := tlsConn.HandshakeContext(ctx); err != nil {
 			rawConn.Close()
