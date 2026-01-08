@@ -70,16 +70,46 @@ const Preset = {
 };
 
 /**
+ * HTTP status reason phrases
+ */
+const HTTP_STATUS_PHRASES = {
+  100: "Continue", 101: "Switching Protocols", 102: "Processing",
+  200: "OK", 201: "Created", 202: "Accepted", 203: "Non-Authoritative Information",
+  204: "No Content", 205: "Reset Content", 206: "Partial Content", 207: "Multi-Status",
+  300: "Multiple Choices", 301: "Moved Permanently", 302: "Found", 303: "See Other",
+  304: "Not Modified", 305: "Use Proxy", 307: "Temporary Redirect", 308: "Permanent Redirect",
+  400: "Bad Request", 401: "Unauthorized", 402: "Payment Required", 403: "Forbidden",
+  404: "Not Found", 405: "Method Not Allowed", 406: "Not Acceptable",
+  407: "Proxy Authentication Required", 408: "Request Timeout", 409: "Conflict",
+  410: "Gone", 411: "Length Required", 412: "Precondition Failed",
+  413: "Payload Too Large", 414: "URI Too Long", 415: "Unsupported Media Type",
+  416: "Range Not Satisfiable", 417: "Expectation Failed", 418: "I'm a teapot",
+  421: "Misdirected Request", 422: "Unprocessable Entity", 423: "Locked",
+  424: "Failed Dependency", 425: "Too Early", 426: "Upgrade Required",
+  428: "Precondition Required", 429: "Too Many Requests",
+  431: "Request Header Fields Too Large", 451: "Unavailable For Legal Reasons",
+  500: "Internal Server Error", 501: "Not Implemented", 502: "Bad Gateway",
+  503: "Service Unavailable", 504: "Gateway Timeout", 505: "HTTP Version Not Supported",
+  506: "Variant Also Negotiates", 507: "Insufficient Storage", 508: "Loop Detected",
+  510: "Not Extended", 511: "Network Authentication Required",
+};
+
+/**
  * Response object returned from HTTP requests
  */
 class Response {
-  constructor(data) {
+  /**
+   * @param {Object} data - Response data from native library
+   * @param {number} [elapsed=0] - Elapsed time in milliseconds
+   */
+  constructor(data, elapsed = 0) {
     this.statusCode = data.status_code || 0;
     this.headers = data.headers || {};
     this._body = Buffer.from(data.body || "", "utf8");
     this._text = data.body || "";
     this.finalUrl = data.final_url || "";
     this.protocol = data.protocol || "";
+    this.elapsed = elapsed; // milliseconds
   }
 
   /** Response body as string */
@@ -107,6 +137,29 @@ class Response {
     return this.statusCode < 400;
   }
 
+  /** HTTP status reason phrase (e.g., 'OK', 'Not Found') */
+  get reason() {
+    return HTTP_STATUS_PHRASES[this.statusCode] || "Unknown";
+  }
+
+  /**
+   * Response encoding from Content-Type header.
+   * Returns null if not specified.
+   */
+  get encoding() {
+    let contentType = this.headers["content-type"] || this.headers["Content-Type"] || "";
+    if (contentType.includes("charset=")) {
+      const parts = contentType.split(";");
+      for (const part of parts) {
+        const trimmed = part.trim();
+        if (trimmed.toLowerCase().startsWith("charset=")) {
+          return trimmed.split("=")[1].trim().replace(/['"]/g, "");
+        }
+      }
+    }
+    return null;
+  }
+
   /**
    * Parse response body as JSON
    */
@@ -119,7 +172,7 @@ class Response {
    */
   raiseForStatus() {
     if (!this.ok) {
-      throw new HTTPCloakError(`HTTP ${this.statusCode}`);
+      throw new HTTPCloakError(`HTTP ${this.statusCode}: ${this.reason}`);
     }
   }
 }
@@ -259,7 +312,8 @@ function getLib() {
  */
 class AsyncCallbackManager {
   constructor() {
-    this._pendingRequests = new Map(); // callbackId -> { resolve, reject }
+    // callbackId -> { resolve, reject, startTime }
+    this._pendingRequests = new Map();
     this._callbackPtr = null;
     this._refTimer = null; // Timer to keep event loop alive
   }
@@ -302,7 +356,8 @@ class AsyncCallbackManager {
       this._pendingRequests.delete(Number(callbackId));
       this._unref(); // Check if we can release the event loop
 
-      const { resolve, reject } = pending;
+      const { resolve, reject, startTime } = pending;
+      const elapsed = Date.now() - startTime;
 
       if (error && error !== "") {
         let errMsg = error;
@@ -319,7 +374,7 @@ class AsyncCallbackManager {
           if (data.error) {
             reject(new HTTPCloakError(data.error));
           } else {
-            resolve(new Response(data));
+            resolve(new Response(data, elapsed));
           }
         } catch (e) {
           reject(new HTTPCloakError(`Failed to parse response: ${e.message}`));
@@ -340,14 +395,15 @@ class AsyncCallbackManager {
     // Register callback with Go (each request gets unique ID)
     const callbackId = nativeLib.httpcloak_register_callback(this._callbackPtr);
 
-    // Create promise for this request
+    // Create promise for this request with start time
     let resolve, reject;
     const promise = new Promise((res, rej) => {
       resolve = res;
       reject = rej;
     });
+    const startTime = Date.now();
 
-    this._pendingRequests.set(Number(callbackId), { resolve, reject });
+    this._pendingRequests.set(Number(callbackId), { resolve, reject, startTime });
     this._ref(); // Keep event loop alive
 
     return { callbackId, promise };
@@ -377,8 +433,11 @@ function resultToString(result) {
 
 /**
  * Parse response from the native library
+ * @param {string} resultPtr - Result pointer from native function
+ * @param {number} [elapsed=0] - Elapsed time in milliseconds
+ * @returns {Response}
  */
-function parseResponse(resultPtr) {
+function parseResponse(resultPtr, elapsed = 0) {
   const result = resultToString(resultPtr);
   if (!result) {
     throw new HTTPCloakError("No response received");
@@ -390,7 +449,7 @@ function parseResponse(resultPtr) {
     throw new HTTPCloakError(data.error);
   }
 
-  return new Response(data);
+  return new Response(data, elapsed);
 }
 
 /**
@@ -565,6 +624,7 @@ class Session {
    * @param {number} [options.maxRedirects=10] - Maximum number of redirects to follow
    * @param {number} [options.retry=3] - Number of retries on failure (set to 0 to disable)
    * @param {number[]} [options.retryOnStatus] - Status codes to retry on
+   * @param {Array} [options.auth] - Default auth [username, password] for all requests
    */
   constructor(options = {}) {
     const {
@@ -578,10 +638,12 @@ class Session {
       retry = 3,
       retryOnStatus = null,
       preferIpv4 = false,
+      auth = null,
     } = options;
 
     this._lib = getLib();
     this.headers = {}; // Default headers
+    this.auth = auth; // Default auth for all requests
 
     const config = {
       preset,
@@ -635,6 +697,31 @@ class Session {
     return { ...this.headers, ...headers };
   }
 
+  /**
+   * Apply cookies to headers
+   * @param {Object} headers - Existing headers
+   * @param {Object} cookies - Cookies to apply as key-value pairs
+   * @returns {Object} Headers with cookies applied
+   */
+  _applyCookies(headers, cookies) {
+    if (!cookies || Object.keys(cookies).length === 0) {
+      return headers;
+    }
+
+    const cookieStr = Object.entries(cookies)
+      .map(([k, v]) => `${k}=${v}`)
+      .join("; ");
+
+    headers = headers ? { ...headers } : {};
+    const existing = headers["Cookie"] || "";
+    if (existing) {
+      headers["Cookie"] = `${existing}; ${cookieStr}`;
+    } else {
+      headers["Cookie"] = cookieStr;
+    }
+    return headers;
+  }
+
   // ===========================================================================
   // Synchronous Methods
   // ===========================================================================
@@ -645,19 +732,25 @@ class Session {
    * @param {Object} [options] - Request options
    * @param {Object} [options.headers] - Custom headers
    * @param {Object} [options.params] - Query parameters
+   * @param {Object} [options.cookies] - Cookies to send with this request
    * @param {Array} [options.auth] - Basic auth [username, password]
    * @returns {Response} Response object
    */
   getSync(url, options = {}) {
-    const { headers = null, params = null, auth = null } = options;
+    const { headers = null, params = null, cookies = null, auth = null } = options;
 
     url = addParamsToUrl(url, params);
     let mergedHeaders = this._mergeHeaders(headers);
-    mergedHeaders = applyAuth(mergedHeaders, auth);
+    // Use request auth if provided, otherwise fall back to session auth
+    const effectiveAuth = auth !== null ? auth : this.auth;
+    mergedHeaders = applyAuth(mergedHeaders, effectiveAuth);
+    mergedHeaders = this._applyCookies(mergedHeaders, cookies);
 
     const headersJson = mergedHeaders ? JSON.stringify(mergedHeaders) : null;
+    const startTime = Date.now();
     const result = this._lib.httpcloak_get(this._handle, url, headersJson);
-    return parseResponse(result);
+    const elapsed = Date.now() - startTime;
+    return parseResponse(result, elapsed);
   }
 
   /**
@@ -673,11 +766,12 @@ class Session {
    *   - { filename, content, contentType? }: file with metadata
    * @param {Object} [options.headers] - Custom headers
    * @param {Object} [options.params] - Query parameters
+   * @param {Object} [options.cookies] - Cookies to send with this request
    * @param {Array} [options.auth] - Basic auth [username, password]
    * @returns {Response} Response object
    */
   postSync(url, options = {}) {
-    let { body = null, json = null, data = null, files = null, headers = null, params = null, auth = null } = options;
+    let { body = null, json = null, data = null, files = null, headers = null, params = null, cookies = null, auth = null } = options;
 
     url = addParamsToUrl(url, params);
     let mergedHeaders = this._mergeHeaders(headers);
@@ -711,11 +805,16 @@ class Session {
       body = body.toString("utf8");
     }
 
-    mergedHeaders = applyAuth(mergedHeaders, auth);
+    // Use request auth if provided, otherwise fall back to session auth
+    const effectiveAuth = auth !== null ? auth : this.auth;
+    mergedHeaders = applyAuth(mergedHeaders, effectiveAuth);
+    mergedHeaders = this._applyCookies(mergedHeaders, cookies);
 
     const headersJson = mergedHeaders ? JSON.stringify(mergedHeaders) : null;
+    const startTime = Date.now();
     const result = this._lib.httpcloak_post(this._handle, url, body, headersJson);
-    return parseResponse(result);
+    const elapsed = Date.now() - startTime;
+    return parseResponse(result, elapsed);
   }
 
   /**
@@ -723,11 +822,12 @@ class Session {
    * @param {string} method - HTTP method
    * @param {string} url - Request URL
    * @param {Object} [options] - Request options
+   * @param {Object} [options.cookies] - Cookies to send with this request
    * @param {Object} [options.files] - Files to upload as multipart/form-data
    * @returns {Response} Response object
    */
   requestSync(method, url, options = {}) {
-    let { body = null, json = null, data = null, files = null, headers = null, params = null, auth = null, timeout = null } = options;
+    let { body = null, json = null, data = null, files = null, headers = null, params = null, cookies = null, auth = null, timeout = null } = options;
 
     url = addParamsToUrl(url, params);
     let mergedHeaders = this._mergeHeaders(headers);
@@ -761,7 +861,10 @@ class Session {
       body = body.toString("utf8");
     }
 
-    mergedHeaders = applyAuth(mergedHeaders, auth);
+    // Use request auth if provided, otherwise fall back to session auth
+    const effectiveAuth = auth !== null ? auth : this.auth;
+    mergedHeaders = applyAuth(mergedHeaders, effectiveAuth);
+    mergedHeaders = this._applyCookies(mergedHeaders, cookies);
 
     const requestConfig = {
       method: method.toUpperCase(),
@@ -771,11 +874,13 @@ class Session {
     if (body) requestConfig.body = body;
     if (timeout) requestConfig.timeout = timeout;
 
+    const startTime = Date.now();
     const result = this._lib.httpcloak_request(
       this._handle,
       JSON.stringify(requestConfig)
     );
-    return parseResponse(result);
+    const elapsed = Date.now() - startTime;
+    return parseResponse(result, elapsed);
   }
 
   // ===========================================================================
@@ -786,14 +891,18 @@ class Session {
    * Perform an async GET request using native Go goroutines
    * @param {string} url - Request URL
    * @param {Object} [options] - Request options
+   * @param {Object} [options.cookies] - Cookies to send with this request
    * @returns {Promise<Response>} Response object
    */
   get(url, options = {}) {
-    const { headers = null, params = null, auth = null } = options;
+    const { headers = null, params = null, cookies = null, auth = null } = options;
 
     url = addParamsToUrl(url, params);
     let mergedHeaders = this._mergeHeaders(headers);
-    mergedHeaders = applyAuth(mergedHeaders, auth);
+    // Use request auth if provided, otherwise fall back to session auth
+    const effectiveAuth = auth !== null ? auth : this.auth;
+    mergedHeaders = applyAuth(mergedHeaders, effectiveAuth);
+    mergedHeaders = this._applyCookies(mergedHeaders, cookies);
 
     const headersJson = mergedHeaders ? JSON.stringify(mergedHeaders) : null;
 
@@ -811,10 +920,11 @@ class Session {
    * Perform an async POST request using native Go goroutines
    * @param {string} url - Request URL
    * @param {Object} [options] - Request options
+   * @param {Object} [options.cookies] - Cookies to send with this request
    * @returns {Promise<Response>} Response object
    */
   post(url, options = {}) {
-    let { body = null, json = null, data = null, files = null, headers = null, params = null, auth = null } = options;
+    let { body = null, json = null, data = null, files = null, headers = null, params = null, cookies = null, auth = null } = options;
 
     url = addParamsToUrl(url, params);
     let mergedHeaders = this._mergeHeaders(headers);
@@ -848,7 +958,10 @@ class Session {
       body = body.toString("utf8");
     }
 
-    mergedHeaders = applyAuth(mergedHeaders, auth);
+    // Use request auth if provided, otherwise fall back to session auth
+    const effectiveAuth = auth !== null ? auth : this.auth;
+    mergedHeaders = applyAuth(mergedHeaders, effectiveAuth);
+    mergedHeaders = this._applyCookies(mergedHeaders, cookies);
 
     const headersJson = mergedHeaders ? JSON.stringify(mergedHeaders) : null;
 
@@ -867,10 +980,11 @@ class Session {
    * @param {string} method - HTTP method
    * @param {string} url - Request URL
    * @param {Object} [options] - Request options
+   * @param {Object} [options.cookies] - Cookies to send with this request
    * @returns {Promise<Response>} Response object
    */
   request(method, url, options = {}) {
-    let { body = null, json = null, data = null, files = null, headers = null, params = null, auth = null, timeout = null } = options;
+    let { body = null, json = null, data = null, files = null, headers = null, params = null, cookies = null, auth = null, timeout = null } = options;
 
     url = addParamsToUrl(url, params);
     let mergedHeaders = this._mergeHeaders(headers);
@@ -904,7 +1018,10 @@ class Session {
       body = body.toString("utf8");
     }
 
-    mergedHeaders = applyAuth(mergedHeaders, auth);
+    // Use request auth if provided, otherwise fall back to session auth
+    const effectiveAuth = auth !== null ? auth : this.auth;
+    mergedHeaders = applyAuth(mergedHeaders, effectiveAuth);
+    mergedHeaders = this._applyCookies(mergedHeaders, cookies);
 
     const requestConfig = {
       method: method.toUpperCase(),
@@ -977,12 +1094,41 @@ class Session {
   }
 
   /**
+   * Get a specific cookie by name
+   * @param {string} name - Cookie name
+   * @returns {string|null} Cookie value or null if not found
+   */
+  getCookie(name) {
+    const cookies = this.getCookies();
+    return cookies[name] || null;
+  }
+
+  /**
    * Set a cookie in the session
    * @param {string} name - Cookie name
    * @param {string} value - Cookie value
    */
   setCookie(name, value) {
     this._lib.httpcloak_set_cookie(this._handle, name, value);
+  }
+
+  /**
+   * Delete a specific cookie by name
+   * @param {string} name - Cookie name to delete
+   */
+  deleteCookie(name) {
+    // Set cookie to empty value - effectively deletes it
+    this._lib.httpcloak_set_cookie(this._handle, name, "");
+  }
+
+  /**
+   * Clear all cookies from the session
+   */
+  clearCookies() {
+    const cookies = this.getCookies();
+    for (const name of Object.keys(cookies)) {
+      this.deleteCookie(name);
+    }
   }
 
   /**

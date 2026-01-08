@@ -23,6 +23,7 @@ import json
 import mimetypes
 import os
 import platform
+import time
 import uuid
 from ctypes import c_char_p, c_int64, c_void_p, cdll, cast, CFUNCTYPE
 from io import IOBase
@@ -172,6 +173,30 @@ class Preset:
         ]
 
 
+# HTTP status reason phrases
+HTTP_STATUS_PHRASES = {
+    100: "Continue", 101: "Switching Protocols", 102: "Processing",
+    200: "OK", 201: "Created", 202: "Accepted", 203: "Non-Authoritative Information",
+    204: "No Content", 205: "Reset Content", 206: "Partial Content", 207: "Multi-Status",
+    300: "Multiple Choices", 301: "Moved Permanently", 302: "Found", 303: "See Other",
+    304: "Not Modified", 305: "Use Proxy", 307: "Temporary Redirect", 308: "Permanent Redirect",
+    400: "Bad Request", 401: "Unauthorized", 402: "Payment Required", 403: "Forbidden",
+    404: "Not Found", 405: "Method Not Allowed", 406: "Not Acceptable",
+    407: "Proxy Authentication Required", 408: "Request Timeout", 409: "Conflict",
+    410: "Gone", 411: "Length Required", 412: "Precondition Failed",
+    413: "Payload Too Large", 414: "URI Too Long", 415: "Unsupported Media Type",
+    416: "Range Not Satisfiable", 417: "Expectation Failed", 418: "I'm a teapot",
+    421: "Misdirected Request", 422: "Unprocessable Entity", 423: "Locked",
+    424: "Failed Dependency", 425: "Too Early", 426: "Upgrade Required",
+    428: "Precondition Required", 429: "Too Many Requests",
+    431: "Request Header Fields Too Large", 451: "Unavailable For Legal Reasons",
+    500: "Internal Server Error", 501: "Not Implemented", 502: "Bad Gateway",
+    503: "Service Unavailable", 504: "Gateway Timeout", 505: "HTTP Version Not Supported",
+    506: "Variant Also Negotiates", 507: "Insufficient Storage", 508: "Loop Detected",
+    510: "Not Extended", 511: "Network Authentication Required",
+}
+
+
 class Response:
     """
     HTTP Response object (requests-compatible).
@@ -184,6 +209,9 @@ class Response:
         url: Final URL after redirects
         ok: True if status_code < 400
         protocol: Protocol used (http/1.1, h2, h3)
+        elapsed: Time elapsed for the request (seconds as float)
+        reason: HTTP status reason phrase
+        encoding: Response encoding (from Content-Type header)
     """
 
     def __init__(
@@ -194,6 +222,7 @@ class Response:
         text: str,
         final_url: str,
         protocol: str,
+        elapsed: float = 0.0,
     ):
         self.status_code = status_code
         self.headers = headers
@@ -201,6 +230,7 @@ class Response:
         self.text = text
         self.url = final_url  # requests compatibility
         self.protocol = protocol
+        self.elapsed = elapsed  # seconds as float
 
         # Keep old names as aliases
         self.body = body
@@ -211,6 +241,28 @@ class Response:
         """True if status_code < 400."""
         return self.status_code < 400
 
+    @property
+    def reason(self) -> str:
+        """HTTP status reason phrase (e.g., 'OK', 'Not Found')."""
+        return HTTP_STATUS_PHRASES.get(self.status_code, "Unknown")
+
+    @property
+    def encoding(self) -> Optional[str]:
+        """
+        Response encoding from Content-Type header.
+        Returns None if not specified.
+        """
+        content_type = self.headers.get("content-type", "")
+        if not content_type:
+            content_type = self.headers.get("Content-Type", "")
+        if "charset=" in content_type:
+            # Extract charset from Content-Type: text/html; charset=utf-8
+            for part in content_type.split(";"):
+                part = part.strip()
+                if part.lower().startswith("charset="):
+                    return part.split("=", 1)[1].strip().strip('"\'')
+        return None
+
     def json(self, **kwargs) -> Any:
         """Parse response body as JSON."""
         return json.loads(self.text, **kwargs)
@@ -218,10 +270,10 @@ class Response:
     def raise_for_status(self):
         """Raise HTTPCloakError if status_code >= 400."""
         if not self.ok:
-            raise HTTPCloakError(f"HTTP {self.status_code}")
+            raise HTTPCloakError(f"HTTP {self.status_code}: {self.reason}")
 
     @classmethod
-    def _from_dict(cls, data: dict) -> "Response":
+    def _from_dict(cls, data: dict, elapsed: float = 0.0) -> "Response":
         body = data.get("body", "")
         if isinstance(body, str):
             body_bytes = body.encode("utf-8")
@@ -234,6 +286,7 @@ class Response:
             text=body if isinstance(body, str) else body.decode("utf-8", errors="replace"),
             final_url=data.get("final_url", ""),
             protocol=data.get("protocol", ""),
+            elapsed=elapsed,
         )
 
 
@@ -317,7 +370,8 @@ class _AsyncCallbackManager:
 
     def __init__(self):
         self._lock = Lock()
-        self._pending: Dict[int, Tuple[asyncio.Future, asyncio.AbstractEventLoop]] = {}
+        # Pending requests: callback_id -> (future, loop, start_time)
+        self._pending: Dict[int, Tuple[asyncio.Future, asyncio.AbstractEventLoop, float]] = {}
         self._callback_ref: Optional[ASYNC_CALLBACK] = None  # prevent GC
         self._lib = None
 
@@ -326,7 +380,10 @@ class _AsyncCallbackManager:
         with self._lock:
             if callback_id not in self._pending:
                 return
-            future, loop = self._pending.pop(callback_id)
+            future, loop, start_time = self._pending.pop(callback_id)
+
+        # Calculate elapsed time
+        elapsed = time.perf_counter() - start_time
 
         # Parse result
         if error and error != b"":
@@ -341,7 +398,7 @@ class _AsyncCallbackManager:
         elif response_json:
             try:
                 data = json.loads(response_json.decode("utf-8"))
-                response = Response._from_dict(data)
+                response = Response._from_dict(data, elapsed=elapsed)
                 loop.call_soon_threadsafe(future.set_result, response)
             except Exception as e:
                 loop.call_soon_threadsafe(future.set_exception, HTTPCloakError(f"Failed to parse response: {e}"))
@@ -366,11 +423,12 @@ class _AsyncCallbackManager:
         # Register a NEW callback for this request (Go gives us a unique ID)
         callback_id = lib.httpcloak_register_callback(self._callback_ref)
 
-        # Create future and store it
+        # Create future and store it with start time
         loop = asyncio.get_event_loop()
         future = loop.create_future()
+        start_time = time.perf_counter()
         with self._lock:
-            self._pending[callback_id] = (future, loop)
+            self._pending[callback_id] = (future, loop, start_time)
 
         return callback_id, future
 
@@ -442,7 +500,7 @@ def _ptr_to_string(ptr) -> Optional[str]:
         _get_lib().httpcloak_free_string(ptr)
 
 
-def _parse_response(result_ptr) -> Response:
+def _parse_response(result_ptr, elapsed: float = 0.0) -> Response:
     """Parse JSON response from library."""
     result = _ptr_to_string(result_ptr)
     if result is None:
@@ -450,7 +508,7 @@ def _parse_response(result_ptr) -> Response:
     data = json.loads(result)
     if "error" in data:
         raise HTTPCloakError(data["error"])
-    return Response._from_dict(data)
+    return Response._from_dict(data, elapsed=elapsed)
 
 
 def _add_params_to_url(url: str, params: Optional[Dict[str, Any]]) -> str:
@@ -543,10 +601,12 @@ class Session:
         retry: int = 3,
         retry_on_status: Optional[List[int]] = None,
         prefer_ipv4: bool = False,
+        auth: Optional[Tuple[str, str]] = None,
     ):
         self._lib = _get_lib()
         self._default_timeout = timeout
         self.headers: Dict[str, str] = {}  # Default headers
+        self.auth: Optional[Tuple[str, str]] = auth  # Default auth for all requests
 
         config = {"preset": preset, "timeout": timeout, "http_version": http_version}
         if proxy:
@@ -630,24 +690,28 @@ class Session:
             params: URL query parameters
             headers: Request headers
             cookies: Cookies to send with this request
-            auth: Basic auth tuple (username, password)
+            auth: Basic auth tuple (username, password). If None, uses session.auth
             timeout: Request timeout in seconds
         """
         url = _add_params_to_url(url, params)
         merged_headers = self._merge_headers(headers)
-        merged_headers = _apply_auth(merged_headers, auth)
+        # Use request auth if provided, otherwise fall back to session auth
+        effective_auth = auth if auth is not None else self.auth
+        merged_headers = _apply_auth(merged_headers, effective_auth)
         merged_headers = self._apply_cookies(merged_headers, cookies)
 
         if timeout:
             return self.request("GET", url, headers=merged_headers, timeout=timeout)
 
         headers_json = json.dumps(merged_headers).encode("utf-8") if merged_headers else None
+        start_time = time.perf_counter()
         result = self._lib.httpcloak_get(
             self._handle,
             url.encode("utf-8"),
             headers_json,
         )
-        return _parse_response(result)
+        elapsed = time.perf_counter() - start_time
+        return _parse_response(result, elapsed=elapsed)
 
     def post(
         self,
@@ -717,20 +781,24 @@ class Session:
             else:
                 body = data
 
-        merged_headers = _apply_auth(merged_headers, auth)
+        # Use request auth if provided, otherwise fall back to session auth
+        effective_auth = auth if auth is not None else self.auth
+        merged_headers = _apply_auth(merged_headers, effective_auth)
         merged_headers = self._apply_cookies(merged_headers, cookies)
 
         if timeout:
             return self.request("POST", url, headers=merged_headers, data=body, timeout=timeout)
 
         headers_json = json_module.dumps(merged_headers).encode("utf-8") if merged_headers else None
+        start_time = time.perf_counter()
         result = self._lib.httpcloak_post(
             self._handle,
             url.encode("utf-8"),
             body,
             headers_json,
         )
-        return _parse_response(result)
+        elapsed = time.perf_counter() - start_time
+        return _parse_response(result, elapsed=elapsed)
 
     def request(
         self,
@@ -787,7 +855,9 @@ class Session:
             else:
                 body = data
 
-        merged_headers = _apply_auth(merged_headers, auth)
+        # Use request auth if provided, otherwise fall back to session auth
+        effective_auth = auth if auth is not None else self.auth
+        merged_headers = _apply_auth(merged_headers, effective_auth)
         merged_headers = self._apply_cookies(merged_headers, cookies)
 
         request_config = {
@@ -801,11 +871,13 @@ class Session:
         if timeout:
             request_config["timeout"] = timeout
 
+        start_time = time.perf_counter()
         result = self._lib.httpcloak_request(
             self._handle,
             json_module.dumps(request_config).encode("utf-8"),
         )
-        return _parse_response(result)
+        elapsed = time.perf_counter() - start_time
+        return _parse_response(result, elapsed=elapsed)
 
     def put(
         self,
@@ -1081,6 +1153,19 @@ class Session:
             return json.loads(result)
         return {}
 
+    def get_cookie(self, name: str) -> Optional[str]:
+        """
+        Get a specific cookie by name.
+
+        Args:
+            name: Cookie name
+
+        Returns:
+            Cookie value or None if not found
+        """
+        cookies = self.get_cookies()
+        return cookies.get(name)
+
     def set_cookie(self, name: str, value: str):
         """Set a cookie in the session."""
         self._lib.httpcloak_set_cookie(
@@ -1088,6 +1173,30 @@ class Session:
             name.encode("utf-8"),
             value.encode("utf-8"),
         )
+
+    def delete_cookie(self, name: str):
+        """
+        Delete a specific cookie by name.
+
+        Note: This sets the cookie to an empty value with immediate expiry.
+        The cookie will not be sent in subsequent requests.
+        """
+        # Set cookie to empty value - effectively deletes it
+        self._lib.httpcloak_set_cookie(
+            self._handle,
+            name.encode("utf-8"),
+            b"",
+        )
+
+    def clear_cookies(self):
+        """
+        Clear all cookies from the session.
+
+        Note: This deletes all cookies by setting them to empty values.
+        """
+        cookies = self.get_cookies()
+        for name in cookies:
+            self.delete_cookie(name)
 
     @property
     def cookies(self) -> Dict[str, str]:

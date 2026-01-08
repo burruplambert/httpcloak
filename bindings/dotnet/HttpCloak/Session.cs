@@ -111,6 +111,12 @@ public sealed class Session : IDisposable
     private bool _disposed;
 
     /// <summary>
+    /// Default auth (username, password) for all requests.
+    /// Can be overridden per-request.
+    /// </summary>
+    public (string Username, string Password)? Auth { get; set; }
+
+    /// <summary>
     /// Create a new session with the specified options.
     /// </summary>
     /// <param name="preset">Browser preset (default: "chrome-143")</param>
@@ -122,6 +128,7 @@ public sealed class Session : IDisposable
     /// <param name="maxRedirects">Maximum number of redirects (default: 10)</param>
     /// <param name="retry">Number of retries on failure (default: 0)</param>
     /// <param name="preferIpv4">Prefer IPv4 addresses over IPv6 (default: false)</param>
+    /// <param name="auth">Default auth (username, password) for all requests</param>
     public Session(
         string preset = "chrome-143",
         string? proxy = null,
@@ -131,8 +138,11 @@ public sealed class Session : IDisposable
         bool allowRedirects = true,
         int maxRedirects = 10,
         int retry = 0,
-        bool preferIpv4 = false)
+        bool preferIpv4 = false,
+        (string Username, string Password)? auth = null)
     {
+        Auth = auth;
+
         var config = new SessionConfig
         {
             Preset = preset,
@@ -154,33 +164,66 @@ public sealed class Session : IDisposable
     }
 
     /// <summary>
+    /// Apply auth to headers.
+    /// </summary>
+    private Dictionary<string, string> ApplyAuth(Dictionary<string, string>? headers, (string Username, string Password)? auth)
+    {
+        var effectiveAuth = auth ?? Auth;
+        headers ??= new Dictionary<string, string>();
+
+        if (effectiveAuth != null)
+        {
+            var credentials = $"{effectiveAuth.Value.Username}:{effectiveAuth.Value.Password}";
+            var base64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(credentials));
+            headers["Authorization"] = $"Basic {base64}";
+        }
+
+        return headers;
+    }
+
+    /// <summary>
     /// Perform a GET request.
     /// </summary>
-    public Response Get(string url, Dictionary<string, string>? headers = null)
+    /// <param name="url">Request URL</param>
+    /// <param name="headers">Custom headers</param>
+    /// <param name="auth">Basic auth (username, password). If null, uses session Auth.</param>
+    public Response Get(string url, Dictionary<string, string>? headers = null, (string, string)? auth = null)
     {
         ThrowIfDisposed();
 
-        string? headersJson = headers != null
+        headers = ApplyAuth(headers, auth);
+        string? headersJson = headers.Count > 0
             ? JsonSerializer.Serialize(headers, JsonContext.Default.DictionaryStringString)
             : null;
 
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         IntPtr resultPtr = Native.Get(_handle, url, headersJson);
-        return ParseResponse(resultPtr);
+        stopwatch.Stop();
+
+        return ParseResponse(resultPtr, stopwatch.Elapsed);
     }
 
     /// <summary>
     /// Perform a POST request.
     /// </summary>
-    public Response Post(string url, string? body = null, Dictionary<string, string>? headers = null)
+    /// <param name="url">Request URL</param>
+    /// <param name="body">Request body</param>
+    /// <param name="headers">Custom headers</param>
+    /// <param name="auth">Basic auth (username, password). If null, uses session Auth.</param>
+    public Response Post(string url, string? body = null, Dictionary<string, string>? headers = null, (string, string)? auth = null)
     {
         ThrowIfDisposed();
 
-        string? headersJson = headers != null
+        headers = ApplyAuth(headers, auth);
+        string? headersJson = headers.Count > 0
             ? JsonSerializer.Serialize(headers, JsonContext.Default.DictionaryStringString)
             : null;
 
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         IntPtr resultPtr = Native.Post(_handle, url, body, headersJson);
-        return ParseResponse(resultPtr);
+        stopwatch.Stop();
+
+        return ParseResponse(resultPtr, stopwatch.Elapsed);
     }
 
     /// <summary>
@@ -199,22 +242,34 @@ public sealed class Session : IDisposable
     /// <summary>
     /// Perform a custom HTTP request.
     /// </summary>
-    public Response Request(string method, string url, string? body = null, Dictionary<string, string>? headers = null, int? timeout = null)
+    /// <param name="method">HTTP method</param>
+    /// <param name="url">Request URL</param>
+    /// <param name="body">Request body</param>
+    /// <param name="headers">Custom headers</param>
+    /// <param name="timeout">Request timeout in seconds</param>
+    /// <param name="auth">Basic auth (username, password). If null, uses session Auth.</param>
+    public Response Request(string method, string url, string? body = null, Dictionary<string, string>? headers = null, int? timeout = null, (string, string)? auth = null)
     {
         ThrowIfDisposed();
+
+        headers = ApplyAuth(headers, auth);
 
         var request = new RequestConfig
         {
             Method = method.ToUpperInvariant(),
             Url = url,
             Body = body,
-            Headers = headers,
+            Headers = headers.Count > 0 ? headers : null,
             Timeout = timeout
         };
 
         string requestJson = JsonSerializer.Serialize(request, JsonContext.Default.RequestConfig);
+
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         IntPtr resultPtr = Native.Request(_handle, requestJson);
-        return ParseResponse(resultPtr);
+        stopwatch.Stop();
+
+        return ParseResponse(resultPtr, stopwatch.Elapsed);
     }
 
     /// <summary>
@@ -248,11 +303,15 @@ public sealed class Session : IDisposable
     /// <summary>
     /// Perform an async GET request using native Go goroutines.
     /// </summary>
-    public Task<Response> GetAsync(string url, Dictionary<string, string>? headers = null)
+    /// <param name="url">Request URL</param>
+    /// <param name="headers">Custom headers</param>
+    /// <param name="auth">Basic auth (username, password). If null, uses session Auth.</param>
+    public Task<Response> GetAsync(string url, Dictionary<string, string>? headers = null, (string, string)? auth = null)
     {
         ThrowIfDisposed();
 
-        string? headersJson = headers != null
+        headers = ApplyAuth(headers, auth);
+        string? headersJson = headers.Count > 0
             ? JsonSerializer.Serialize(headers, JsonContext.Default.DictionaryStringString)
             : null;
 
@@ -265,11 +324,16 @@ public sealed class Session : IDisposable
     /// <summary>
     /// Perform an async POST request using native Go goroutines.
     /// </summary>
-    public Task<Response> PostAsync(string url, string? body = null, Dictionary<string, string>? headers = null)
+    /// <param name="url">Request URL</param>
+    /// <param name="body">Request body</param>
+    /// <param name="headers">Custom headers</param>
+    /// <param name="auth">Basic auth (username, password). If null, uses session Auth.</param>
+    public Task<Response> PostAsync(string url, string? body = null, Dictionary<string, string>? headers = null, (string, string)? auth = null)
     {
         ThrowIfDisposed();
 
-        string? headersJson = headers != null
+        headers = ApplyAuth(headers, auth);
+        string? headersJson = headers.Count > 0
             ? JsonSerializer.Serialize(headers, JsonContext.Default.DictionaryStringString)
             : null;
 
@@ -295,16 +359,24 @@ public sealed class Session : IDisposable
     /// <summary>
     /// Perform an async custom HTTP request using native Go goroutines.
     /// </summary>
-    public Task<Response> RequestAsync(string method, string url, string? body = null, Dictionary<string, string>? headers = null, int? timeout = null)
+    /// <param name="method">HTTP method</param>
+    /// <param name="url">Request URL</param>
+    /// <param name="body">Request body</param>
+    /// <param name="headers">Custom headers</param>
+    /// <param name="timeout">Request timeout in seconds</param>
+    /// <param name="auth">Basic auth (username, password). If null, uses session Auth.</param>
+    public Task<Response> RequestAsync(string method, string url, string? body = null, Dictionary<string, string>? headers = null, int? timeout = null, (string, string)? auth = null)
     {
         ThrowIfDisposed();
+
+        headers = ApplyAuth(headers, auth);
 
         var request = new RequestConfig
         {
             Method = method.ToUpperInvariant(),
             Url = url,
             Body = body,
-            Headers = headers,
+            Headers = headers.Count > 0 ? headers : null,
             Timeout = timeout
         };
 
@@ -370,7 +442,43 @@ public sealed class Session : IDisposable
         Native.SetCookie(_handle, name, value);
     }
 
-    private static Response ParseResponse(IntPtr resultPtr)
+    /// <summary>
+    /// Get a specific cookie by name.
+    /// </summary>
+    /// <param name="name">Cookie name</param>
+    /// <returns>Cookie value, or null if not found</returns>
+    public string? GetCookie(string name)
+    {
+        ThrowIfDisposed();
+        var cookies = GetCookies();
+        return cookies.TryGetValue(name, out var value) && !string.IsNullOrEmpty(value) ? value : null;
+    }
+
+    /// <summary>
+    /// Delete a specific cookie by name.
+    /// </summary>
+    /// <param name="name">Cookie name to delete</param>
+    public void DeleteCookie(string name)
+    {
+        ThrowIfDisposed();
+        // Set cookie to empty string to delete it
+        Native.SetCookie(_handle, name, "");
+    }
+
+    /// <summary>
+    /// Clear all cookies from the session.
+    /// </summary>
+    public void ClearCookies()
+    {
+        ThrowIfDisposed();
+        var cookies = GetCookies();
+        foreach (var name in cookies.Keys)
+        {
+            Native.SetCookie(_handle, name, "");
+        }
+    }
+
+    private static Response ParseResponse(IntPtr resultPtr, TimeSpan elapsed = default)
     {
         string? json = Native.PtrToStringAndFree(resultPtr);
 
@@ -389,7 +497,7 @@ public sealed class Session : IDisposable
         if (response == null)
             throw new HttpCloakException("Failed to parse response");
 
-        return new Response(response);
+        return new Response(response, elapsed);
     }
 
     private void ThrowIfDisposed()
@@ -417,13 +525,37 @@ public sealed class Session : IDisposable
 /// </summary>
 public sealed class Response
 {
-    internal Response(ResponseData data)
+    private static readonly Dictionary<int, string> HttpStatusPhrases = new()
+    {
+        { 100, "Continue" }, { 101, "Switching Protocols" }, { 102, "Processing" },
+        { 200, "OK" }, { 201, "Created" }, { 202, "Accepted" }, { 203, "Non-Authoritative Information" },
+        { 204, "No Content" }, { 205, "Reset Content" }, { 206, "Partial Content" }, { 207, "Multi-Status" },
+        { 300, "Multiple Choices" }, { 301, "Moved Permanently" }, { 302, "Found" }, { 303, "See Other" },
+        { 304, "Not Modified" }, { 305, "Use Proxy" }, { 307, "Temporary Redirect" }, { 308, "Permanent Redirect" },
+        { 400, "Bad Request" }, { 401, "Unauthorized" }, { 402, "Payment Required" }, { 403, "Forbidden" },
+        { 404, "Not Found" }, { 405, "Method Not Allowed" }, { 406, "Not Acceptable" },
+        { 407, "Proxy Authentication Required" }, { 408, "Request Timeout" }, { 409, "Conflict" },
+        { 410, "Gone" }, { 411, "Length Required" }, { 412, "Precondition Failed" },
+        { 413, "Payload Too Large" }, { 414, "URI Too Long" }, { 415, "Unsupported Media Type" },
+        { 416, "Range Not Satisfiable" }, { 417, "Expectation Failed" }, { 418, "I'm a teapot" },
+        { 421, "Misdirected Request" }, { 422, "Unprocessable Entity" }, { 423, "Locked" },
+        { 424, "Failed Dependency" }, { 425, "Too Early" }, { 426, "Upgrade Required" },
+        { 428, "Precondition Required" }, { 429, "Too Many Requests" },
+        { 431, "Request Header Fields Too Large" }, { 451, "Unavailable For Legal Reasons" },
+        { 500, "Internal Server Error" }, { 501, "Not Implemented" }, { 502, "Bad Gateway" },
+        { 503, "Service Unavailable" }, { 504, "Gateway Timeout" }, { 505, "HTTP Version Not Supported" },
+        { 506, "Variant Also Negotiates" }, { 507, "Insufficient Storage" }, { 508, "Loop Detected" },
+        { 510, "Not Extended" }, { 511, "Network Authentication Required" },
+    };
+
+    internal Response(ResponseData data, TimeSpan elapsed = default)
     {
         StatusCode = data.StatusCode;
         Headers = data.Headers ?? new Dictionary<string, string>();
         Text = data.Body ?? "";
         Url = data.FinalUrl ?? "";
         Protocol = data.Protocol ?? "";
+        Elapsed = elapsed;
     }
 
     /// <summary>HTTP status code.</summary>
@@ -447,6 +579,38 @@ public sealed class Response
     /// <summary>True if status code is less than 400.</summary>
     public bool Ok => StatusCode < 400;
 
+    /// <summary>Time elapsed for the request.</summary>
+    public TimeSpan Elapsed { get; }
+
+    /// <summary>HTTP status reason phrase (e.g., "OK", "Not Found").</summary>
+    public string Reason => HttpStatusPhrases.TryGetValue(StatusCode, out var phrase) ? phrase : "Unknown";
+
+    /// <summary>Response encoding from Content-Type header. Null if not specified.</summary>
+    public string? Encoding
+    {
+        get
+        {
+            string contentType = "";
+            if (Headers.TryGetValue("content-type", out var ct))
+                contentType = ct;
+            else if (Headers.TryGetValue("Content-Type", out ct))
+                contentType = ct;
+
+            if (contentType.Contains("charset="))
+            {
+                foreach (var part in contentType.Split(';'))
+                {
+                    var trimmed = part.Trim();
+                    if (trimmed.StartsWith("charset=", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return trimmed.Substring(8).Trim().Trim('"', '\'');
+                    }
+                }
+            }
+            return null;
+        }
+    }
+
     /// <summary>Parse response body as JSON.</summary>
     public T? Json<T>() => JsonSerializer.Deserialize<T>(Text);
 
@@ -454,7 +618,7 @@ public sealed class Response
     public void RaiseForStatus()
     {
         if (!Ok)
-            throw new HttpCloakException($"HTTP {StatusCode}");
+            throw new HttpCloakException($"HTTP {StatusCode}: {Reason}");
     }
 }
 
