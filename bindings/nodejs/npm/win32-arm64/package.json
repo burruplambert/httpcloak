@@ -9,6 +9,13 @@
     "arm64"
   ],
   "main": "lib.js",
+  "module": "lib.mjs",
+  "exports": {
+    ".": {
+      "import": "./lib.mjs",
+      "require": "./lib.js"
+    }
+  },
   "license": "MIT",
   "repository": {
     "type": "git",

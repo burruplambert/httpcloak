@@ -1,7 +1,105 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace HttpCloak;
+
+/// <summary>
+/// Manages native async callbacks from Go goroutines.
+/// Each async request gets a unique callback ID from Go.
+/// </summary>
+internal sealed class AsyncCallbackManager
+{
+    private static readonly Lazy<AsyncCallbackManager> _instance = new(() => new AsyncCallbackManager());
+    public static AsyncCallbackManager Instance => _instance.Value;
+
+    private readonly ConcurrentDictionary<long, TaskCompletionSource<Response>> _pendingRequests = new();
+    private readonly Native.AsyncCallback _callback;
+    private readonly object _lock = new();
+
+    private AsyncCallbackManager()
+    {
+        // Create callback delegate - must keep reference to prevent GC
+        _callback = OnCallback;
+    }
+
+    private void OnCallback(long callbackId, IntPtr responseJsonPtr, IntPtr errorPtr)
+    {
+        if (!_pendingRequests.TryRemove(callbackId, out var tcs))
+            return;
+
+        try
+        {
+            string? error = Native.PtrToString(errorPtr);
+            string? responseJson = Native.PtrToString(responseJsonPtr);
+
+            if (!string.IsNullOrEmpty(error))
+            {
+                string errorMsg = error;
+                try
+                {
+                    var errorData = JsonSerializer.Deserialize(error, JsonContext.Default.ErrorResponse);
+                    if (errorData?.Error != null)
+                        errorMsg = errorData.Error;
+                }
+                catch { }
+
+                tcs.TrySetException(new HttpCloakException(errorMsg));
+            }
+            else if (!string.IsNullOrEmpty(responseJson))
+            {
+                try
+                {
+                    if (responseJson.Contains("\"error\""))
+                    {
+                        var errorResponse = JsonSerializer.Deserialize(responseJson, JsonContext.Default.ErrorResponse);
+                        if (errorResponse?.Error != null)
+                        {
+                            tcs.TrySetException(new HttpCloakException(errorResponse.Error));
+                            return;
+                        }
+                    }
+
+                    var responseData = JsonSerializer.Deserialize(responseJson, JsonContext.Default.ResponseData);
+                    if (responseData == null)
+                    {
+                        tcs.TrySetException(new HttpCloakException("Failed to parse response"));
+                        return;
+                    }
+
+                    tcs.TrySetResult(new Response(responseData));
+                }
+                catch (Exception ex)
+                {
+                    tcs.TrySetException(new HttpCloakException($"Failed to parse response: {ex.Message}"));
+                }
+            }
+            else
+            {
+                tcs.TrySetException(new HttpCloakException("No response received"));
+            }
+        }
+        catch (Exception ex)
+        {
+            tcs.TrySetException(ex);
+        }
+    }
+
+    /// <summary>
+    /// Register a new async request. Returns (callbackId, Task).
+    /// </summary>
+    public (long CallbackId, Task<Response> Task) RegisterRequest()
+    {
+        var tcs = new TaskCompletionSource<Response>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        // Register callback with Go - each request gets unique ID
+        long callbackId = Native.RegisterCallback(_callback);
+
+        _pendingRequests[callbackId] = tcs;
+
+        return (callbackId, tcs.Task);
+    }
+}
 
 /// <summary>
 /// HTTP Session with browser fingerprint emulation.
@@ -142,6 +240,109 @@ public sealed class Session : IDisposable
     /// </summary>
     public Response Head(string url, Dictionary<string, string>? headers = null)
         => Request("HEAD", url, null, headers);
+
+    // =========================================================================
+    // Async Methods (Native - using Go goroutines)
+    // =========================================================================
+
+    /// <summary>
+    /// Perform an async GET request using native Go goroutines.
+    /// </summary>
+    public Task<Response> GetAsync(string url, Dictionary<string, string>? headers = null)
+    {
+        ThrowIfDisposed();
+
+        string? headersJson = headers != null
+            ? JsonSerializer.Serialize(headers, JsonContext.Default.DictionaryStringString)
+            : null;
+
+        var (callbackId, task) = AsyncCallbackManager.Instance.RegisterRequest();
+        Native.GetAsync(_handle, url, headersJson, callbackId);
+
+        return task;
+    }
+
+    /// <summary>
+    /// Perform an async POST request using native Go goroutines.
+    /// </summary>
+    public Task<Response> PostAsync(string url, string? body = null, Dictionary<string, string>? headers = null)
+    {
+        ThrowIfDisposed();
+
+        string? headersJson = headers != null
+            ? JsonSerializer.Serialize(headers, JsonContext.Default.DictionaryStringString)
+            : null;
+
+        var (callbackId, task) = AsyncCallbackManager.Instance.RegisterRequest();
+        Native.PostAsync(_handle, url, body, headersJson, callbackId);
+
+        return task;
+    }
+
+    /// <summary>
+    /// Perform an async POST request with JSON body using native Go goroutines.
+    /// </summary>
+    public Task<Response> PostJsonAsync<T>(string url, T data, Dictionary<string, string>? headers = null)
+    {
+        headers ??= new Dictionary<string, string>();
+        if (!headers.ContainsKey("Content-Type"))
+            headers["Content-Type"] = "application/json";
+
+        string body = JsonSerializer.Serialize(data);
+        return PostAsync(url, body, headers);
+    }
+
+    /// <summary>
+    /// Perform an async custom HTTP request using native Go goroutines.
+    /// </summary>
+    public Task<Response> RequestAsync(string method, string url, string? body = null, Dictionary<string, string>? headers = null, int? timeout = null)
+    {
+        ThrowIfDisposed();
+
+        var request = new RequestConfig
+        {
+            Method = method.ToUpperInvariant(),
+            Url = url,
+            Body = body,
+            Headers = headers,
+            Timeout = timeout
+        };
+
+        string requestJson = JsonSerializer.Serialize(request, JsonContext.Default.RequestConfig);
+
+        var (callbackId, task) = AsyncCallbackManager.Instance.RegisterRequest();
+        Native.RequestAsync(_handle, requestJson, callbackId);
+
+        return task;
+    }
+
+    /// <summary>
+    /// Perform an async PUT request using native Go goroutines.
+    /// </summary>
+    public Task<Response> PutAsync(string url, string? body = null, Dictionary<string, string>? headers = null)
+        => RequestAsync("PUT", url, body, headers);
+
+    /// <summary>
+    /// Perform an async DELETE request using native Go goroutines.
+    /// </summary>
+    public Task<Response> DeleteAsync(string url, Dictionary<string, string>? headers = null)
+        => RequestAsync("DELETE", url, null, headers);
+
+    /// <summary>
+    /// Perform an async PATCH request using native Go goroutines.
+    /// </summary>
+    public Task<Response> PatchAsync(string url, string? body = null, Dictionary<string, string>? headers = null)
+        => RequestAsync("PATCH", url, body, headers);
+
+    /// <summary>
+    /// Perform an async HEAD request using native Go goroutines.
+    /// </summary>
+    public Task<Response> HeadAsync(string url, Dictionary<string, string>? headers = null)
+        => RequestAsync("HEAD", url, null, headers);
+
+    // =========================================================================
+    // Cookie Management
+    // =========================================================================
 
     /// <summary>
     /// Get all cookies from the session.

@@ -104,6 +104,25 @@ internal static class Native
     [DllImport(LibraryName, EntryPoint = "httpcloak_available_presets", CallingConvention = CallingConvention.Cdecl)]
     public static extern IntPtr AvailablePresets();
 
+    // Async callback delegate: void (*)(int64_t callback_id, const char* response_json, const char* error)
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate void AsyncCallback(long callbackId, IntPtr responseJson, IntPtr error);
+
+    [DllImport(LibraryName, EntryPoint = "httpcloak_register_callback", CallingConvention = CallingConvention.Cdecl)]
+    public static extern long RegisterCallback(AsyncCallback callback);
+
+    [DllImport(LibraryName, EntryPoint = "httpcloak_unregister_callback", CallingConvention = CallingConvention.Cdecl)]
+    public static extern void UnregisterCallback(long callbackId);
+
+    [DllImport(LibraryName, EntryPoint = "httpcloak_get_async", CallingConvention = CallingConvention.Cdecl)]
+    public static extern void GetAsync(long handle, [MarshalAs(UnmanagedType.LPUTF8Str)] string url, [MarshalAs(UnmanagedType.LPUTF8Str)] string? headersJson, long callbackId);
+
+    [DllImport(LibraryName, EntryPoint = "httpcloak_post_async", CallingConvention = CallingConvention.Cdecl)]
+    public static extern void PostAsync(long handle, [MarshalAs(UnmanagedType.LPUTF8Str)] string url, [MarshalAs(UnmanagedType.LPUTF8Str)] string? body, [MarshalAs(UnmanagedType.LPUTF8Str)] string? headersJson, long callbackId);
+
+    [DllImport(LibraryName, EntryPoint = "httpcloak_request_async", CallingConvention = CallingConvention.Cdecl)]
+    public static extern void RequestAsync(long handle, [MarshalAs(UnmanagedType.LPUTF8Str)] string requestJson, long callbackId);
+
     /// <summary>
     /// Convert a native string pointer to a managed string and free the native memory.
     /// </summary>
@@ -120,5 +139,16 @@ internal static class Native
         {
             FreeString(ptr);
         }
+    }
+
+    /// <summary>
+    /// Convert a native string pointer to a managed string without freeing.
+    /// </summary>
+    public static string? PtrToString(IntPtr ptr)
+    {
+        if (ptr == IntPtr.Zero)
+            return null;
+
+        return Marshal.PtrToStringUTF8(ptr);
     }
 }

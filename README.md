@@ -324,7 +324,13 @@ httpcloak.configure(auth=("user", "pass"))
 ### Node.js
 
 ```javascript
+// CommonJS
 const httpcloak = require("httpcloak");
+
+// ESM (ES Modules)
+import httpcloak from "httpcloak";
+// or named imports:
+import { Session, get, post } from "httpcloak";
 
 // Simple GET request
 const r = await httpcloak.get("https://www.cloudflare.com/cdn-cgi/trace");
@@ -505,9 +511,11 @@ using var session = new Session(
 
 ## Available Presets
 
+### Desktop Browsers
+
 | Preset | Browser | Post-Quantum | HTTP/2 | HTTP/3 |
 |--------|---------|--------------|--------|--------|
-| `chrome-143` | Chrome 143 | X25519MLKEM768 | Yes | Yes |
+| `chrome-143` | Chrome 143 (default) | X25519MLKEM768 | Yes | Yes |
 | `chrome-143-windows` | Chrome 143 (Windows) | X25519MLKEM768 | Yes | Yes |
 | `chrome-143-linux` | Chrome 143 (Linux) | X25519MLKEM768 | Yes | Yes |
 | `chrome-143-macos` | Chrome 143 (macOS) | X25519MLKEM768 | Yes | Yes |
@@ -515,7 +523,15 @@ using var session = new Session(
 | `firefox-133` | Firefox 133 | X25519 | Yes | No |
 | `safari-18` | Safari 18 | X25519 | Yes | No |
 
-**Recommended:** Use `chrome-143` - it's the latest with full HTTP/3 and post-quantum support.
+### Mobile Browsers
+
+| Preset | Browser | Post-Quantum | HTTP/2 | HTTP/3 |
+|--------|---------|--------------|--------|--------|
+| `chrome-mobile-ios` | Chrome on iOS | X25519MLKEM768 | Yes | Yes |
+| `chrome-mobile-android` | Chrome on Android | X25519MLKEM768 | Yes | Yes |
+| `safari-mobile-ios` | Safari on iOS | X25519 | Yes | No |
+
+**Recommended:** Use `chrome-143` for desktop, `chrome-mobile-android` or `chrome-mobile-ios` for mobile emulation.
 
 ---
 
@@ -612,21 +628,34 @@ r.RaiseForStatus() // throws on 4xx/5xx
 
 ## Examples
 
-See the `examples/` directory:
+See the `examples/` directory for complete, runnable examples:
 
 ```bash
 # Go examples
-go run examples/go-examples/basic/main.go
-go run examples/go-examples/session/main.go
-go run examples/go-examples/cloudflare/main.go
+go run examples/go-examples/basic/main.go        # Basic requests, headers, POST
+go run examples/go-examples/session/main.go      # Sessions, cookies, login flow
+go run examples/go-examples/cloudflare/main.go   # Cloudflare trace, fingerprinting
 
 # Python examples
-python examples/python-examples/01_simple_requests.py
-python examples/python-examples/02_sessions.py
+python examples/python-examples/01_basic_requests.py        # GET, POST, headers
+python examples/python-examples/02_configure_and_presets.py # Presets, HTTP versions
+python examples/python-examples/03_sessions_and_cookies.py  # Sessions, cookies
+python examples/python-examples/04_auth_and_proxy.py        # Auth, proxy, errors
+python examples/python-examples/05_async_requests.py        # Async/concurrent
 
-# Node.js examples
-node examples/js-examples/01_simple_requests.js
-node examples/js-examples/02_sessions.js
+# Node.js examples (CommonJS)
+node examples/js-examples/01_basic_requests.js        # GET, POST, headers
+node examples/js-examples/02_configure_and_presets.js # Presets, HTTP versions
+node examples/js-examples/03_sessions_and_cookies.js  # Sessions, cookies
+node examples/js-examples/04_auth_and_proxy.js        # Auth, proxy, errors
+node examples/js-examples/05_sync_requests.js         # Synchronous requests
+node examples/js-examples/06_async_concurrent.js      # Async/concurrent requests
+
+# Node.js ESM example
+node examples/js-examples/07_esm_example.mjs          # ES Modules syntax
+
+# C# examples
+dotnet run --project examples/csharp-examples         # All examples
 ```
 
 ---

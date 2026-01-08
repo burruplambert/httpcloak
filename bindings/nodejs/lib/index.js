@@ -215,30 +215,153 @@ function getLibPath() {
   );
 }
 
+// Define callback proto globally for koffi (must be before getLib)
+const AsyncCallbackProto = koffi.proto("void AsyncCallback(int64 callbackId, str responseJson, str error)");
+
 // Load the native library
 let lib = null;
+let nativeLibHandle = null;
 
 function getLib() {
   if (lib === null) {
     const libPath = getLibPath();
-    const nativeLib = koffi.load(libPath);
+    nativeLibHandle = koffi.load(libPath);
 
     // Use str for string returns - koffi handles the string copy automatically
     // Note: The C strings allocated by Go are not freed, but Go's GC handles them
     lib = {
-      httpcloak_session_new: nativeLib.func("httpcloak_session_new", "int64", ["str"]),
-      httpcloak_session_free: nativeLib.func("httpcloak_session_free", "void", ["int64"]),
-      httpcloak_get: nativeLib.func("httpcloak_get", "str", ["int64", "str", "str"]),
-      httpcloak_post: nativeLib.func("httpcloak_post", "str", ["int64", "str", "str", "str"]),
-      httpcloak_request: nativeLib.func("httpcloak_request", "str", ["int64", "str"]),
-      httpcloak_get_cookies: nativeLib.func("httpcloak_get_cookies", "str", ["int64"]),
-      httpcloak_set_cookie: nativeLib.func("httpcloak_set_cookie", "void", ["int64", "str", "str"]),
-      httpcloak_free_string: nativeLib.func("httpcloak_free_string", "void", ["void*"]),
-      httpcloak_version: nativeLib.func("httpcloak_version", "str", []),
-      httpcloak_available_presets: nativeLib.func("httpcloak_available_presets", "str", []),
+      httpcloak_session_new: nativeLibHandle.func("httpcloak_session_new", "int64", ["str"]),
+      httpcloak_session_free: nativeLibHandle.func("httpcloak_session_free", "void", ["int64"]),
+      httpcloak_get: nativeLibHandle.func("httpcloak_get", "str", ["int64", "str", "str"]),
+      httpcloak_post: nativeLibHandle.func("httpcloak_post", "str", ["int64", "str", "str", "str"]),
+      httpcloak_request: nativeLibHandle.func("httpcloak_request", "str", ["int64", "str"]),
+      httpcloak_get_cookies: nativeLibHandle.func("httpcloak_get_cookies", "str", ["int64"]),
+      httpcloak_set_cookie: nativeLibHandle.func("httpcloak_set_cookie", "void", ["int64", "str", "str"]),
+      httpcloak_free_string: nativeLibHandle.func("httpcloak_free_string", "void", ["void*"]),
+      httpcloak_version: nativeLibHandle.func("httpcloak_version", "str", []),
+      httpcloak_available_presets: nativeLibHandle.func("httpcloak_available_presets", "str", []),
+      // Async functions
+      httpcloak_register_callback: nativeLibHandle.func("httpcloak_register_callback", "int64", [koffi.pointer(AsyncCallbackProto)]),
+      httpcloak_unregister_callback: nativeLibHandle.func("httpcloak_unregister_callback", "void", ["int64"]),
+      httpcloak_get_async: nativeLibHandle.func("httpcloak_get_async", "void", ["int64", "str", "str", "int64"]),
+      httpcloak_post_async: nativeLibHandle.func("httpcloak_post_async", "void", ["int64", "str", "str", "str", "int64"]),
+      httpcloak_request_async: nativeLibHandle.func("httpcloak_request_async", "void", ["int64", "str", "int64"]),
     };
   }
   return lib;
+}
+
+/**
+ * Async callback manager for native Go goroutine-based async
+ *
+ * Each async request registers a callback with Go and receives a unique ID.
+ * When Go completes the request, it invokes the callback with that ID.
+ */
+class AsyncCallbackManager {
+  constructor() {
+    this._pendingRequests = new Map(); // callbackId -> { resolve, reject }
+    this._callbackPtr = null;
+    this._refTimer = null; // Timer to keep event loop alive
+  }
+
+  /**
+   * Ref the event loop to prevent Node.js from exiting while requests are pending
+   */
+  _ref() {
+    if (this._refTimer === null) {
+      // Create a timer that keeps the event loop alive
+      this._refTimer = setInterval(() => {}, 2147483647); // Max interval
+    }
+  }
+
+  /**
+   * Unref the event loop when no more pending requests
+   */
+  _unref() {
+    if (this._pendingRequests.size === 0 && this._refTimer !== null) {
+      clearInterval(this._refTimer);
+      this._refTimer = null;
+    }
+  }
+
+  /**
+   * Ensure the callback is set up with koffi
+   */
+  _ensureCallback() {
+    if (this._callbackPtr !== null) {
+      return;
+    }
+
+    // Create callback function that will be invoked by Go
+    // koffi.register expects koffi.pointer(proto) as the type
+    this._callbackPtr = koffi.register((callbackId, responseJson, error) => {
+      const pending = this._pendingRequests.get(Number(callbackId));
+      if (!pending) {
+        return;
+      }
+      this._pendingRequests.delete(Number(callbackId));
+      this._unref(); // Check if we can release the event loop
+
+      const { resolve, reject } = pending;
+
+      if (error && error !== "") {
+        let errMsg = error;
+        try {
+          const errData = JSON.parse(error);
+          errMsg = errData.error || error;
+        } catch (e) {
+          // Use raw error string
+        }
+        reject(new HTTPCloakError(errMsg));
+      } else if (responseJson) {
+        try {
+          const data = JSON.parse(responseJson);
+          if (data.error) {
+            reject(new HTTPCloakError(data.error));
+          } else {
+            resolve(new Response(data));
+          }
+        } catch (e) {
+          reject(new HTTPCloakError(`Failed to parse response: ${e.message}`));
+        }
+      } else {
+        reject(new HTTPCloakError("No response received"));
+      }
+    }, koffi.pointer(AsyncCallbackProto));
+  }
+
+  /**
+   * Register a new async request
+   * @returns {{ callbackId: number, promise: Promise<Response> }}
+   */
+  registerRequest(nativeLib) {
+    this._ensureCallback();
+
+    // Register callback with Go (each request gets unique ID)
+    const callbackId = nativeLib.httpcloak_register_callback(this._callbackPtr);
+
+    // Create promise for this request
+    let resolve, reject;
+    const promise = new Promise((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+
+    this._pendingRequests.set(Number(callbackId), { resolve, reject });
+    this._ref(); // Keep event loop alive
+
+    return { callbackId, promise };
+  }
+}
+
+// Global async callback manager
+let asyncManager = null;
+
+function getAsyncManager() {
+  if (asyncManager === null) {
+    asyncManager = new AsyncCallbackManager();
+  }
+  return asyncManager;
 }
 
 /**
@@ -656,62 +779,149 @@ class Session {
   }
 
   // ===========================================================================
-  // Promise-based Methods
+  // Promise-based Methods (Native async using Go goroutines)
   // ===========================================================================
 
   /**
-   * Perform an async GET request
+   * Perform an async GET request using native Go goroutines
    * @param {string} url - Request URL
    * @param {Object} [options] - Request options
    * @returns {Promise<Response>} Response object
    */
   get(url, options = {}) {
-    return new Promise((resolve, reject) => {
-      setImmediate(() => {
-        try {
-          resolve(this.getSync(url, options));
-        } catch (err) {
-          reject(err);
-        }
-      });
-    });
+    const { headers = null, params = null, auth = null } = options;
+
+    url = addParamsToUrl(url, params);
+    let mergedHeaders = this._mergeHeaders(headers);
+    mergedHeaders = applyAuth(mergedHeaders, auth);
+
+    const headersJson = mergedHeaders ? JSON.stringify(mergedHeaders) : null;
+
+    // Register async request with callback manager
+    const manager = getAsyncManager();
+    const { callbackId, promise } = manager.registerRequest(this._lib);
+
+    // Start async request
+    this._lib.httpcloak_get_async(this._handle, url, headersJson, callbackId);
+
+    return promise;
   }
 
   /**
-   * Perform an async POST request
+   * Perform an async POST request using native Go goroutines
    * @param {string} url - Request URL
    * @param {Object} [options] - Request options
    * @returns {Promise<Response>} Response object
    */
   post(url, options = {}) {
-    return new Promise((resolve, reject) => {
-      setImmediate(() => {
-        try {
-          resolve(this.postSync(url, options));
-        } catch (err) {
-          reject(err);
-        }
-      });
-    });
+    let { body = null, json = null, data = null, files = null, headers = null, params = null, auth = null } = options;
+
+    url = addParamsToUrl(url, params);
+    let mergedHeaders = this._mergeHeaders(headers);
+
+    // Handle multipart file upload
+    if (files !== null) {
+      const formData = (data !== null && typeof data === "object") ? data : null;
+      const multipart = encodeMultipart(formData, files);
+      body = multipart.body.toString("latin1");
+      mergedHeaders = mergedHeaders || {};
+      mergedHeaders["Content-Type"] = multipart.contentType;
+    }
+    // Handle JSON body
+    else if (json !== null) {
+      body = JSON.stringify(json);
+      mergedHeaders = mergedHeaders || {};
+      if (!mergedHeaders["Content-Type"]) {
+        mergedHeaders["Content-Type"] = "application/json";
+      }
+    }
+    // Handle form data
+    else if (data !== null && typeof data === "object") {
+      body = new URLSearchParams(data).toString();
+      mergedHeaders = mergedHeaders || {};
+      if (!mergedHeaders["Content-Type"]) {
+        mergedHeaders["Content-Type"] = "application/x-www-form-urlencoded";
+      }
+    }
+    // Handle Buffer body
+    else if (Buffer.isBuffer(body)) {
+      body = body.toString("utf8");
+    }
+
+    mergedHeaders = applyAuth(mergedHeaders, auth);
+
+    const headersJson = mergedHeaders ? JSON.stringify(mergedHeaders) : null;
+
+    // Register async request with callback manager
+    const manager = getAsyncManager();
+    const { callbackId, promise } = manager.registerRequest(this._lib);
+
+    // Start async request
+    this._lib.httpcloak_post_async(this._handle, url, body, headersJson, callbackId);
+
+    return promise;
   }
 
   /**
-   * Perform an async custom HTTP request
+   * Perform an async custom HTTP request using native Go goroutines
    * @param {string} method - HTTP method
    * @param {string} url - Request URL
    * @param {Object} [options] - Request options
    * @returns {Promise<Response>} Response object
    */
   request(method, url, options = {}) {
-    return new Promise((resolve, reject) => {
-      setImmediate(() => {
-        try {
-          resolve(this.requestSync(method, url, options));
-        } catch (err) {
-          reject(err);
-        }
-      });
-    });
+    let { body = null, json = null, data = null, files = null, headers = null, params = null, auth = null, timeout = null } = options;
+
+    url = addParamsToUrl(url, params);
+    let mergedHeaders = this._mergeHeaders(headers);
+
+    // Handle multipart file upload
+    if (files !== null) {
+      const formData = (data !== null && typeof data === "object") ? data : null;
+      const multipart = encodeMultipart(formData, files);
+      body = multipart.body.toString("latin1");
+      mergedHeaders = mergedHeaders || {};
+      mergedHeaders["Content-Type"] = multipart.contentType;
+    }
+    // Handle JSON body
+    else if (json !== null) {
+      body = JSON.stringify(json);
+      mergedHeaders = mergedHeaders || {};
+      if (!mergedHeaders["Content-Type"]) {
+        mergedHeaders["Content-Type"] = "application/json";
+      }
+    }
+    // Handle form data
+    else if (data !== null && typeof data === "object") {
+      body = new URLSearchParams(data).toString();
+      mergedHeaders = mergedHeaders || {};
+      if (!mergedHeaders["Content-Type"]) {
+        mergedHeaders["Content-Type"] = "application/x-www-form-urlencoded";
+      }
+    }
+    // Handle Buffer body
+    else if (Buffer.isBuffer(body)) {
+      body = body.toString("utf8");
+    }
+
+    mergedHeaders = applyAuth(mergedHeaders, auth);
+
+    const requestConfig = {
+      method: method.toUpperCase(),
+      url,
+    };
+    if (mergedHeaders) requestConfig.headers = mergedHeaders;
+    if (body) requestConfig.body = body;
+    if (timeout) requestConfig.timeout = timeout;
+
+    // Register async request with callback manager
+    const manager = getAsyncManager();
+    const { callbackId, promise } = manager.registerRequest(this._lib);
+
+    // Start async request
+    this._lib.httpcloak_request_async(this._handle, JSON.stringify(requestConfig), callbackId);
+
+    return promise;
   }
 
   /**

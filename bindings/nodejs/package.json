@@ -3,9 +3,23 @@
   "version": "1.5.0",
   "description": "Browser fingerprint emulation HTTP client with HTTP/1.1, HTTP/2, and HTTP/3 support",
   "main": "lib/index.js",
+  "module": "lib/index.mjs",
   "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./lib/index.d.ts",
+        "default": "./lib/index.mjs"
+      },
+      "require": {
+        "types": "./lib/index.d.ts",
+        "default": "./lib/index.js"
+      }
+    }
+  },
   "scripts": {
     "test": "node test.js",
+    "test:esm": "node test.mjs",
     "setup-packages": "node scripts/setup-npm-packages.js"
   },
   "keywords": [

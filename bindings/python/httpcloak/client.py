@@ -24,7 +24,7 @@ import mimetypes
 import os
 import platform
 import uuid
-from ctypes import c_char_p, c_int64, c_void_p, cdll, cast
+from ctypes import c_char_p, c_int64, c_void_p, cdll, cast, CFUNCTYPE
 from io import IOBase
 from pathlib import Path
 from threading import Lock
@@ -299,6 +299,97 @@ def _get_lib():
     return _lib
 
 
+# Async callback type: void (*)(int64_t callback_id, const char* response_json, const char* error)
+ASYNC_CALLBACK = CFUNCTYPE(None, c_int64, c_char_p, c_char_p)
+
+
+class _AsyncCallbackManager:
+    """
+    Manages native async callbacks from Go goroutines.
+
+    This class handles the bridge between Go's goroutine-based async
+    and Python's asyncio. Callbacks from Go run in different threads,
+    so we use loop.call_soon_threadsafe() to safely resolve futures.
+
+    Each async request registers a NEW callback with Go and receives a unique ID.
+    The callback function is shared but each request gets its own callback_id.
+    """
+
+    def __init__(self):
+        self._lock = Lock()
+        self._pending: Dict[int, Tuple[asyncio.Future, asyncio.AbstractEventLoop]] = {}
+        self._callback_ref: Optional[ASYNC_CALLBACK] = None  # prevent GC
+        self._lib = None
+
+    def _on_callback(self, callback_id: int, response_json: Optional[bytes], error: Optional[bytes]):
+        """Called from Go goroutine when async request completes."""
+        with self._lock:
+            if callback_id not in self._pending:
+                return
+            future, loop = self._pending.pop(callback_id)
+
+        # Parse result
+        if error and error != b"":
+            err_str = error.decode("utf-8")
+            try:
+                err_data = json.loads(err_str)
+                err_msg = err_data.get("error", err_str)
+            except (json.JSONDecodeError, ValueError):
+                err_msg = err_str
+            # Resolve in the correct event loop thread
+            loop.call_soon_threadsafe(future.set_exception, HTTPCloakError(err_msg))
+        elif response_json:
+            try:
+                data = json.loads(response_json.decode("utf-8"))
+                response = Response._from_dict(data)
+                loop.call_soon_threadsafe(future.set_result, response)
+            except Exception as e:
+                loop.call_soon_threadsafe(future.set_exception, HTTPCloakError(f"Failed to parse response: {e}"))
+        else:
+            loop.call_soon_threadsafe(future.set_exception, HTTPCloakError("No response received"))
+
+    def _ensure_callback(self, lib):
+        """Ensure callback function is created and stored."""
+        if self._callback_ref is None:
+            self._lib = lib
+            self._callback_ref = ASYNC_CALLBACK(self._on_callback)
+
+    def register_request(self, lib) -> Tuple[int, asyncio.Future]:
+        """
+        Register a new async request. Returns (callback_id, future).
+
+        Each request gets a unique callback_id from Go. The callback function
+        is shared but Go tracks each request separately by ID.
+        """
+        self._ensure_callback(lib)
+
+        # Register a NEW callback for this request (Go gives us a unique ID)
+        callback_id = lib.httpcloak_register_callback(self._callback_ref)
+
+        # Create future and store it
+        loop = asyncio.get_event_loop()
+        future = loop.create_future()
+        with self._lock:
+            self._pending[callback_id] = (future, loop)
+
+        return callback_id, future
+
+
+# Global async callback manager
+_async_manager: Optional[_AsyncCallbackManager] = None
+_async_manager_lock = Lock()
+
+
+def _get_async_manager() -> _AsyncCallbackManager:
+    """Get or create the global async callback manager."""
+    global _async_manager
+    if _async_manager is None:
+        with _async_manager_lock:
+            if _async_manager is None:
+                _async_manager = _AsyncCallbackManager()
+    return _async_manager
+
+
 def _setup_lib(lib):
     """Setup function signatures for the library."""
     lib.httpcloak_session_new.argtypes = [c_char_p]
@@ -322,6 +413,18 @@ def _setup_lib(lib):
     lib.httpcloak_version.restype = c_void_p
     lib.httpcloak_available_presets.argtypes = []
     lib.httpcloak_available_presets.restype = c_void_p
+
+    # Async functions
+    lib.httpcloak_register_callback.argtypes = [ASYNC_CALLBACK]
+    lib.httpcloak_register_callback.restype = c_int64
+    lib.httpcloak_unregister_callback.argtypes = [c_int64]
+    lib.httpcloak_unregister_callback.restype = None
+    lib.httpcloak_get_async.argtypes = [c_int64, c_char_p, c_char_p, c_int64]
+    lib.httpcloak_get_async.restype = None
+    lib.httpcloak_post_async.argtypes = [c_int64, c_char_p, c_char_p, c_char_p, c_int64]
+    lib.httpcloak_post_async.restype = None
+    lib.httpcloak_request_async.argtypes = [c_int64, c_char_p, c_int64]
+    lib.httpcloak_request_async.restype = None
 
 
 def _ptr_to_string(ptr) -> Optional[str]:
@@ -771,23 +874,200 @@ class Session:
         return self.request("OPTIONS", url, params=params, headers=headers, cookies=cookies, auth=auth, timeout=timeout)
 
     # =========================================================================
-    # Async Methods
+    # Async Methods (Native - using Go goroutines)
     # =========================================================================
 
-    async def get_async(self, url: str, **kwargs) -> Response:
-        """Async GET request."""
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, lambda: self.get(url, **kwargs))
+    async def get_async(
+        self,
+        url: str,
+        params: Optional[Dict[str, Any]] = None,
+        headers: Optional[Dict[str, str]] = None,
+        cookies: Optional[Dict[str, str]] = None,
+        auth: Optional[Tuple[str, str]] = None,
+    ) -> Response:
+        """
+        Async GET request using native Go goroutines.
 
-    async def post_async(self, url: str, **kwargs) -> Response:
-        """Async POST request."""
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, lambda: self.post(url, **kwargs))
+        This is more efficient than thread pool-based async as it uses
+        Go's native concurrency primitives.
 
-    async def request_async(self, method: str, url: str, **kwargs) -> Response:
-        """Async custom request."""
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, lambda: self.request(method, url, **kwargs))
+        Args:
+            url: Request URL
+            params: URL query parameters
+            headers: Request headers
+            cookies: Cookies to send with this request
+            auth: Basic auth tuple (username, password)
+        """
+        url = _add_params_to_url(url, params)
+        merged_headers = self._merge_headers(headers)
+        merged_headers = _apply_auth(merged_headers, auth)
+        merged_headers = self._apply_cookies(merged_headers, cookies)
+
+        # Get async manager and register this request (each request gets unique ID)
+        manager = _get_async_manager()
+        callback_id, future = manager.register_request(self._lib)
+
+        # Prepare headers JSON
+        headers_json = json.dumps(merged_headers).encode("utf-8") if merged_headers else None
+
+        # Start async request
+        self._lib.httpcloak_get_async(
+            self._handle,
+            url.encode("utf-8"),
+            headers_json,
+            callback_id,
+        )
+
+        return await future
+
+    async def post_async(
+        self,
+        url: str,
+        data: Union[str, bytes, Dict, None] = None,
+        json_data: Optional[Dict] = None,
+        params: Optional[Dict[str, Any]] = None,
+        headers: Optional[Dict[str, str]] = None,
+        cookies: Optional[Dict[str, str]] = None,
+        auth: Optional[Tuple[str, str]] = None,
+    ) -> Response:
+        """
+        Async POST request using native Go goroutines.
+
+        Args:
+            url: Request URL
+            data: Request body (string, bytes, or dict for form data)
+            json_data: JSON body (will be serialized)
+            params: URL query parameters
+            headers: Request headers
+            cookies: Cookies to send with this request
+            auth: Basic auth tuple (username, password)
+        """
+        url = _add_params_to_url(url, params)
+        merged_headers = self._merge_headers(headers)
+
+        body = None
+        if json_data is not None:
+            body = json.dumps(json_data).encode("utf-8")
+            merged_headers = merged_headers or {}
+            merged_headers.setdefault("Content-Type", "application/json")
+        elif data is not None:
+            if isinstance(data, dict):
+                body = urlencode(data).encode("utf-8")
+                merged_headers = merged_headers or {}
+                merged_headers.setdefault("Content-Type", "application/x-www-form-urlencoded")
+            elif isinstance(data, str):
+                body = data.encode("utf-8")
+            else:
+                body = data
+
+        merged_headers = _apply_auth(merged_headers, auth)
+        merged_headers = self._apply_cookies(merged_headers, cookies)
+
+        # Get async manager and register this request (each request gets unique ID)
+        manager = _get_async_manager()
+        callback_id, future = manager.register_request(self._lib)
+
+        # Prepare headers JSON
+        headers_json = json.dumps(merged_headers).encode("utf-8") if merged_headers else None
+
+        # Start async request
+        self._lib.httpcloak_post_async(
+            self._handle,
+            url.encode("utf-8"),
+            body,
+            headers_json,
+            callback_id,
+        )
+
+        return await future
+
+    async def request_async(
+        self,
+        method: str,
+        url: str,
+        data: Union[str, bytes, Dict, None] = None,
+        json_data: Optional[Dict] = None,
+        params: Optional[Dict[str, Any]] = None,
+        headers: Optional[Dict[str, str]] = None,
+        cookies: Optional[Dict[str, str]] = None,
+        auth: Optional[Tuple[str, str]] = None,
+    ) -> Response:
+        """
+        Async custom HTTP request using native Go goroutines.
+
+        Args:
+            method: HTTP method (GET, POST, PUT, DELETE, etc.)
+            url: Request URL
+            data: Request body
+            json_data: JSON body (will be serialized)
+            params: URL query parameters
+            headers: Request headers
+            cookies: Cookies to send with this request
+            auth: Basic auth tuple (username, password)
+        """
+        url = _add_params_to_url(url, params)
+        merged_headers = self._merge_headers(headers)
+
+        body = None
+        if json_data is not None:
+            body = json.dumps(json_data)
+            merged_headers = merged_headers or {}
+            merged_headers.setdefault("Content-Type", "application/json")
+        elif data is not None:
+            if isinstance(data, dict):
+                body = urlencode(data)
+                merged_headers = merged_headers or {}
+                merged_headers.setdefault("Content-Type", "application/x-www-form-urlencoded")
+            elif isinstance(data, bytes):
+                body = data.decode("utf-8")
+            else:
+                body = data
+
+        merged_headers = _apply_auth(merged_headers, auth)
+        merged_headers = self._apply_cookies(merged_headers, cookies)
+
+        # Build request config
+        request_config = {
+            "method": method.upper(),
+            "url": url,
+        }
+        if merged_headers:
+            request_config["headers"] = merged_headers
+        if body:
+            request_config["body"] = body
+
+        # Get async manager and register this request (each request gets unique ID)
+        manager = _get_async_manager()
+        callback_id, future = manager.register_request(self._lib)
+
+        # Start async request
+        self._lib.httpcloak_request_async(
+            self._handle,
+            json.dumps(request_config).encode("utf-8"),
+            callback_id,
+        )
+
+        return await future
+
+    async def put_async(self, url: str, **kwargs) -> Response:
+        """Async PUT request."""
+        return await self.request_async("PUT", url, **kwargs)
+
+    async def delete_async(self, url: str, **kwargs) -> Response:
+        """Async DELETE request."""
+        return await self.request_async("DELETE", url, **kwargs)
+
+    async def patch_async(self, url: str, **kwargs) -> Response:
+        """Async PATCH request."""
+        return await self.request_async("PATCH", url, **kwargs)
+
+    async def head_async(self, url: str, **kwargs) -> Response:
+        """Async HEAD request."""
+        return await self.request_async("HEAD", url, **kwargs)
+
+    async def options_async(self, url: str, **kwargs) -> Response:
+        """Async OPTIONS request."""
+        return await self.request_async("OPTIONS", url, **kwargs)
 
     # =========================================================================
     # Cookie Management

@@ -563,7 +563,7 @@ func httpcloak_free_string(str *C.char) {
 
 //export httpcloak_version
 func httpcloak_version() *C.char {
-	return C.CString("1.1.3")
+	return C.CString("1.5.0")
 }
 
 //export httpcloak_available_presets
