@@ -2,7 +2,7 @@ package pool
 
 import (
 	"context"
-	tls "github.com/sardanioss/utls"
+	crand "crypto/rand"
 	"encoding/binary"
 	"fmt"
 	"math/rand"
@@ -10,12 +10,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sardanioss/httpcloak/dns"
+	"github.com/sardanioss/httpcloak/fingerprint"
 	"github.com/sardanioss/quic-go"
 	"github.com/sardanioss/quic-go/http3"
 	"github.com/sardanioss/quic-go/quicvarint"
+	tls "github.com/sardanioss/utls"
 	utls "github.com/sardanioss/utls"
-	"github.com/sardanioss/httpcloak/dns"
-	"github.com/sardanioss/httpcloak/fingerprint"
 )
 
 // HTTP/3 SETTINGS identifiers (Chrome-like)
@@ -206,25 +207,30 @@ type QUICHostPool struct {
 
 // NewQUICHostPool creates a new QUIC pool for a specific host
 func NewQUICHostPool(host, port string, preset *fingerprint.Preset, dnsCache *dns.Cache) *QUICHostPool {
-	pool := &QUICHostPool{
-		host:           host,
-		port:           port,
-		preset:         preset,
-		dnsCache:       dnsCache,
-		connections:    make([]*QUICConn, 0),
-		maxConns:       0, // 0 = unlimited
-		maxIdleTime:    90 * time.Second,
-		maxConnAge:     5 * time.Minute,
-		connectTimeout: 30 * time.Second,
-	}
-
-	// Cache the ClientHelloSpec for consistent TLS fingerprint across connections
-	// Chrome shuffles TLS extensions once per session, not per connection
+	// Generate spec for standalone usage (backward compatibility)
+	var cachedSpec *utls.ClientHelloSpec
 	if preset != nil && preset.QUICClientHelloID.Client != "" {
-		spec, err := utls.UTLSIdToSpec(preset.QUICClientHelloID)
-		if err == nil {
-			pool.cachedClientHelloSpec = &spec
+		if spec, err := utls.UTLSIdToSpec(preset.QUICClientHelloID); err == nil {
+			cachedSpec = &spec
 		}
+	}
+	return NewQUICHostPoolWithCachedSpec(host, port, preset, dnsCache, cachedSpec)
+}
+
+// NewQUICHostPoolWithCachedSpec creates a QUIC pool with a pre-cached ClientHelloSpec
+// This ensures consistent TLS extension order across all hosts in a session
+func NewQUICHostPoolWithCachedSpec(host, port string, preset *fingerprint.Preset, dnsCache *dns.Cache, cachedSpec *utls.ClientHelloSpec) *QUICHostPool {
+	pool := &QUICHostPool{
+		host:                  host,
+		port:                  port,
+		preset:                preset,
+		dnsCache:              dnsCache,
+		connections:           make([]*QUICConn, 0),
+		maxConns:              0, // 0 = unlimited
+		maxIdleTime:           90 * time.Second,
+		maxConnAge:            5 * time.Minute,
+		connectTimeout:        30 * time.Second,
+		cachedClientHelloSpec: cachedSpec, // Use manager's cached spec for consistent shuffle
 	}
 
 	return pool
@@ -475,6 +481,12 @@ type QUICManager struct {
 	// Configuration
 	maxConnsPerHost int // 0 = unlimited
 
+	// Cached TLS specs - shared across all QUICHostPools for consistent fingerprint
+	// Chrome shuffles extension order once per session, not per connection
+	cachedSpec    *utls.ClientHelloSpec
+	cachedPSKSpec *utls.ClientHelloSpec
+	shuffleSeed   int64 // Seed used for extension shuffling
+
 	// Background cleanup
 	cleanupInterval time.Duration
 	stopCleanup     chan struct{}
@@ -482,13 +494,35 @@ type QUICManager struct {
 
 // NewQUICManager creates a new QUIC connection pool manager
 func NewQUICManager(preset *fingerprint.Preset, dnsCache *dns.Cache) *QUICManager {
+	// Generate random seed for extension shuffling
+	// This seed is used for all QUIC connections in this manager (session)
+	var seedBytes [8]byte
+	crand.Read(seedBytes[:])
+	shuffleSeed := int64(binary.LittleEndian.Uint64(seedBytes[:]))
+
 	m := &QUICManager{
 		pools:           make(map[string]*QUICHostPool),
 		dnsCache:        dnsCache,
 		preset:          preset,
 		maxConnsPerHost: 0, // 0 = unlimited by default
+		shuffleSeed:     shuffleSeed,
 		cleanupInterval: 30 * time.Second,
 		stopCleanup:     make(chan struct{}),
+	}
+
+	// Generate and cache ClientHelloSpec with shuffled extensions
+	// Chrome shuffles extensions once per session, not per connection
+	if preset != nil && preset.QUICClientHelloID.Client != "" {
+		if spec, err := utls.UTLSIdToSpecWithSeed(preset.QUICClientHelloID, shuffleSeed); err == nil {
+			m.cachedSpec = &spec
+		}
+	}
+
+	// Also cache PSK variant if available
+	if preset != nil && preset.QUICPSKClientHelloID.Client != "" {
+		if spec, err := utls.UTLSIdToSpecWithSeed(preset.QUICPSKClientHelloID, shuffleSeed); err == nil {
+			m.cachedPSKSpec = &spec
+		}
 	}
 
 	// Start background cleanup
@@ -536,7 +570,7 @@ func (m *QUICManager) GetPool(host, port string) (*QUICHostPool, error) {
 		return pool, nil
 	}
 
-	pool = NewQUICHostPool(host, port, m.preset, m.dnsCache)
+	pool = NewQUICHostPoolWithCachedSpec(host, port, m.preset, m.dnsCache, m.cachedSpec)
 	if m.maxConnsPerHost > 0 {
 		pool.SetMaxConns(m.maxConnsPerHost)
 	}

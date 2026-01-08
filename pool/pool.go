@@ -2,7 +2,8 @@ package pool
 
 import (
 	"context"
-	tls "github.com/sardanioss/utls"
+	crand "crypto/rand"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"net"
@@ -13,6 +14,7 @@ import (
 	"github.com/sardanioss/httpcloak/fingerprint"
 	"github.com/sardanioss/net/http2"
 	"github.com/sardanioss/net/http2/hpack"
+	tls "github.com/sardanioss/utls"
 	utls "github.com/sardanioss/utls"
 )
 
@@ -125,12 +127,24 @@ type HostPool struct {
 }
 
 // NewHostPool creates a new pool for a specific host
+// Note: This generates its own shuffled specs. For consistent session fingerprinting,
+// use Manager.GetPool() instead which shares cached specs across all hosts.
 func NewHostPool(host, port string, preset *fingerprint.Preset, dnsCache *dns.Cache) *HostPool {
-	return NewHostPoolWithConfig(host, port, preset, dnsCache, false, "")
+	// Generate specs for standalone usage (backward compatibility)
+	var cachedSpec, cachedPSKSpec *utls.ClientHelloSpec
+	if spec, err := utls.UTLSIdToSpec(preset.ClientHelloID); err == nil {
+		cachedSpec = &spec
+	}
+	if preset.PSKClientHelloID.Client != "" {
+		if spec, err := utls.UTLSIdToSpec(preset.PSKClientHelloID); err == nil {
+			cachedPSKSpec = &spec
+		}
+	}
+	return NewHostPoolWithConfig(host, port, preset, dnsCache, false, "", cachedSpec, cachedPSKSpec)
 }
 
 // NewHostPoolWithConfig creates a pool with TLS and proxy configuration
-func NewHostPoolWithConfig(host, port string, preset *fingerprint.Preset, dnsCache *dns.Cache, insecureSkipVerify bool, proxyURL string) *HostPool {
+func NewHostPoolWithConfig(host, port string, preset *fingerprint.Preset, dnsCache *dns.Cache, insecureSkipVerify bool, proxyURL string, cachedSpec, cachedPSKSpec *utls.ClientHelloSpec) *HostPool {
 	pool := &HostPool{
 		host:               host,
 		port:               port,
@@ -144,20 +158,8 @@ func NewHostPoolWithConfig(host, port string, preset *fingerprint.Preset, dnsCac
 		connectTimeout:     30 * time.Second,
 		insecureSkipVerify: insecureSkipVerify,
 		proxyURL:           proxyURL,
-	}
-
-	// Generate and cache ClientHelloSpec once - this includes TLS extension shuffle
-	// Chrome shuffles extensions once at startup, not per connection
-	// This makes our fingerprint consistent within a session like real Chrome
-	if spec, err := utls.UTLSIdToSpec(preset.ClientHelloID); err == nil {
-		pool.cachedSpec = &spec
-	}
-
-	// Also cache PSK variant if available
-	if preset.PSKClientHelloID.Client != "" {
-		if spec, err := utls.UTLSIdToSpec(preset.PSKClientHelloID); err == nil {
-			pool.cachedPSKSpec = &spec
-		}
+		cachedSpec:         cachedSpec,    // Use manager's cached spec for consistent shuffle
+		cachedPSKSpec:      cachedPSKSpec, // Use manager's cached PSK spec
 	}
 
 	return pool
@@ -850,6 +852,12 @@ type Manager struct {
 	proxyURL           string // Proxy URL (optional)
 	insecureSkipVerify bool   // Skip TLS verification
 
+	// Cached TLS specs - shared across all HostPools for consistent fingerprint
+	// Chrome shuffles extension order once per session, not per connection
+	cachedSpec    *utls.ClientHelloSpec
+	cachedPSKSpec *utls.ClientHelloSpec
+	shuffleSeed   int64 // Seed used for extension shuffling
+
 	// Background cleanup
 	cleanupInterval time.Duration
 	stopCleanup     chan struct{}
@@ -862,14 +870,34 @@ func NewManager(preset *fingerprint.Preset) *Manager {
 
 // NewManagerWithTLSConfig creates a manager with TLS configuration
 func NewManagerWithTLSConfig(preset *fingerprint.Preset, insecureSkipVerify bool) *Manager {
+	// Generate random seed for extension shuffling
+	// This seed is used for all connections in this manager (session)
+	var seedBytes [8]byte
+	crand.Read(seedBytes[:])
+	shuffleSeed := int64(binary.LittleEndian.Uint64(seedBytes[:]))
+
 	m := &Manager{
 		pools:              make(map[string]*HostPool),
 		dnsCache:           dns.NewCache(),
 		preset:             preset,
 		maxConnsPerHost:    0, // 0 = unlimited by default
 		insecureSkipVerify: insecureSkipVerify,
+		shuffleSeed:        shuffleSeed,
 		cleanupInterval:    30 * time.Second,
 		stopCleanup:        make(chan struct{}),
+	}
+
+	// Generate and cache ClientHelloSpec with shuffled extensions
+	// Chrome shuffles extensions once per session, not per connection
+	if spec, err := utls.UTLSIdToSpecWithSeed(preset.ClientHelloID, shuffleSeed); err == nil {
+		m.cachedSpec = &spec
+	}
+
+	// Also cache PSK variant if available
+	if preset.PSKClientHelloID.Client != "" {
+		if spec, err := utls.UTLSIdToSpecWithSeed(preset.PSKClientHelloID, shuffleSeed); err == nil {
+			m.cachedPSKSpec = &spec
+		}
 	}
 
 	// Start background cleanup
@@ -880,6 +908,11 @@ func NewManagerWithTLSConfig(preset *fingerprint.Preset, insecureSkipVerify bool
 
 // NewManagerWithProxy creates a manager with proxy support
 func NewManagerWithProxy(preset *fingerprint.Preset, proxyURL string, insecureSkipVerify bool) *Manager {
+	// Generate random seed for extension shuffling
+	var seedBytes [8]byte
+	crand.Read(seedBytes[:])
+	shuffleSeed := int64(binary.LittleEndian.Uint64(seedBytes[:]))
+
 	m := &Manager{
 		pools:              make(map[string]*HostPool),
 		dnsCache:           dns.NewCache(),
@@ -887,8 +920,21 @@ func NewManagerWithProxy(preset *fingerprint.Preset, proxyURL string, insecureSk
 		maxConnsPerHost:    0, // 0 = unlimited by default
 		proxyURL:           proxyURL,
 		insecureSkipVerify: insecureSkipVerify,
+		shuffleSeed:        shuffleSeed,
 		cleanupInterval:    30 * time.Second,
 		stopCleanup:        make(chan struct{}),
+	}
+
+	// Generate and cache ClientHelloSpec with shuffled extensions
+	if spec, err := utls.UTLSIdToSpecWithSeed(preset.ClientHelloID, shuffleSeed); err == nil {
+		m.cachedSpec = &spec
+	}
+
+	// Also cache PSK variant if available
+	if preset.PSKClientHelloID.Client != "" {
+		if spec, err := utls.UTLSIdToSpecWithSeed(preset.PSKClientHelloID, shuffleSeed); err == nil {
+			m.cachedPSKSpec = &spec
+		}
 	}
 
 	// Start background cleanup
@@ -936,7 +982,7 @@ func (m *Manager) GetPool(host, port string) (*HostPool, error) {
 		return pool, nil
 	}
 
-	pool = NewHostPoolWithConfig(host, port, m.preset, m.dnsCache, m.insecureSkipVerify, m.proxyURL)
+	pool = NewHostPoolWithConfig(host, port, m.preset, m.dnsCache, m.insecureSkipVerify, m.proxyURL, m.cachedSpec, m.cachedPSKSpec)
 	if m.maxConnsPerHost > 0 {
 		pool.SetMaxConns(m.maxConnsPerHost)
 	}
