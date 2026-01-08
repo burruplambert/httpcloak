@@ -197,6 +197,42 @@ HTTP_STATUS_PHRASES = {
 }
 
 
+class Cookie:
+    """
+    Represents a cookie from Set-Cookie header.
+
+    Attributes:
+        name: Cookie name
+        value: Cookie value
+    """
+
+    def __init__(self, name: str, value: str):
+        self.name = name
+        self.value = value
+
+    def __repr__(self):
+        return f"Cookie(name={self.name!r}, value={self.value!r})"
+
+
+class RedirectInfo:
+    """
+    Information about a redirect response in the history.
+
+    Attributes:
+        status_code: HTTP status code of the redirect
+        url: URL that was requested
+        headers: Response headers from the redirect
+    """
+
+    def __init__(self, status_code: int, url: str, headers: Dict[str, str]):
+        self.status_code = status_code
+        self.url = url
+        self.headers = headers
+
+    def __repr__(self):
+        return f"RedirectInfo(status_code={self.status_code}, url={self.url!r})"
+
+
 class Response:
     """
     HTTP Response object (requests-compatible).
@@ -212,6 +248,8 @@ class Response:
         elapsed: Time elapsed for the request (seconds as float)
         reason: HTTP status reason phrase
         encoding: Response encoding (from Content-Type header)
+        cookies: List of cookies set by this response
+        history: List of redirect responses (RedirectInfo objects)
     """
 
     def __init__(
@@ -223,6 +261,8 @@ class Response:
         final_url: str,
         protocol: str,
         elapsed: float = 0.0,
+        cookies: Optional[List[Cookie]] = None,
+        history: Optional[List[RedirectInfo]] = None,
     ):
         self.status_code = status_code
         self.headers = headers
@@ -231,6 +271,8 @@ class Response:
         self.url = final_url  # requests compatibility
         self.protocol = protocol
         self.elapsed = elapsed  # seconds as float
+        self.cookies = cookies or []
+        self.history = history or []
 
         # Keep old names as aliases
         self.body = body
@@ -279,6 +321,26 @@ class Response:
             body_bytes = body.encode("utf-8")
         else:
             body_bytes = body
+
+        # Parse cookies from response
+        cookies = []
+        for cookie_data in data.get("cookies", []):
+            if isinstance(cookie_data, dict):
+                cookies.append(Cookie(
+                    name=cookie_data.get("name", ""),
+                    value=cookie_data.get("value", ""),
+                ))
+
+        # Parse redirect history
+        history = []
+        for redirect_data in data.get("history", []):
+            if isinstance(redirect_data, dict):
+                history.append(RedirectInfo(
+                    status_code=redirect_data.get("status_code", 0),
+                    url=redirect_data.get("url", ""),
+                    headers=redirect_data.get("headers", {}),
+                ))
+
         return cls(
             status_code=data.get("status_code", 0),
             headers=data.get("headers", {}),
@@ -287,6 +349,8 @@ class Response:
             final_url=data.get("final_url", ""),
             protocol=data.get("protocol", ""),
             elapsed=elapsed,
+            cookies=cookies,
+            history=history,
         )
 
 

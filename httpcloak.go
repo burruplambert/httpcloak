@@ -97,6 +97,13 @@ type Request struct {
 	Timeout time.Duration
 }
 
+// RedirectInfo contains information about a redirect response
+type RedirectInfo struct {
+	StatusCode int
+	URL        string
+	Headers    map[string]string
+}
+
 // Response represents an HTTP response
 type Response struct {
 	StatusCode int
@@ -104,6 +111,7 @@ type Response struct {
 	Body       []byte
 	FinalURL   string
 	Protocol   string
+	History    []*RedirectInfo
 }
 
 // Do executes an HTTP request
@@ -356,12 +364,26 @@ func (s *Session) Do(ctx context.Context, req *Request) (*Response, error) {
 		return nil, err
 	}
 
+	// Convert redirect history
+	var history []*RedirectInfo
+	if len(resp.History) > 0 {
+		history = make([]*RedirectInfo, len(resp.History))
+		for i, h := range resp.History {
+			history[i] = &RedirectInfo{
+				StatusCode: h.StatusCode,
+				URL:        h.URL,
+				Headers:    h.Headers,
+			}
+		}
+	}
+
 	return &Response{
 		StatusCode: resp.StatusCode,
 		Headers:    resp.Headers,
 		Body:       resp.Body,
 		FinalURL:   resp.FinalURL,
 		Protocol:   resp.Protocol,
+		History:    history,
 	}, nil
 }
 

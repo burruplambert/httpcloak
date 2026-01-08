@@ -521,6 +521,50 @@ public sealed class Session : IDisposable
 }
 
 /// <summary>
+/// Cookie from Set-Cookie header.
+/// </summary>
+public sealed class Cookie
+{
+    /// <summary>Cookie name.</summary>
+    public string Name { get; }
+
+    /// <summary>Cookie value.</summary>
+    public string Value { get; }
+
+    internal Cookie(string name, string value)
+    {
+        Name = name;
+        Value = value;
+    }
+
+    public override string ToString() => $"Cookie(Name={Name}, Value={Value})";
+}
+
+/// <summary>
+/// Information about a redirect response.
+/// </summary>
+public sealed class RedirectInfo
+{
+    /// <summary>HTTP status code of the redirect.</summary>
+    public int StatusCode { get; }
+
+    /// <summary>URL that was requested.</summary>
+    public string Url { get; }
+
+    /// <summary>Response headers from the redirect.</summary>
+    public Dictionary<string, string> Headers { get; }
+
+    internal RedirectInfo(int statusCode, string url, Dictionary<string, string>? headers)
+    {
+        StatusCode = statusCode;
+        Url = url;
+        Headers = headers ?? new Dictionary<string, string>();
+    }
+
+    public override string ToString() => $"RedirectInfo(StatusCode={StatusCode}, Url={Url})";
+}
+
+/// <summary>
 /// HTTP Response.
 /// </summary>
 public sealed class Response
@@ -556,6 +600,14 @@ public sealed class Response
         Url = data.FinalUrl ?? "";
         Protocol = data.Protocol ?? "";
         Elapsed = elapsed;
+
+        // Parse cookies from response
+        Cookies = data.Cookies?.Select(c => new Cookie(c.Name ?? "", c.Value ?? "")).ToList()
+            ?? new List<Cookie>();
+
+        // Parse redirect history
+        History = data.History?.Select(h => new RedirectInfo(h.StatusCode, h.Url ?? "", h.Headers)).ToList()
+            ?? new List<RedirectInfo>();
     }
 
     /// <summary>HTTP status code.</summary>
@@ -581,6 +633,12 @@ public sealed class Response
 
     /// <summary>Time elapsed for the request.</summary>
     public TimeSpan Elapsed { get; }
+
+    /// <summary>Cookies set by this response.</summary>
+    public List<Cookie> Cookies { get; }
+
+    /// <summary>Redirect history (list of RedirectInfo objects).</summary>
+    public List<RedirectInfo> History { get; }
 
     /// <summary>HTTP status reason phrase (e.g., "OK", "Not Found").</summary>
     public string Reason => HttpStatusPhrases.TryGetValue(StatusCode, out var phrase) ? phrase : "Unknown";
@@ -726,6 +784,27 @@ internal class RequestConfig
     public int? Timeout { get; set; }
 }
 
+internal class CookieData
+{
+    [JsonPropertyName("name")]
+    public string? Name { get; set; }
+
+    [JsonPropertyName("value")]
+    public string? Value { get; set; }
+}
+
+internal class RedirectInfoData
+{
+    [JsonPropertyName("status_code")]
+    public int StatusCode { get; set; }
+
+    [JsonPropertyName("url")]
+    public string? Url { get; set; }
+
+    [JsonPropertyName("headers")]
+    public Dictionary<string, string>? Headers { get; set; }
+}
+
 internal class ResponseData
 {
     [JsonPropertyName("status_code")]
@@ -742,6 +821,12 @@ internal class ResponseData
 
     [JsonPropertyName("protocol")]
     public string? Protocol { get; set; }
+
+    [JsonPropertyName("cookies")]
+    public List<CookieData>? Cookies { get; set; }
+
+    [JsonPropertyName("history")]
+    public List<RedirectInfoData>? History { get; set; }
 }
 
 internal class ErrorResponse
@@ -754,6 +839,10 @@ internal class ErrorResponse
 [JsonSerializable(typeof(RequestConfig))]
 [JsonSerializable(typeof(ResponseData))]
 [JsonSerializable(typeof(ErrorResponse))]
+[JsonSerializable(typeof(CookieData))]
+[JsonSerializable(typeof(RedirectInfoData))]
+[JsonSerializable(typeof(List<CookieData>))]
+[JsonSerializable(typeof(List<RedirectInfoData>))]
 [JsonSerializable(typeof(Dictionary<string, string>))]
 [JsonSerializable(typeof(string[]))]
 internal partial class JsonContext : JsonSerializerContext { }

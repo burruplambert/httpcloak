@@ -106,11 +106,11 @@ func NewSession(id string, config *protocol.SessionConfig) *Session {
 
 // Request executes an HTTP request within this session
 func (s *Session) Request(ctx context.Context, req *transport.Request) (*transport.Response, error) {
-	return s.requestWithRedirects(ctx, req, 0)
+	return s.requestWithRedirects(ctx, req, 0, nil)
 }
 
 // requestWithRedirects handles the actual request with redirect following
-func (s *Session) requestWithRedirects(ctx context.Context, req *transport.Request, redirectCount int) (*transport.Response, error) {
+func (s *Session) requestWithRedirects(ctx context.Context, req *transport.Request, redirectCount int, history []*transport.RedirectInfo) (*transport.Response, error) {
 	s.mu.Lock()
 	if !s.active {
 		s.mu.Unlock()
@@ -265,8 +265,18 @@ func (s *Session) requestWithRedirects(ctx context.Context, req *transport.Reque
 				location = resp.Headers["location"]
 			}
 			if location == "" {
-				return resp, nil // No Location header, return as-is
+				// No Location header, set history and return as-is
+				resp.History = history
+				return resp, nil
 			}
+
+			// Add current response to redirect history
+			redirectInfo := &transport.RedirectInfo{
+				StatusCode: resp.StatusCode,
+				URL:        req.URL,
+				Headers:    resp.Headers,
+			}
+			history = append(history, redirectInfo)
 
 			// Resolve relative URL
 			redirectURL := resolveURL(req.URL, location)
@@ -302,11 +312,13 @@ func (s *Session) requestWithRedirects(ctx context.Context, req *transport.Reque
 				newReq.Body = req.Body
 			}
 
-			// Follow redirect
-			return s.requestWithRedirects(ctx, newReq, redirectCount+1)
+			// Follow redirect with accumulated history
+			return s.requestWithRedirects(ctx, newReq, redirectCount+1, history)
 		}
 	}
 
+	// Set history on final response
+	resp.History = history
 	return resp, nil
 }
 

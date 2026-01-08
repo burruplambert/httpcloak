@@ -95,6 +95,44 @@ const HTTP_STATUS_PHRASES = {
 };
 
 /**
+ * Cookie object from Set-Cookie header
+ */
+class Cookie {
+  /**
+   * @param {string} name - Cookie name
+   * @param {string} value - Cookie value
+   */
+  constructor(name, value) {
+    this.name = name;
+    this.value = value;
+  }
+
+  toString() {
+    return `Cookie(name=${this.name}, value=${this.value})`;
+  }
+}
+
+/**
+ * Redirect info from history
+ */
+class RedirectInfo {
+  /**
+   * @param {number} statusCode - HTTP status code
+   * @param {string} url - Request URL
+   * @param {Object} headers - Response headers
+   */
+  constructor(statusCode, url, headers) {
+    this.statusCode = statusCode;
+    this.url = url;
+    this.headers = headers || {};
+  }
+
+  toString() {
+    return `RedirectInfo(statusCode=${this.statusCode}, url=${this.url})`;
+  }
+}
+
+/**
  * Response object returned from HTTP requests
  */
 class Response {
@@ -110,6 +148,26 @@ class Response {
     this.finalUrl = data.final_url || "";
     this.protocol = data.protocol || "";
     this.elapsed = elapsed; // milliseconds
+
+    // Parse cookies from response
+    this._cookies = (data.cookies || []).map(c => new Cookie(c.name || "", c.value || ""));
+
+    // Parse redirect history
+    this._history = (data.history || []).map(h => new RedirectInfo(
+      h.status_code || 0,
+      h.url || "",
+      h.headers || {}
+    ));
+  }
+
+  /** Cookies set by this response */
+  get cookies() {
+    return this._cookies;
+  }
+
+  /** Redirect history (list of RedirectInfo objects) */
+  get history() {
+    return this._history;
   }
 
   /** Response body as string */
@@ -1316,6 +1374,8 @@ module.exports = {
   // Classes
   Session,
   Response,
+  Cookie,
+  RedirectInfo,
   HTTPCloakError,
   // Presets
   Preset,

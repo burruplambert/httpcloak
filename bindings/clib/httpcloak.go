@@ -48,6 +48,19 @@ type RequestConfig struct {
 	Timeout int               `json:"timeout,omitempty"` // seconds
 }
 
+// Cookie represents a parsed cookie from Set-Cookie header
+type Cookie struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+// RedirectInfo contains information about a redirect response
+type RedirectInfo struct {
+	StatusCode int               `json:"status_code"`
+	URL        string            `json:"url"`
+	Headers    map[string]string `json:"headers"`
+}
+
 // Response for JSON serialization
 type ResponseData struct {
 	StatusCode int               `json:"status_code"`
@@ -55,6 +68,8 @@ type ResponseData struct {
 	Body       string            `json:"body"`
 	FinalURL   string            `json:"final_url"`
 	Protocol   string            `json:"protocol"`
+	Cookies    []Cookie          `json:"cookies"`
+	History    []RedirectInfo    `json:"history"`
 }
 
 // Session configuration
@@ -86,13 +101,110 @@ func makeErrorJSON(err error) *C.char {
 	return C.CString(string(data))
 }
 
+// parseSetCookieHeaders parses Set-Cookie headers into Cookie structs
+func parseSetCookieHeaders(headers map[string]string) []Cookie {
+	var cookies []Cookie
+
+	// Try both cases for Set-Cookie header
+	setCookie, exists := headers["set-cookie"]
+	if !exists {
+		setCookie, exists = headers["Set-Cookie"]
+	}
+	if !exists || setCookie == "" {
+		return cookies
+	}
+
+	// Set-Cookie headers are joined with newlines (one cookie per line)
+	lines := splitByNewline(setCookie)
+	for _, line := range lines {
+		line = trim(line)
+		if line == "" {
+			continue
+		}
+
+		// Get name=value before any semicolon (attributes like path, expires, etc.)
+		semicolonIdx := indexOf(line, ";")
+		if semicolonIdx != -1 {
+			line = line[:semicolonIdx]
+		}
+
+		eqIdx := indexOf(line, "=")
+		if eqIdx != -1 {
+			name := trim(line[:eqIdx])
+			value := trim(line[eqIdx+1:])
+			if name != "" {
+				cookies = append(cookies, Cookie{Name: name, Value: value})
+			}
+		}
+	}
+
+	return cookies
+}
+
+// Helper functions for cookie parsing
+func splitByNewline(s string) []string {
+	var result []string
+	var current string
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\n' {
+			result = append(result, current)
+			current = ""
+		} else if s[i] != '\r' {
+			current += string(s[i])
+		}
+	}
+	if current != "" {
+		result = append(result, current)
+	}
+	return result
+}
+
+func indexOf(s, substr string) int {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return i
+		}
+	}
+	return -1
+}
+
+func trim(s string) string {
+	start := 0
+	end := len(s)
+	for start < end && (s[start] == ' ' || s[start] == '\t') {
+		start++
+	}
+	for end > start && (s[end-1] == ' ' || s[end-1] == '\t') {
+		end--
+	}
+	return s[start:end]
+}
+
 func makeResponseJSON(resp *httpcloak.Response) *C.char {
+	// Parse cookies from Set-Cookie header
+	cookies := parseSetCookieHeaders(resp.Headers)
+
+	// Convert redirect history
+	var history []RedirectInfo
+	if len(resp.History) > 0 {
+		history = make([]RedirectInfo, len(resp.History))
+		for i, h := range resp.History {
+			history[i] = RedirectInfo{
+				StatusCode: h.StatusCode,
+				URL:        h.URL,
+				Headers:    h.Headers,
+			}
+		}
+	}
+
 	data := ResponseData{
 		StatusCode: resp.StatusCode,
 		Headers:    resp.Headers,
 		Body:       string(resp.Body),
 		FinalURL:   resp.FinalURL,
 		Protocol:   resp.Protocol,
+		Cookies:    cookies,
+		History:    history,
 	}
 	jsonData, _ := json.Marshal(data)
 	return C.CString(string(jsonData))
@@ -407,12 +519,30 @@ func httpcloak_get_async(handle C.int64_t, url *C.char, headersJSON *C.char, cal
 			return
 		}
 
+		// Parse cookies from Set-Cookie header
+		cookies := parseSetCookieHeaders(resp.Headers)
+
+		// Convert redirect history
+		var history []RedirectInfo
+		if len(resp.History) > 0 {
+			history = make([]RedirectInfo, len(resp.History))
+			for i, h := range resp.History {
+				history[i] = RedirectInfo{
+					StatusCode: h.StatusCode,
+					URL:        h.URL,
+					Headers:    h.Headers,
+				}
+			}
+		}
+
 		data := ResponseData{
 			StatusCode: resp.StatusCode,
 			Headers:    resp.Headers,
 			Body:       string(resp.Body),
 			FinalURL:   resp.FinalURL,
 			Protocol:   resp.Protocol,
+			Cookies:    cookies,
+			History:    history,
 		}
 		jsonData, _ := json.Marshal(data)
 		invokeCallback(int64(callbackID), string(jsonData), "")
@@ -458,12 +588,30 @@ func httpcloak_post_async(handle C.int64_t, url *C.char, body *C.char, headersJS
 			return
 		}
 
+		// Parse cookies from Set-Cookie header
+		cookies := parseSetCookieHeaders(resp.Headers)
+
+		// Convert redirect history
+		var history []RedirectInfo
+		if len(resp.History) > 0 {
+			history = make([]RedirectInfo, len(resp.History))
+			for i, h := range resp.History {
+				history[i] = RedirectInfo{
+					StatusCode: h.StatusCode,
+					URL:        h.URL,
+					Headers:    h.Headers,
+				}
+			}
+		}
+
 		data := ResponseData{
 			StatusCode: resp.StatusCode,
 			Headers:    resp.Headers,
 			Body:       string(resp.Body),
 			FinalURL:   resp.FinalURL,
 			Protocol:   resp.Protocol,
+			Cookies:    cookies,
+			History:    history,
 		}
 		jsonData, _ := json.Marshal(data)
 		invokeCallback(int64(callbackID), string(jsonData), "")
@@ -512,12 +660,30 @@ func httpcloak_request_async(handle C.int64_t, requestJSON *C.char, callbackID C
 			return
 		}
 
+		// Parse cookies from Set-Cookie header
+		cookies := parseSetCookieHeaders(resp.Headers)
+
+		// Convert redirect history
+		var history []RedirectInfo
+		if len(resp.History) > 0 {
+			history = make([]RedirectInfo, len(resp.History))
+			for i, h := range resp.History {
+				history[i] = RedirectInfo{
+					StatusCode: h.StatusCode,
+					URL:        h.URL,
+					Headers:    h.Headers,
+				}
+			}
+		}
+
 		data := ResponseData{
 			StatusCode: resp.StatusCode,
 			Headers:    resp.Headers,
 			Body:       string(resp.Body),
 			FinalURL:   resp.FinalURL,
 			Protocol:   resp.Protocol,
+			Cookies:    cookies,
+			History:    history,
 		}
 		jsonData, _ := json.Marshal(data)
 		invokeCallback(int64(callbackID), string(jsonData), "")

@@ -65,6 +65,13 @@ type Request struct {
 	Timeout time.Duration
 }
 
+// RedirectInfo contains information about a redirect response
+type RedirectInfo struct {
+	StatusCode int
+	URL        string
+	Headers    map[string]string
+}
+
 // Response represents an HTTP response
 type Response struct {
 	StatusCode int
@@ -73,6 +80,7 @@ type Response struct {
 	FinalURL   string
 	Timing     *protocol.Timing
 	Protocol   string // "h1", "h2", or "h3"
+	History    []*RedirectInfo
 }
 
 // Transport is a unified HTTP transport supporting HTTP/1.1, HTTP/2, and HTTP/3
