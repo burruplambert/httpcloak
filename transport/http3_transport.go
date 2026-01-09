@@ -9,7 +9,9 @@ import (
 	"math/rand"
 	"net"
 	http "github.com/sardanioss/http"
+	"net/url"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -17,6 +19,7 @@ import (
 	"github.com/sardanioss/quic-go/http3"
 	"github.com/sardanioss/httpcloak/dns"
 	"github.com/sardanioss/httpcloak/fingerprint"
+	"github.com/sardanioss/httpcloak/proxy"
 	utls "github.com/sardanioss/utls"
 )
 
@@ -103,6 +106,11 @@ type HTTP3Transport struct {
 	// Configuration
 	quicConfig *quic.Config
 	tlsConfig  *tls.Config
+
+	// Proxy support for SOCKS5 UDP relay
+	proxyConfig  *ProxyConfig
+	socks5Conn   *proxy.SOCKS5UDPConn
+	quicTransport *quic.Transport
 }
 
 // NewHTTP3Transport creates a new HTTP/3 transport
@@ -193,6 +201,255 @@ func NewHTTP3Transport(preset *fingerprint.Preset, dnsCache *dns.Cache) *HTTP3Tr
 	}
 
 	return t
+}
+
+// NewHTTP3TransportWithProxy creates a new HTTP/3 transport with SOCKS5 proxy support
+// Only SOCKS5 proxies support UDP relay needed for QUIC/HTTP3
+func NewHTTP3TransportWithProxy(preset *fingerprint.Preset, dnsCache *dns.Cache, proxyConfig *ProxyConfig) (*HTTP3Transport, error) {
+	// Validate proxy scheme - only SOCKS5 works for UDP/QUIC
+	if proxyConfig != nil && proxyConfig.URL != "" {
+		proxyURL, err := url.Parse(proxyConfig.URL)
+		if err != nil {
+			return nil, fmt.Errorf("invalid proxy URL: %w", err)
+		}
+		if proxyURL.Scheme != "socks5" && proxyURL.Scheme != "socks5h" {
+			return nil, fmt.Errorf("HTTP/3 requires SOCKS5 proxy for UDP relay, got: %s", proxyURL.Scheme)
+		}
+	}
+
+	// Generate shuffle seed for session-consistent ordering
+	var seedBytes [8]byte
+	crand.Read(seedBytes[:])
+	shuffleSeed := int64(binary.LittleEndian.Uint64(seedBytes[:]))
+
+	t := &HTTP3Transport{
+		preset:       preset,
+		dnsCache:     dnsCache,
+		sessionCache: tls.NewLRUClientSessionCache(64),
+		shuffleSeed:  shuffleSeed,
+		proxyConfig:  proxyConfig,
+	}
+
+	// Create TLS config for QUIC
+	t.tlsConfig = &tls.Config{
+		NextProtos:         []string{http3.NextProtoH3},
+		MinVersion:         tls.VersionTLS13,
+		InsecureSkipVerify: false,
+		ClientSessionCache: t.sessionCache,
+	}
+
+	// Get ClientHelloID for TLS fingerprinting
+	var clientHelloID *utls.ClientHelloID
+	if preset.QUICClientHelloID.Client != "" {
+		clientHelloID = &preset.QUICClientHelloID
+	} else if preset.ClientHelloID.Client != "" {
+		clientHelloID = &preset.ClientHelloID
+	}
+
+	// Cache ClientHelloSpec for consistent fingerprint
+	if clientHelloID != nil {
+		spec, err := utls.UTLSIdToSpecWithSeed(*clientHelloID, shuffleSeed)
+		if err == nil {
+			t.cachedClientHelloSpec = &spec
+		}
+	}
+
+	// Create QUIC config
+	t.quicConfig = &quic.Config{
+		MaxIdleTimeout:                30 * time.Second,
+		KeepAlivePeriod:               30 * time.Second,
+		MaxIncomingStreams:            100,
+		MaxIncomingUniStreams:         103,
+		Allow0RTT:                     true,
+		EnableDatagrams:               true,
+		InitialPacketSize:             1250,
+		DisablePathMTUDiscovery:       false,
+		DisableClientHelloScrambling:  true,
+		ChromeStyleInitialPackets:     true,
+		ClientHelloID:                 clientHelloID,
+		CachedClientHelloSpec:         t.cachedClientHelloSpec,
+		TransportParameterOrder:       quic.TransportParameterOrderChrome,
+		TransportParameterShuffleSeed: shuffleSeed,
+	}
+
+	// Set up SOCKS5 UDP relay if proxy is configured
+	if proxyConfig != nil && proxyConfig.URL != "" {
+		socks5Conn, err := proxy.NewSOCKS5UDPConn(proxyConfig.URL)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create SOCKS5 UDP connection: %w", err)
+		}
+
+		// Establish UDP ASSOCIATE (with 15 second timeout)
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+
+		if err := socks5Conn.Establish(ctx); err != nil {
+			socks5Conn.Close()
+			return nil, fmt.Errorf("SOCKS5 UDP ASSOCIATE failed: %w", err)
+		}
+
+		t.socks5Conn = socks5Conn
+
+		// Create quic.Transport with our SOCKS5 PacketConn
+		t.quicTransport = &quic.Transport{
+			Conn: socks5Conn,
+		}
+	}
+
+	// Generate GREASE settings
+	greaseSettingID := generateGREASESettingID()
+	greaseSettingValue := uint64(1 + rand.Uint32()%(1<<32-1))
+
+	additionalSettings := map[uint64]uint64{
+		settingQPACKMaxTableCapacity: 65536,
+		settingQPACKBlockedStreams:   100,
+		greaseSettingID:              greaseSettingValue,
+	}
+
+	// Create HTTP/3 transport with appropriate dial function
+	if t.socks5Conn != nil {
+		// Use proxy-aware dial function
+		t.transport = &http3.Transport{
+			TLSClientConfig:        t.tlsConfig,
+			QUICConfig:             t.quicConfig,
+			Dial:                   t.dialQUICWithProxy,
+			EnableDatagrams:        true,
+			AdditionalSettings:     additionalSettings,
+			MaxResponseHeaderBytes: 262144,
+			SendGreaseFrames:       true,
+		}
+	} else {
+		// Use standard dial function
+		t.transport = &http3.Transport{
+			TLSClientConfig:        t.tlsConfig,
+			QUICConfig:             t.quicConfig,
+			Dial:                   t.dialQUIC,
+			EnableDatagrams:        true,
+			AdditionalSettings:     additionalSettings,
+			MaxResponseHeaderBytes: 262144,
+			SendGreaseFrames:       true,
+		}
+	}
+
+	return t, nil
+}
+
+// dialQUICWithProxy dials a QUIC connection through SOCKS5 proxy
+// Uses Happy Eyeballs-style racing between IPv4 and IPv6 addresses
+func (t *HTTP3Transport) dialQUICWithProxy(ctx context.Context, addr string, tlsCfg *tls.Config, cfg *quic.Config) (*quic.Conn, error) {
+	t.mu.Lock()
+	t.dialCount++
+	t.mu.Unlock()
+
+	// Parse host:port
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid address: %w", err)
+	}
+
+	// Resolve DNS to get all addresses
+	ips, err := t.dnsCache.Resolve(ctx, host)
+	if err != nil {
+		return nil, fmt.Errorf("DNS resolution failed: %w", err)
+	}
+	if len(ips) == 0 {
+		return nil, fmt.Errorf("no IP addresses found for %s", host)
+	}
+
+	// Convert port to int
+	portInt, err := strconv.Atoi(port)
+	if err != nil {
+		return nil, fmt.Errorf("invalid port: %w", err)
+	}
+
+	// Separate IPv4 and IPv6 addresses
+	var ipv4Addrs, ipv6Addrs []*net.UDPAddr
+	for _, ip := range ips {
+		if ip.To4() != nil {
+			ipv4Addrs = append(ipv4Addrs, &net.UDPAddr{IP: ip.To4(), Port: portInt})
+		} else if ip.To16() != nil {
+			ipv6Addrs = append(ipv6Addrs, &net.UDPAddr{IP: ip, Port: portInt})
+		}
+	}
+
+	// Set ServerName in TLS config
+	tlsCfgCopy := tlsCfg.Clone()
+	tlsCfgCopy.ServerName = host
+
+	// Clone QUIC config
+	cfgCopy := cfg.Clone()
+
+	// Fetch ECH configs after racing succeeds to avoid state issues
+	// ECH config is applied per-address-family to prevent cross-contamination
+
+	// Race IPv6 and IPv4 connections (Happy Eyeballs style)
+	// Try IPv6 first, then IPv4 after short timeout
+	return t.raceQUICDial(ctx, host, ipv6Addrs, ipv4Addrs, tlsCfgCopy, cfgCopy)
+}
+
+// raceQUICDial implements Happy Eyeballs-style connection racing
+// Tries IPv6 first with a short timeout, then falls back to IPv4 if needed
+func (t *HTTP3Transport) raceQUICDial(ctx context.Context, host string, ipv6Addrs, ipv4Addrs []*net.UDPAddr, tlsCfg *tls.Config, cfg *quic.Config) (*quic.Conn, error) {
+	// If only one address family available, just dial it directly
+	if len(ipv6Addrs) == 0 && len(ipv4Addrs) == 0 {
+		return nil, fmt.Errorf("no addresses to dial")
+	}
+
+	// Fetch ECH configs (used for both attempts)
+	echConfigList, _ := dns.FetchECHConfigs(ctx, host)
+
+	// Helper to create fresh config with ECH
+	// Important: CachedClientHelloSpec may have state that corrupts after failed dials,
+	// so we clear it for racing attempts and rely on ClientHelloID instead
+	makeConfig := func() *quic.Config {
+		cfgCopy := cfg.Clone()
+		cfgCopy.CachedClientHelloSpec = nil // Fresh TLS state for each attempt
+		if echConfigList != nil {
+			cfgCopy.ECHConfigList = echConfigList
+		}
+		return cfgCopy
+	}
+
+	if len(ipv6Addrs) == 0 {
+		return t.dialFirstSuccessful(ctx, ipv4Addrs, tlsCfg, makeConfig())
+	}
+	if len(ipv4Addrs) == 0 {
+		return t.dialFirstSuccessful(ctx, ipv6Addrs, tlsCfg, makeConfig())
+	}
+
+	// Try IPv6 first with a short timeout (Happy Eyeballs style)
+	// If IPv6 fails or times out quickly, fall back to IPv4
+	ipv6Timeout := 2 * time.Second // Give IPv6 a reasonable chance
+	ipv6Ctx, ipv6Cancel := context.WithTimeout(ctx, ipv6Timeout)
+
+	conn, _ := t.dialFirstSuccessful(ipv6Ctx, ipv6Addrs, tlsCfg, makeConfig())
+	ipv6Cancel()
+
+	if conn != nil {
+		return conn, nil
+	}
+
+	// IPv6 failed, try IPv4 with fresh config
+	return t.dialFirstSuccessful(ctx, ipv4Addrs, tlsCfg, makeConfig())
+}
+
+// dialFirstSuccessful tries each address in order until one succeeds
+func (t *HTTP3Transport) dialFirstSuccessful(ctx context.Context, addrs []*net.UDPAddr, tlsCfg *tls.Config, cfg *quic.Config) (*quic.Conn, error) {
+	var lastErr error
+	for _, addr := range addrs {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
+		conn, err := t.quicTransport.Dial(ctx, addr, tlsCfg, cfg)
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+	}
+	return nil, lastErr
 }
 
 // generateGREASESettingID generates a valid GREASE setting ID
@@ -321,7 +578,31 @@ func (t *HTTP3Transport) GetRequestCount() int64 {
 
 // Close shuts down the transport and all connections
 func (t *HTTP3Transport) Close() error {
-	return t.transport.Close()
+	var errs []error
+
+	// Close HTTP/3 transport
+	if err := t.transport.Close(); err != nil {
+		errs = append(errs, err)
+	}
+
+	// Close QUIC transport if using proxy
+	if t.quicTransport != nil {
+		if err := t.quicTransport.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	// Close SOCKS5 UDP connection if using proxy
+	if t.socks5Conn != nil {
+		if err := t.socks5Conn.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	if len(errs) > 0 {
+		return errs[0]
+	}
+	return nil
 }
 
 // Connect establishes a QUIC connection to the host without making a request.

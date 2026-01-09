@@ -556,7 +556,7 @@ using var session = new Session(
 - **Automatic Decompression**: gzip, brotli, zstd
 - **Redirect Following**: Configurable with history
 - **Retry with Backoff**: Exponential backoff with jitter
-- **Proxy Support**: HTTP, HTTPS, SOCKS5
+- **Proxy Support**: HTTP, HTTPS, SOCKS5 (including HTTP/3 over SOCKS5 UDP)
 
 ---
 
@@ -570,6 +570,84 @@ http://user:pass@host:port
 socks5://host:port
 socks5://user:pass@host:port
 ```
+
+### HTTP/3 over SOCKS5
+
+httpcloak supports **HTTP/3 (QUIC) over SOCKS5 proxies** using UDP ASSOCIATE (RFC 1928). This is a unique feature - most libraries only support HTTP/1.1 and HTTP/2 through proxies.
+
+**How it works:**
+- SOCKS5 UDP ASSOCIATE establishes a UDP relay through the proxy
+- QUIC packets are tunneled through the relay
+- Happy Eyeballs racing tries IPv6 first, falls back to IPv4
+
+**Requirements:**
+- SOCKS5 proxy must support UDP ASSOCIATE command
+- Most residential/ISP proxies support this
+
+#### Go Example
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+
+    "github.com/sardanioss/httpcloak/client"
+)
+
+func main() {
+    // Create client with SOCKS5 proxy - HTTP/3 works automatically
+    c := client.NewClient("chrome-143",
+        client.WithProxy("socks5://user:pass@proxy.example.com:1080"),
+    )
+    defer c.Close()
+
+    resp, err := c.Get(context.Background(), "https://www.cloudflare.com/cdn-cgi/trace", nil)
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    fmt.Printf("Protocol: %s\n", resp.Protocol) // "h3" if proxy supports UDP
+    fmt.Println(resp.Text())
+}
+```
+
+#### Python Example
+
+```python
+import httpcloak
+
+# SOCKS5 proxy with HTTP/3 support
+session = httpcloak.Session(
+    preset="chrome-143",
+    proxy="socks5://user:pass@proxy.example.com:1080"
+)
+
+r = session.get("https://www.cloudflare.com/cdn-cgi/trace")
+print(f"Protocol: {r.protocol}")  # "h3" if proxy supports UDP
+print(r.text)
+```
+
+#### Node.js Example
+
+```javascript
+import { Session } from "httpcloak";
+
+const session = new Session({
+    preset: "chrome-143",
+    proxy: "socks5://user:pass@proxy.example.com:1080"
+});
+
+const r = await session.get("https://www.cloudflare.com/cdn-cgi/trace");
+console.log(`Protocol: ${r.protocol}`);  // "h3" if proxy supports UDP
+console.log(r.text);
+
+session.close();
+```
+
+**Note:** If the SOCKS5 proxy doesn't support UDP ASSOCIATE, httpcloak automatically falls back to HTTP/2 over TCP.
 
 ---
 

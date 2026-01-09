@@ -121,10 +121,25 @@ func NewTransportWithProxy(presetName string, proxy *ProxyConfig) *Transport {
 		proxy:           proxy,
 	}
 
-	// Create all transports
+	// Create HTTP/1.1 and HTTP/2 transports
 	t.h1Transport = NewHTTP1TransportWithProxy(preset, dnsCache, proxy)
 	t.h2Transport = NewHTTP2TransportWithProxy(preset, dnsCache, proxy)
-	t.h3Transport = NewHTTP3Transport(preset, dnsCache) // HTTP/3 doesn't support traditional proxies
+
+	// Create HTTP/3 transport - with SOCKS5 proxy support if applicable
+	if proxy != nil && proxy.URL != "" && isSOCKS5Proxy(proxy.URL) {
+		// SOCKS5 supports UDP relay for HTTP/3
+		h3Transport, err := NewHTTP3TransportWithProxy(preset, dnsCache, proxy)
+		if err != nil {
+			// Log error but continue without HTTP/3 proxy support
+			// HTTP/3 will work for direct connections, just not through proxy
+			t.h3Transport = NewHTTP3Transport(preset, dnsCache)
+		} else {
+			t.h3Transport = h3Transport
+		}
+	} else {
+		// No proxy or HTTP proxy - HTTP/3 only works without proxy
+		t.h3Transport = NewHTTP3Transport(preset, dnsCache)
+	}
 
 	return t
 }
@@ -148,11 +163,24 @@ func (t *Transport) SetProxy(proxy *ProxyConfig) {
 	// Close existing transports
 	t.h1Transport.Close()
 	t.h2Transport.Close()
+	t.h3Transport.Close()
 
-	// Recreate with new proxy config
+	// Recreate HTTP/1.1 and HTTP/2 with new proxy config
 	t.h1Transport = NewHTTP1TransportWithProxy(t.preset, t.dnsCache, proxy)
 	t.h2Transport = NewHTTP2TransportWithProxy(t.preset, t.dnsCache, proxy)
-	// HTTP/3 doesn't support traditional proxies
+
+	// Recreate HTTP/3 - with SOCKS5 proxy support if applicable
+	if proxy != nil && proxy.URL != "" && isSOCKS5Proxy(proxy.URL) {
+		h3Transport, err := NewHTTP3TransportWithProxy(t.preset, t.dnsCache, proxy)
+		if err != nil {
+			// Fall back to non-proxied HTTP/3
+			t.h3Transport = NewHTTP3Transport(t.preset, t.dnsCache)
+		} else {
+			t.h3Transport = h3Transport
+		}
+	} else {
+		t.h3Transport = NewHTTP3Transport(t.preset, t.dnsCache)
+	}
 }
 
 // SetPreset changes the fingerprint preset
@@ -164,10 +192,30 @@ func (t *Transport) SetPreset(presetName string) {
 	t.h2Transport.Close()
 	t.h3Transport.Close()
 
-	// Recreate with new preset
+	// Recreate HTTP/1.1 and HTTP/2 with new preset
 	t.h1Transport = NewHTTP1TransportWithProxy(t.preset, t.dnsCache, t.proxy)
 	t.h2Transport = NewHTTP2TransportWithProxy(t.preset, t.dnsCache, t.proxy)
-	t.h3Transport = NewHTTP3Transport(t.preset, t.dnsCache)
+
+	// Recreate HTTP/3 - with SOCKS5 proxy support if applicable
+	if t.proxy != nil && t.proxy.URL != "" && isSOCKS5Proxy(t.proxy.URL) {
+		h3Transport, err := NewHTTP3TransportWithProxy(t.preset, t.dnsCache, t.proxy)
+		if err != nil {
+			t.h3Transport = NewHTTP3Transport(t.preset, t.dnsCache)
+		} else {
+			t.h3Transport = h3Transport
+		}
+	} else {
+		t.h3Transport = NewHTTP3Transport(t.preset, t.dnsCache)
+	}
+}
+
+// isSOCKS5Proxy checks if the proxy URL is a SOCKS5 proxy
+func isSOCKS5Proxy(proxyURL string) bool {
+	parsed, err := url.Parse(proxyURL)
+	if err != nil {
+		return false
+	}
+	return parsed.Scheme == "socks5" || parsed.Scheme == "socks5h"
 }
 
 // SetTimeout sets the request timeout
