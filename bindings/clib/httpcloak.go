@@ -332,29 +332,45 @@ func getSession(handle C.int64_t) *httpcloak.Session {
 // Synchronous Requests
 // ============================================================================
 
+// RequestOptions for httpcloak_get/post JSON parsing
+type RequestOptions struct {
+	Headers map[string]string `json:"headers,omitempty"`
+	Timeout int               `json:"timeout,omitempty"` // milliseconds
+}
+
 //export httpcloak_get
-func httpcloak_get(handle C.int64_t, url *C.char, headersJSON *C.char) *C.char {
+func httpcloak_get(handle C.int64_t, url *C.char, optionsJSON *C.char) *C.char {
 	session := getSession(handle)
 	if session == nil {
 		return makeErrorJSON(ErrInvalidSession)
 	}
 
-	ctx := context.Background()
 	urlStr := C.GoString(url)
 
-	// Parse custom headers if provided
-	var headers map[string]string
-	if headersJSON != nil {
-		jsonStr := C.GoString(headersJSON)
+	// Parse options (headers + timeout) if provided
+	var options RequestOptions
+	if optionsJSON != nil {
+		jsonStr := C.GoString(optionsJSON)
 		if jsonStr != "" {
-			json.Unmarshal([]byte(jsonStr), &headers)
+			json.Unmarshal([]byte(jsonStr), &options)
 		}
 	}
+
+	// Create context with timeout if specified, otherwise use default 30s
+	ctx := context.Background()
+	var cancel context.CancelFunc
+	if options.Timeout > 0 {
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(options.Timeout)*time.Millisecond)
+	} else {
+		// Default 30s timeout to prevent indefinite hangs (especially for MASQUE)
+		ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
+	}
+	defer cancel()
 
 	req := &httpcloak.Request{
 		Method:  "GET",
 		URL:     urlStr,
-		Headers: headers,
+		Headers: options.Headers,
 	}
 
 	resp, err := session.Do(ctx, req)
@@ -366,31 +382,42 @@ func httpcloak_get(handle C.int64_t, url *C.char, headersJSON *C.char) *C.char {
 }
 
 //export httpcloak_post
-func httpcloak_post(handle C.int64_t, url *C.char, body *C.char, headersJSON *C.char) *C.char {
+func httpcloak_post(handle C.int64_t, url *C.char, body *C.char, optionsJSON *C.char) *C.char {
 	session := getSession(handle)
 	if session == nil {
 		return makeErrorJSON(ErrInvalidSession)
 	}
 
-	ctx := context.Background()
 	urlStr := C.GoString(url)
 	bodyStr := ""
 	if body != nil {
 		bodyStr = C.GoString(body)
 	}
 
-	var headers map[string]string
-	if headersJSON != nil {
-		jsonStr := C.GoString(headersJSON)
+	// Parse options (headers + timeout) if provided
+	var options RequestOptions
+	if optionsJSON != nil {
+		jsonStr := C.GoString(optionsJSON)
 		if jsonStr != "" {
-			json.Unmarshal([]byte(jsonStr), &headers)
+			json.Unmarshal([]byte(jsonStr), &options)
 		}
 	}
+
+	// Create context with timeout if specified, otherwise use default 30s
+	ctx := context.Background()
+	var cancel context.CancelFunc
+	if options.Timeout > 0 {
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(options.Timeout)*time.Millisecond)
+	} else {
+		// Default 30s timeout to prevent indefinite hangs (especially for MASQUE)
+		ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
+	}
+	defer cancel()
 
 	req := &httpcloak.Request{
 		Method:  "POST",
 		URL:     urlStr,
-		Headers: headers,
+		Headers: options.Headers,
 		Body:    []byte(bodyStr),
 	}
 
@@ -421,12 +448,16 @@ func httpcloak_request(handle C.int64_t, requestJSON *C.char) *C.char {
 		config.Method = "GET"
 	}
 
+	// Create context with timeout if specified, otherwise use default 30s
 	ctx := context.Background()
+	var cancel context.CancelFunc
 	if config.Timeout > 0 {
-		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, time.Duration(config.Timeout)*time.Second)
-		defer cancel()
+	} else {
+		// Default 30s timeout to prevent indefinite hangs (especially for MASQUE)
+		ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
 	}
+	defer cancel()
 
 	req := &httpcloak.Request{
 		Method:  config.Method,
