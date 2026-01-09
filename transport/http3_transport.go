@@ -676,13 +676,12 @@ func generateGREASESettingID() uint64 {
 	return 0x1f*n + 0x21
 }
 
-// dialQUIC provides DNS resolution and ECH config fetching
+// dialQUIC provides DNS resolution and ECH config fetching with Happy Eyeballs
 // http3.Transport handles connection caching
 func (t *HTTP3Transport) dialQUIC(ctx context.Context, addr string, tlsCfg *tls.Config, cfg *quic.Config) (*quic.Conn, error) {
 	// Track dial calls - each call = new connection
 	t.mu.Lock()
 	t.dialCount++
-	currentDialCount := t.dialCount
 	t.mu.Unlock()
 
 	// Parse host:port
@@ -694,33 +693,42 @@ func (t *HTTP3Transport) dialQUIC(ctx context.Context, addr string, tlsCfg *tls.
 	// Get the connection host (may be different for domain fronting)
 	connectHost := t.getConnectHost(host)
 
-	// Use DNS cache for resolution - resolve the connection host, not request host
-	ip, err := t.dnsCache.ResolveOne(ctx, connectHost)
+	// Resolve DNS to get all addresses - resolve connection host, not request host
+	ips, err := t.dnsCache.Resolve(ctx, connectHost)
 	if err != nil {
 		return nil, fmt.Errorf("DNS resolution failed for %s: %w", connectHost, err)
 	}
+	if len(ips) == 0 {
+		return nil, fmt.Errorf("no IP addresses found for %s", connectHost)
+	}
 
-	// Create new address with resolved IP
-	resolvedAddr := net.JoinHostPort(ip.String(), port)
+	// Convert port to int
+	portInt, err := strconv.Atoi(port)
+	if err != nil {
+		return nil, fmt.Errorf("invalid port: %w", err)
+	}
+
+	// Separate IPv4 and IPv6 addresses
+	var ipv4Addrs, ipv6Addrs []*net.UDPAddr
+	for _, ip := range ips {
+		if ip.To4() != nil {
+			ipv4Addrs = append(ipv4Addrs, &net.UDPAddr{IP: ip.To4(), Port: portInt})
+		} else if ip.To16() != nil {
+			ipv6Addrs = append(ipv6Addrs, &net.UDPAddr{IP: ip, Port: portInt})
+		}
+	}
 
 	// Set ServerName in TLS config - use the request host (SNI), not connection host
 	tlsCfgCopy := tlsCfg.Clone()
 	tlsCfgCopy.ServerName = host
 
-	// Fetch ECH config - use custom config if set, otherwise from target host
-	echConfigList := t.getECHConfig(ctx, host)
-
-	// Clone the QUIC config and add ECH
+	// Clone QUIC config
 	cfgCopy := cfg.Clone()
-	if echConfigList != nil {
-		cfgCopy.ECHConfigList = echConfigList
-	}
 
-	// Log for debugging (this is called only for NEW connections)
-	_ = currentDialCount // Dial #N means this is the Nth new connection
-
-	// Dial QUIC connection - http3.Transport will cache this
-	return quic.DialAddr(ctx, resolvedAddr, tlsCfgCopy, cfgCopy)
+	// Race IPv6 and IPv4 connections (Happy Eyeballs style)
+	// Try IPv6 first, then IPv4 after short timeout
+	// Pass request host for ECH config fetching
+	return t.raceQUICDial(ctx, host, ipv6Addrs, ipv4Addrs, tlsCfgCopy, cfgCopy)
 }
 
 // RoundTrip implements http.RoundTripper
