@@ -33,6 +33,51 @@ const (
 	ProtocolHTTP3
 )
 
+// Buffer pools for high-performance body reading
+// Tiered pools minimize memory waste for different response sizes
+var (
+	// Pool for bodies up to 1MB
+	bodyPool1MB = sync.Pool{
+		New: func() interface{} {
+			buf := make([]byte, 1*1024*1024)
+			return &buf
+		},
+	}
+	// Pool for bodies up to 10MB
+	bodyPool10MB = sync.Pool{
+		New: func() interface{} {
+			buf := make([]byte, 10*1024*1024)
+			return &buf
+		},
+	}
+	// Pool for bodies up to 100MB
+	bodyPool100MB = sync.Pool{
+		New: func() interface{} {
+			buf := make([]byte, 100*1024*1024)
+			return &buf
+		},
+	}
+)
+
+// getPooledBuffer gets a buffer from the appropriate pool based on size
+func getPooledBuffer(size int64) (*[]byte, func()) {
+	if size <= 1*1024*1024 {
+		buf := bodyPool1MB.Get().(*[]byte)
+		return buf, func() { bodyPool1MB.Put(buf) }
+	}
+	if size <= 10*1024*1024 {
+		buf := bodyPool10MB.Get().(*[]byte)
+		return buf, func() { bodyPool10MB.Put(buf) }
+	}
+	if size <= 100*1024*1024 {
+		buf := bodyPool100MB.Get().(*[]byte)
+		return buf, func() { bodyPool100MB.Put(buf) }
+	}
+	// For very large bodies, allocate directly (rare case)
+	buf := make([]byte, size)
+	return &buf, func() {} // No-op release for non-pooled buffers
+}
+
 // String returns the string representation of the protocol
 func (p Protocol) String() string {
 	switch p {
@@ -79,11 +124,12 @@ type TransportConfig struct {
 
 // Request represents an HTTP request
 type Request struct {
-	Method  string
-	URL     string
-	Headers map[string]string
-	Body    []byte
-	Timeout time.Duration
+	Method     string
+	URL        string
+	Headers    map[string]string
+	Body       []byte
+	BodyReader io.Reader // For streaming uploads - used instead of Body if set
+	Timeout    time.Duration
 }
 
 // RedirectInfo contains information about a redirect response
@@ -102,6 +148,21 @@ type Response struct {
 	Timing     *protocol.Timing
 	Protocol   string // "h1", "h2", or "h3"
 	History    []*RedirectInfo
+
+	// ReleaseBody returns the body buffer to the pool (if pooled)
+	// This is called automatically but can be called early to release memory
+	ReleaseBody func()
+}
+
+// Release returns the response body buffer to the pool for reuse.
+// After calling Release, the Body slice must not be accessed.
+// This is optional - if not called, the buffer will be garbage collected.
+func (r *Response) Release() {
+	if r.ReleaseBody != nil {
+		r.ReleaseBody()
+		r.ReleaseBody = nil
+		r.Body = nil
+	}
 }
 
 // Transport is a unified HTTP transport supporting HTTP/1.1, HTTP/2, and HTTP/3
@@ -387,7 +448,11 @@ func (t *Transport) SetECHConfig(echConfig []byte) {
 	}
 	t.config.ECHConfig = echConfig
 
-	// Update HTTP/3 transport (ECH is only used for QUIC/TLS 1.3)
+	// Update HTTP/2 transport
+	if t.h2Transport != nil {
+		t.h2Transport.SetECHConfig(echConfig)
+	}
+	// Update HTTP/3 transport
 	if t.h3Transport != nil {
 		t.h3Transport.SetECHConfig(echConfig)
 	}
@@ -400,6 +465,10 @@ func (t *Transport) SetECHConfigDomain(domain string) {
 	}
 	t.config.ECHConfigDomain = domain
 
+	// Update HTTP/2 transport
+	if t.h2Transport != nil {
+		t.h2Transport.SetECHConfigDomain(domain)
+	}
 	// Update HTTP/3 transport
 	if t.h3Transport != nil {
 		t.h3Transport.SetECHConfigDomain(domain)
@@ -708,7 +777,9 @@ func (t *Transport) doHTTP1(ctx context.Context, req *Request) (*Response, error
 	}
 
 	var bodyReader io.Reader
-	if len(req.Body) > 0 {
+	if req.BodyReader != nil {
+		bodyReader = req.BodyReader
+	} else if len(req.Body) > 0 {
 		bodyReader = bytes.NewReader(req.Body)
 	}
 
@@ -737,17 +808,23 @@ func (t *Transport) doHTTP1(ctx context.Context, req *Request) (*Response, error
 
 	timing.FirstByte = float64(time.Since(reqStart).Milliseconds())
 
-	// Read response body
-	body, err := io.ReadAll(resp.Body)
+	// Read response body with pre-allocation for known content length
+	body, releaseBody, err := readBodyOptimized(resp.Body, resp.ContentLength)
 	if err != nil {
 		return nil, NewRequestError("read_body", host, port, "h1", err)
 	}
 
 	// Decompress if needed
 	contentEncoding := resp.Header.Get("Content-Encoding")
-	body, err = decompress(body, contentEncoding)
-	if err != nil {
-		return nil, NewRequestError("decompress", host, port, "h1", err)
+	if contentEncoding != "" {
+		decompressed, err := decompress(body, contentEncoding)
+		if err != nil {
+			releaseBody() // Release pooled buffer on error
+			return nil, NewRequestError("decompress", host, port, "h1", err)
+		}
+		releaseBody() // Release original pooled buffer after decompression
+		body = decompressed
+		releaseBody = func() {} // Decompressed buffer is not pooled
 	}
 
 	timing.Total = float64(time.Since(startTime).Milliseconds())
@@ -756,12 +833,13 @@ func (t *Transport) doHTTP1(ctx context.Context, req *Request) (*Response, error
 	headers := buildHeadersMap(resp.Header)
 
 	return &Response{
-		StatusCode: resp.StatusCode,
-		Headers:    headers,
-		Body:       body,
-		FinalURL:   req.URL,
-		Timing:     timing,
-		Protocol:   "h1",
+		StatusCode:  resp.StatusCode,
+		Headers:     headers,
+		Body:        body,
+		FinalURL:    req.URL,
+		Timing:      timing,
+		Protocol:    "h1",
+		ReleaseBody: releaseBody,
 	}, nil
 }
 
@@ -804,7 +882,9 @@ func (t *Transport) doHTTP2(ctx context.Context, req *Request) (*Response, error
 	}
 
 	var bodyReader io.Reader
-	if len(req.Body) > 0 {
+	if req.BodyReader != nil {
+		bodyReader = req.BodyReader
+	} else if len(req.Body) > 0 {
 		bodyReader = bytes.NewReader(req.Body)
 	}
 
@@ -833,17 +913,23 @@ func (t *Transport) doHTTP2(ctx context.Context, req *Request) (*Response, error
 
 	timing.FirstByte = float64(time.Since(reqStart).Milliseconds())
 
-	// Read response body
-	body, err := io.ReadAll(resp.Body)
+	// Read response body with pre-allocation for known content length
+	body, releaseBody, err := readBodyOptimized(resp.Body, resp.ContentLength)
 	if err != nil {
 		return nil, NewRequestError("read_body", host, port, "h2", err)
 	}
 
 	// Decompress if needed
 	contentEncoding := resp.Header.Get("Content-Encoding")
-	body, err = decompress(body, contentEncoding)
-	if err != nil {
-		return nil, NewRequestError("decompress", host, port, "h2", err)
+	if contentEncoding != "" {
+		decompressed, err := decompress(body, contentEncoding)
+		if err != nil {
+			releaseBody()
+			return nil, NewRequestError("decompress", host, port, "h2", err)
+		}
+		releaseBody()
+		body = decompressed
+		releaseBody = func() {}
 	}
 
 	timing.Total = float64(time.Since(startTime).Milliseconds())
@@ -867,12 +953,13 @@ func (t *Transport) doHTTP2(ctx context.Context, req *Request) (*Response, error
 	headers := buildHeadersMap(resp.Header)
 
 	return &Response{
-		StatusCode: resp.StatusCode,
-		Headers:    headers,
-		Body:       body,
-		FinalURL:   req.URL,
-		Timing:     timing,
-		Protocol:   "h2",
+		StatusCode:  resp.StatusCode,
+		Headers:     headers,
+		Body:        body,
+		FinalURL:    req.URL,
+		Timing:      timing,
+		Protocol:    "h2",
+		ReleaseBody: releaseBody,
 	}, nil
 }
 
@@ -915,7 +1002,9 @@ func (t *Transport) doHTTP3(ctx context.Context, req *Request) (*Response, error
 	}
 
 	var bodyReader io.Reader
-	if len(req.Body) > 0 {
+	if req.BodyReader != nil {
+		bodyReader = req.BodyReader
+	} else if len(req.Body) > 0 {
 		bodyReader = bytes.NewReader(req.Body)
 	}
 
@@ -944,17 +1033,23 @@ func (t *Transport) doHTTP3(ctx context.Context, req *Request) (*Response, error
 
 	timing.FirstByte = float64(time.Since(reqStart).Milliseconds())
 
-	// Read response body
-	body, err := io.ReadAll(resp.Body)
+	// Read response body with pre-allocation for known content length
+	body, releaseBody, err := readBodyOptimized(resp.Body, resp.ContentLength)
 	if err != nil {
 		return nil, NewRequestError("read_body", host, port, "h3", err)
 	}
 
 	// Decompress if needed
 	contentEncoding := resp.Header.Get("Content-Encoding")
-	body, err = decompress(body, contentEncoding)
-	if err != nil {
-		return nil, NewRequestError("decompress", host, port, "h3", err)
+	if contentEncoding != "" {
+		decompressed, err := decompress(body, contentEncoding)
+		if err != nil {
+			releaseBody()
+			return nil, NewRequestError("decompress", host, port, "h3", err)
+		}
+		releaseBody()
+		body = decompressed
+		releaseBody = func() {}
 	}
 
 	timing.Total = float64(time.Since(startTime).Milliseconds())
@@ -979,12 +1074,13 @@ func (t *Transport) doHTTP3(ctx context.Context, req *Request) (*Response, error
 	headers := buildHeadersMap(resp.Header)
 
 	return &Response{
-		StatusCode: resp.StatusCode,
-		Headers:    headers,
-		Body:       body,
-		FinalURL:   req.URL,
-		Timing:     timing,
-		Protocol:   "h3",
+		StatusCode:  resp.StatusCode,
+		Headers:     headers,
+		Body:        body,
+		FinalURL:    req.URL,
+		Timing:      timing,
+		Protocol:    "h3",
+		ReleaseBody: releaseBody,
 	}, nil
 }
 
@@ -1054,6 +1150,35 @@ func buildHeadersMap(h http.Header) map[string]string {
 		}
 	}
 	return headers
+}
+
+// readBodyOptimized reads the response body with pooled buffers when Content-Length is known
+// Returns the body slice, a release function to return the buffer to the pool, and any error.
+// The release function should be called when the body is no longer needed to enable buffer reuse.
+func readBodyOptimized(body io.Reader, contentLength int64) ([]byte, func(), error) {
+	if contentLength > 0 {
+		// Use pooled buffer for known sizes up to 100MB
+		if contentLength <= 100*1024*1024 {
+			bufPtr, release := getPooledBuffer(contentLength)
+			buf := (*bufPtr)[:contentLength]
+			n, err := io.ReadFull(body, buf)
+			if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+				release()
+				return nil, nil, err
+			}
+			return buf[:n], release, nil
+		}
+		// For very large bodies, allocate directly
+		buf := make([]byte, contentLength)
+		n, err := io.ReadFull(body, buf)
+		if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+			return nil, nil, err
+		}
+		return buf[:n], func() {}, nil
+	}
+	// Fall back to io.ReadAll for unknown/chunked content length
+	data, err := io.ReadAll(body)
+	return data, func() {}, err
 }
 
 func decompress(data []byte, encoding string) ([]byte, error) {

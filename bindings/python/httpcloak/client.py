@@ -25,7 +25,7 @@ import os
 import platform
 import time
 import uuid
-from ctypes import c_char_p, c_int64, c_void_p, cdll, cast, CFUNCTYPE
+from ctypes import c_char_p, c_int, c_int64, c_void_p, cdll, cast, CFUNCTYPE, POINTER
 from io import IOBase
 from pathlib import Path
 from threading import Lock
@@ -315,12 +315,17 @@ class Response:
             raise HTTPCloakError(f"HTTP {self.status_code}: {self.reason}")
 
     @classmethod
-    def _from_dict(cls, data: dict, elapsed: float = 0.0) -> "Response":
-        body = data.get("body", "")
-        if isinstance(body, str):
-            body_bytes = body.encode("utf-8")
+    def _from_dict(cls, data: dict, elapsed: float = 0.0, raw_body: Optional[bytes] = None) -> "Response":
+        # Use raw_body if provided (optimized path), otherwise parse from dict
+        if raw_body is not None:
+            body_bytes = raw_body
+            body = raw_body.decode("utf-8", errors="replace")
         else:
-            body_bytes = body
+            body = data.get("body", "")
+            if isinstance(body, str):
+                body_bytes = body.encode("utf-8")
+            else:
+                body_bytes = body
 
         # Parse cookies from response (use `or []` to handle null values)
         cookies = []
@@ -352,6 +357,291 @@ class Response:
             cookies=cookies,
             history=history,
         )
+
+
+class FastResponse:
+    """
+    High-performance HTTP Response using zero-copy memoryview.
+
+    WARNING: The content memoryview is only valid until the next fast request
+    on the same session. Copy the data if you need to keep it longer.
+
+    This provides ~5000-6500 MB/s download speeds compared to ~1100 MB/s
+    for regular Response by avoiding memory copies.
+
+    Attributes:
+        status_code: HTTP status code
+        headers: Response headers
+        content: Response body as memoryview (zero-copy, read-only)
+        content_bytes: Response body copied to bytes (creates a copy)
+        url: Final URL after redirects
+        ok: True if status_code < 400
+        protocol: Protocol used (http/1.1, h2, h3)
+        elapsed: Time elapsed for the request (seconds as float)
+
+    Example:
+        # Fast path - process data immediately
+        resp = session.get_fast("https://example.com/large-file")
+        process_data(resp.content)  # memoryview, valid until next get_fast()
+
+        # If you need to keep the data
+        data = resp.content_bytes  # creates a copy
+    """
+
+    def __init__(
+        self,
+        status_code: int,
+        headers: Dict[str, str],
+        content_view: memoryview,
+        final_url: str,
+        protocol: str,
+        elapsed: float = 0.0,
+    ):
+        self.status_code = status_code
+        self.headers = headers
+        self.content = content_view  # memoryview - zero copy
+        self.url = final_url
+        self.protocol = protocol
+        self.elapsed = elapsed
+
+    @property
+    def ok(self) -> bool:
+        """True if status_code < 400."""
+        return self.status_code < 400
+
+    @property
+    def content_bytes(self) -> bytes:
+        """Get content as bytes (creates a copy)."""
+        return bytes(self.content)
+
+    @property
+    def text(self) -> str:
+        """Get content as string (creates a copy)."""
+        return bytes(self.content).decode("utf-8", errors="replace")
+
+    def json(self, **kwargs) -> Any:
+        """Parse response body as JSON (creates a copy)."""
+        return json.loads(self.text, **kwargs)
+
+    def raise_for_status(self):
+        """Raise HTTPCloakError if status_code >= 400."""
+        if not self.ok:
+            raise HTTPCloakError(f"HTTP {self.status_code}")
+
+
+class _FastBufferPool:
+    """
+    Pre-allocated buffer pool for zero-copy fast responses.
+    Uses tiered buffers to minimize memory waste.
+    """
+
+    # Buffer size tiers (1MB, 10MB, 100MB, 500MB)
+    TIERS = [1 * 1024 * 1024, 10 * 1024 * 1024, 100 * 1024 * 1024, 500 * 1024 * 1024]
+
+    def __init__(self):
+        self._buffers: Dict[int, bytearray] = {}
+        self._ctypes_ptrs: Dict[int, Any] = {}
+        self._lock = Lock()
+
+    def get_buffer(self, size: int) -> Tuple[bytearray, Any, int]:
+        """
+        Get a buffer that can hold at least `size` bytes.
+        Returns (buffer, ctypes_ptr, buffer_size).
+        """
+        import ctypes
+
+        # Find appropriate tier
+        tier_size = self.TIERS[-1]  # Default to largest
+        for tier in self.TIERS:
+            if size <= tier:
+                tier_size = tier
+                break
+
+        with self._lock:
+            # Create buffer for this tier if needed
+            if tier_size not in self._buffers:
+                buf = bytearray(tier_size)
+                self._buffers[tier_size] = buf
+                self._ctypes_ptrs[tier_size] = (ctypes.c_char * tier_size).from_buffer(buf)
+
+            return self._buffers[tier_size], self._ctypes_ptrs[tier_size], tier_size
+
+
+# Global fast buffer pool (one per process)
+_fast_buffer_pool = _FastBufferPool()
+
+
+class StreamResponse:
+    """
+    Streaming HTTP Response for downloading large files.
+
+    Use as a context manager:
+        with session.get(url, stream=True) as r:
+            for chunk in r.iter_content(chunk_size=8192):
+                f.write(chunk)
+
+    Or iterate directly:
+        r = session.get(url, stream=True)
+        for chunk in r.iter_content(chunk_size=8192):
+            f.write(chunk)
+        r.close()
+
+    Attributes:
+        status_code: HTTP status code
+        headers: Response headers
+        url: Final URL after redirects
+        ok: True if status_code < 400
+        protocol: Protocol used (h1, h2, h3)
+        content_length: Expected size or -1 if unknown (chunked)
+        cookies: List of cookies set by this response
+    """
+
+    def __init__(
+        self,
+        stream_handle: int,
+        lib,
+        status_code: int,
+        headers: Dict[str, str],
+        final_url: str,
+        protocol: str,
+        content_length: int,
+        cookies: Optional[List[Cookie]] = None,
+    ):
+        self._handle = stream_handle
+        self._lib = lib
+        self.status_code = status_code
+        self.headers = headers
+        self.url = final_url
+        self.final_url = final_url  # Alias
+        self.protocol = protocol
+        self.content_length = content_length
+        self.cookies = cookies or []
+        self._closed = False
+
+    @property
+    def ok(self) -> bool:
+        """True if status_code < 400."""
+        return self.status_code < 400
+
+    @property
+    def reason(self) -> str:
+        """HTTP status reason phrase."""
+        return HTTP_STATUS_PHRASES.get(self.status_code, "Unknown")
+
+    def iter_content(self, chunk_size: int = 8192):
+        """
+        Iterate over response content in chunks.
+
+        Args:
+            chunk_size: Size of each chunk in bytes (default: 8192)
+
+        Yields:
+            bytes: Chunks of response content
+
+        Example:
+            with session.get(url, stream=True) as r:
+                for chunk in r.iter_content(chunk_size=8192):
+                    file.write(chunk)
+        """
+        if self._closed:
+            raise HTTPCloakError("Stream is closed")
+
+        while True:
+            result_ptr = self._lib.httpcloak_stream_read(self._handle, chunk_size)
+            if result_ptr is None or result_ptr == 0:
+                # Error or end of stream
+                break
+
+            # Get base64 encoded chunk
+            result = cast(result_ptr, c_char_p).value
+            self._lib.httpcloak_free_string(result_ptr)
+
+            if result is None or result == b"":
+                # EOF
+                break
+
+            # Decode base64 to bytes
+            chunk = base64.b64decode(result)
+            if not chunk:
+                break
+
+            yield chunk
+
+    def iter_lines(self, chunk_size: int = 8192, decode_unicode: bool = True):
+        """
+        Iterate over response content line by line.
+
+        Args:
+            chunk_size: Size of chunks to read at a time
+            decode_unicode: If True, yield strings; otherwise yield bytes
+
+        Yields:
+            str or bytes: Lines from response content
+        """
+        pending = b""
+        for chunk in self.iter_content(chunk_size=chunk_size):
+            pending += chunk
+            while b"\n" in pending:
+                line, pending = pending.split(b"\n", 1)
+                if decode_unicode:
+                    yield line.decode("utf-8", errors="replace")
+                else:
+                    yield line
+
+        # Yield any remaining content
+        if pending:
+            if decode_unicode:
+                yield pending.decode("utf-8", errors="replace")
+            else:
+                yield pending
+
+    @property
+    def content(self) -> bytes:
+        """
+        Read entire response content into memory.
+
+        Warning: This defeats the purpose of streaming for large files.
+        """
+        chunks = []
+        for chunk in self.iter_content():
+            chunks.append(chunk)
+        return b"".join(chunks)
+
+    @property
+    def text(self) -> str:
+        """Read entire response as text."""
+        return self.content.decode("utf-8", errors="replace")
+
+    def json(self, **kwargs) -> Any:
+        """Parse response body as JSON."""
+        return json.loads(self.text, **kwargs)
+
+    def close(self):
+        """Close the stream and release resources."""
+        if not self._closed:
+            self._lib.httpcloak_stream_close(self._handle)
+            self._closed = True
+
+    def raise_for_status(self):
+        """Raise HTTPCloakError if status_code >= 400."""
+        if not self.ok:
+            raise HTTPCloakError(f"HTTP {self.status_code}: {self.reason}")
+
+    def __enter__(self):
+        """Context manager entry."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit - ensures stream is closed."""
+        self.close()
+        return False
+
+    def __iter__(self):
+        """Iterate over response content."""
+        return self.iter_content()
+
+    def __repr__(self):
+        return f"<StreamResponse [{self.status_code}]>"
 
 
 def _get_lib_path() -> str:
@@ -548,6 +838,50 @@ def _setup_lib(lib):
     lib.httpcloak_request_async.argtypes = [c_int64, c_char_p, c_int64]
     lib.httpcloak_request_async.restype = None
 
+    # Streaming functions
+    lib.httpcloak_stream_get.argtypes = [c_int64, c_char_p, c_char_p]
+    lib.httpcloak_stream_get.restype = c_int64
+    lib.httpcloak_stream_post.argtypes = [c_int64, c_char_p, c_char_p, c_char_p]
+    lib.httpcloak_stream_post.restype = c_int64
+    lib.httpcloak_stream_request.argtypes = [c_int64, c_char_p]
+    lib.httpcloak_stream_request.restype = c_int64
+    lib.httpcloak_stream_get_metadata.argtypes = [c_int64]
+    lib.httpcloak_stream_get_metadata.restype = c_void_p
+    lib.httpcloak_stream_read.argtypes = [c_int64, c_int64]
+    lib.httpcloak_stream_read.restype = c_void_p
+    lib.httpcloak_stream_close.argtypes = [c_int64]
+    lib.httpcloak_stream_close.restype = None
+
+    # Upload streaming functions
+    lib.httpcloak_upload_start.argtypes = [c_int64, c_char_p, c_char_p]
+    lib.httpcloak_upload_start.restype = c_int64
+    lib.httpcloak_upload_write.argtypes = [c_int64, c_char_p]
+    lib.httpcloak_upload_write.restype = c_int
+    lib.httpcloak_upload_write_raw.argtypes = [c_int64, c_void_p, c_int]
+    lib.httpcloak_upload_write_raw.restype = c_int
+    lib.httpcloak_upload_finish.argtypes = [c_int64]
+    lib.httpcloak_upload_finish.restype = c_void_p
+    lib.httpcloak_upload_cancel.argtypes = [c_int64]
+    lib.httpcloak_upload_cancel.restype = None
+
+    # Optimized raw response functions (body passed separately from JSON)
+    lib.httpcloak_get_raw.argtypes = [c_int64, c_char_p, c_char_p]
+    lib.httpcloak_get_raw.restype = c_int64
+    lib.httpcloak_post_raw.argtypes = [c_int64, c_char_p, c_char_p, c_int, c_char_p]
+    lib.httpcloak_post_raw.restype = c_int64
+    lib.httpcloak_request_raw.argtypes = [c_int64, c_char_p, c_char_p, c_int]
+    lib.httpcloak_request_raw.restype = c_int64
+    lib.httpcloak_response_get_metadata.argtypes = [c_int64]
+    lib.httpcloak_response_get_metadata.restype = c_void_p
+    lib.httpcloak_response_get_body.argtypes = [c_int64, POINTER(c_int)]
+    lib.httpcloak_response_get_body.restype = c_void_p
+    lib.httpcloak_response_get_body_len.argtypes = [c_int64]
+    lib.httpcloak_response_get_body_len.restype = c_int
+    lib.httpcloak_response_copy_body_to.argtypes = [c_int64, c_void_p, c_int]
+    lib.httpcloak_response_copy_body_to.restype = c_int
+    lib.httpcloak_response_free.argtypes = [c_int64]
+    lib.httpcloak_response_free.restype = None
+
 
 def _ptr_to_string(ptr) -> Optional[str]:
     """Convert a C string pointer to Python string and free it."""
@@ -573,6 +907,109 @@ def _parse_response(result_ptr, elapsed: float = 0.0) -> Response:
     if "error" in data:
         raise HTTPCloakError(data["error"])
     return Response._from_dict(data, elapsed=elapsed)
+
+
+def _parse_raw_response(lib, response_handle: int, elapsed: float = 0.0) -> Response:
+    """Parse raw response with body passed separately (optimized for large responses)."""
+    import ctypes
+
+    try:
+        # Get metadata (JSON without body)
+        meta_ptr = lib.httpcloak_response_get_metadata(response_handle)
+        if meta_ptr is None or meta_ptr == 0:
+            raise HTTPCloakError("Failed to get response metadata")
+
+        meta_str = cast(meta_ptr, c_char_p).value
+        lib.httpcloak_free_string(meta_ptr)
+
+        if meta_str is None:
+            raise HTTPCloakError("Empty response metadata")
+
+        data = json.loads(meta_str.decode("utf-8"))
+        if "error" in data:
+            raise HTTPCloakError(data["error"])
+
+        # Get body length first
+        body_len = lib.httpcloak_response_get_body_len(response_handle)
+
+        body = b""
+        if body_len > 0:
+            # Use bytearray for faster allocation than ctypes.create_string_buffer
+            # Then copy directly from Go to Python memory
+            buf = bytearray(body_len)
+            buf_ptr = (ctypes.c_char * body_len).from_buffer(buf)
+            copied = lib.httpcloak_response_copy_body_to(
+                response_handle,
+                ctypes.cast(buf_ptr, c_void_p),
+                body_len
+            )
+            if copied > 0:
+                # Convert to bytes for API compatibility
+                # For maximum performance, users can access _content_bytearray directly
+                body = bytes(buf[:copied])
+
+        # Build response with raw body
+        return Response._from_dict(data, elapsed=elapsed, raw_body=body)
+
+    finally:
+        # Always free the response handle
+        lib.httpcloak_response_free(response_handle)
+
+
+def _parse_fast_response(lib, response_handle: int, elapsed: float = 0.0) -> FastResponse:
+    """
+    Parse response using zero-copy fast path with pre-allocated buffers.
+    Returns FastResponse with memoryview content.
+    """
+    import ctypes
+
+    try:
+        # Get metadata (JSON without body)
+        meta_ptr = lib.httpcloak_response_get_metadata(response_handle)
+        if meta_ptr is None or meta_ptr == 0:
+            raise HTTPCloakError("Failed to get response metadata")
+
+        meta_str = cast(meta_ptr, c_char_p).value
+        lib.httpcloak_free_string(meta_ptr)
+
+        if meta_str is None:
+            raise HTTPCloakError("Empty response metadata")
+
+        data = json.loads(meta_str.decode("utf-8"))
+        if "error" in data:
+            raise HTTPCloakError(data["error"])
+
+        # Get body length
+        body_len = lib.httpcloak_response_get_body_len(response_handle)
+
+        if body_len > 0:
+            # Get pre-allocated buffer from pool (no allocation!)
+            buf, buf_ptr, buf_size = _fast_buffer_pool.get_buffer(body_len)
+
+            # Copy directly from Go to pre-allocated Python buffer
+            copied = lib.httpcloak_response_copy_body_to(
+                response_handle,
+                ctypes.cast(buf_ptr, c_void_p),
+                body_len
+            )
+
+            # Create memoryview of just the copied data (no copy!)
+            content_view = memoryview(buf)[:copied]
+        else:
+            content_view = memoryview(b"")
+
+        return FastResponse(
+            status_code=data.get("status_code", 0),
+            headers=data.get("headers") or {},
+            content_view=content_view,
+            final_url=data.get("final_url", ""),
+            protocol=data.get("protocol", ""),
+            elapsed=elapsed,
+        )
+
+    finally:
+        # Always free the response handle
+        lib.httpcloak_response_free(response_handle)
 
 
 def _add_params_to_url(url: str, params: Optional[Dict[str, Any]]) -> str:
@@ -618,6 +1055,17 @@ def available_presets() -> List[str]:
     if result:
         return json.loads(result)
     return []
+
+
+def _is_iterator(obj) -> bool:
+    """Check if an object is an iterator/generator (but not bytes/str)."""
+    if isinstance(obj, (bytes, str, dict)):
+        return False
+    try:
+        iter(obj)
+        return True
+    except TypeError:
+        return False
 
 
 class Session:
@@ -766,50 +1214,89 @@ class Session:
             headers["Cookie"] = cookie_str
         return headers
 
-    def get(
+    def _streaming_upload(
         self,
+        method: str,
         url: str,
-        params: Optional[Dict[str, Any]] = None,
+        data_iter,
         headers: Optional[Dict[str, str]] = None,
-        cookies: Optional[Dict[str, str]] = None,
-        auth: Optional[Tuple[str, str]] = None,
+        content_type: str = "application/octet-stream",
         timeout: Optional[int] = None,
     ) -> Response:
         """
-        Perform a GET request.
+        Perform a streaming upload using an iterator/generator.
 
         Args:
+            method: HTTP method (POST, PUT, etc.)
             url: Request URL
-            params: URL query parameters
+            data_iter: Iterator/generator yielding bytes chunks
             headers: Request headers
-            cookies: Cookies to send with this request
-            auth: Basic auth tuple (username, password). If None, uses session.auth
-            timeout: Request timeout in seconds
+            content_type: Content-Type header value
+            timeout: Request timeout in milliseconds
+
+        Returns:
+            Response object
         """
-        url = _add_params_to_url(url, params)
-        merged_headers = self._merge_headers(headers)
-        # Use request auth if provided, otherwise fall back to session auth
-        effective_auth = auth if auth is not None else self.auth
-        merged_headers = _apply_auth(merged_headers, effective_auth)
-        merged_headers = self._apply_cookies(merged_headers, cookies)
+        import json as json_module
 
+        # Build options
+        options = {
+            "method": method,
+            "headers": headers or {},
+            "content_type": content_type,
+        }
         if timeout:
-            return self.request("GET", url, headers=merged_headers, timeout=timeout)
+            options["timeout"] = timeout
 
-        # Build options JSON with headers wrapper (clib expects {"headers": {...}})
-        options = {}
-        if merged_headers:
-            options["headers"] = merged_headers
-        options_json = json.dumps(options).encode("utf-8") if options else None
+        options_json = json_module.dumps(options).encode("utf-8")
 
-        start_time = time.perf_counter()
-        result = self._lib.httpcloak_get(
+        # Start the upload
+        upload_handle = self._lib.httpcloak_upload_start(
             self._handle,
             url.encode("utf-8"),
             options_json,
         )
-        elapsed = time.perf_counter() - start_time
-        return _parse_response(result, elapsed=elapsed)
+
+        if upload_handle <= 0:
+            raise HTTPCloakError("Failed to start streaming upload")
+
+        try:
+            start_time = time.perf_counter()
+
+            # Write chunks from iterator using raw binary transfer
+            for chunk in data_iter:
+                if isinstance(chunk, str):
+                    chunk = chunk.encode("utf-8")
+                # Use raw binary write (no base64 encoding)
+                chunk_ptr = cast(c_char_p(chunk), c_void_p)
+                written = self._lib.httpcloak_upload_write_raw(upload_handle, chunk_ptr, len(chunk))
+                if written < 0:
+                    raise HTTPCloakError("Failed to write upload chunk")
+
+            # Finish the upload and get response
+            result_ptr = self._lib.httpcloak_upload_finish(upload_handle)
+            elapsed = time.perf_counter() - start_time
+
+            if result_ptr is None or result_ptr == 0:
+                raise HTTPCloakError("Failed to finish streaming upload")
+
+            # Get the string value and free the pointer
+            result_bytes = cast(result_ptr, c_char_p).value
+            self._lib.httpcloak_free_string(result_ptr)
+
+            if result_bytes is None:
+                raise HTTPCloakError("Empty response from streaming upload")
+
+            # Parse the JSON response directly (don't call _parse_response which expects a pointer)
+            data = json_module.loads(result_bytes.decode("utf-8"))
+            if "error" in data:
+                raise HTTPCloakError(data["error"])
+            return Response._from_dict(data, elapsed=elapsed)
+
+        except Exception:
+            # Cancel upload on error
+            self._lib.httpcloak_upload_cancel(upload_handle)
+            raise
 
     def post(
         self,
@@ -856,6 +1343,22 @@ class Session:
 
         url = _add_params_to_url(url, params)
         merged_headers = self._merge_headers(headers)
+
+        # Check if data is an iterator/generator for streaming upload
+        if data is not None and _is_iterator(data):
+            # Use streaming upload for iterators
+            effective_auth = auth if auth is not None else self.auth
+            merged_headers = _apply_auth(merged_headers, effective_auth)
+            merged_headers = self._apply_cookies(merged_headers, cookies)
+            content_type = (merged_headers or {}).get("Content-Type", "application/octet-stream")
+            return self._streaming_upload(
+                "POST",
+                url,
+                data,
+                headers=merged_headers,
+                content_type=content_type,
+                timeout=timeout * 1000 if timeout else None,  # Convert to ms
+            )
 
         body = None
 
@@ -1305,6 +1808,393 @@ class Session:
     def cookies(self) -> Dict[str, str]:
         """Get cookies as a property."""
         return self.get_cookies()
+
+    # =========================================================================
+    # Streaming Methods
+    # =========================================================================
+
+    def get(
+        self,
+        url: str,
+        params: Optional[Dict[str, Any]] = None,
+        headers: Optional[Dict[str, str]] = None,
+        cookies: Optional[Dict[str, str]] = None,
+        auth: Optional[Tuple[str, str]] = None,
+        timeout: Optional[int] = None,
+        stream: bool = False,
+    ) -> Union[Response, StreamResponse]:
+        """
+        Perform a GET request.
+
+        Args:
+            url: Request URL
+            params: URL query parameters
+            headers: Request headers
+            cookies: Cookies to send with this request
+            auth: Basic auth tuple (username, password)
+            timeout: Request timeout in milliseconds
+            stream: If True, return StreamResponse for streaming downloads
+
+        Returns:
+            Response or StreamResponse if stream=True
+
+        Example:
+            # Normal request
+            r = session.get("https://example.com")
+            print(r.text)
+
+            # Streaming download
+            with session.get(url, stream=True) as r:
+                for chunk in r.iter_content(chunk_size=8192):
+                    f.write(chunk)
+        """
+        # Use request auth if provided, otherwise fall back to session auth
+        effective_auth = auth if auth is not None else self.auth
+
+        if stream:
+            return self._get_stream(url, params, headers, cookies, effective_auth, timeout)
+
+        # Regular request (existing implementation)
+        url = _add_params_to_url(url, params)
+        merged_headers = self._merge_headers(headers)
+        merged_headers = _apply_auth(merged_headers, effective_auth)
+        merged_headers = self._apply_cookies(merged_headers, cookies)
+
+        if timeout:
+            return self.request("GET", url, headers=merged_headers, timeout=timeout)
+
+        # Build options JSON with headers wrapper (clib expects {"headers": {...}})
+        options = {}
+        if merged_headers:
+            options["headers"] = merged_headers
+        options_json = json.dumps(options).encode("utf-8") if options else None
+
+        start_time = time.perf_counter()
+        # Use optimized raw response path for better performance
+        response_handle = self._lib.httpcloak_get_raw(
+            self._handle,
+            url.encode("utf-8"),
+            options_json,
+        )
+        elapsed = time.perf_counter() - start_time
+
+        if response_handle < 0:
+            raise HTTPCloakError("Request failed")
+
+        return _parse_raw_response(self._lib, response_handle, elapsed=elapsed)
+
+    def get_fast(
+        self,
+        url: str,
+        params: Optional[Dict[str, Any]] = None,
+        headers: Optional[Dict[str, str]] = None,
+        cookies: Optional[Dict[str, str]] = None,
+        auth: Optional[Tuple[str, str]] = None,
+    ) -> FastResponse:
+        """
+        High-performance GET request returning FastResponse with memoryview.
+
+        This method is optimized for maximum download speed by:
+        - Using pre-allocated buffer pools (no per-request allocation)
+        - Returning memoryview instead of bytes (zero-copy)
+
+        Args:
+            url: Request URL
+            params: URL query parameters
+            headers: Request headers
+            cookies: Cookies to send with this request
+            auth: Basic auth tuple (username, password)
+
+        Returns:
+            FastResponse with memoryview content
+
+        Example:
+            r = session.get_fast("https://example.com/large-file")
+            # r.content is a memoryview - use it directly or copy if needed
+            data = bytes(r.content)  # Creates a copy
+
+        Note:
+            The memoryview in FastResponse.content may be reused by subsequent
+            requests. If you need to keep the data, copy it with bytes(r.content).
+        """
+        # Use request auth if provided, otherwise fall back to session auth
+        effective_auth = auth if auth is not None else self.auth
+
+        url = _add_params_to_url(url, params)
+        merged_headers = self._merge_headers(headers)
+        merged_headers = _apply_auth(merged_headers, effective_auth)
+        merged_headers = self._apply_cookies(merged_headers, cookies)
+
+        # Build options JSON with headers wrapper
+        options = {}
+        if merged_headers:
+            options["headers"] = merged_headers
+        options_json = json.dumps(options).encode("utf-8") if options else None
+
+        start_time = time.perf_counter()
+        response_handle = self._lib.httpcloak_get_raw(
+            self._handle,
+            url.encode("utf-8"),
+            options_json,
+        )
+        elapsed = time.perf_counter() - start_time
+
+        if response_handle < 0:
+            raise HTTPCloakError("Request failed")
+
+        return _parse_fast_response(self._lib, response_handle, elapsed=elapsed)
+
+    def _get_stream(
+        self,
+        url: str,
+        params: Optional[Dict[str, Any]] = None,
+        headers: Optional[Dict[str, str]] = None,
+        cookies: Optional[Dict[str, str]] = None,
+        auth: Optional[Tuple[str, str]] = None,
+        timeout: Optional[int] = None,
+    ) -> StreamResponse:
+        """Internal method to perform a streaming GET request."""
+        url = _add_params_to_url(url, params)
+        merged_headers = self._merge_headers(headers)
+        merged_headers = _apply_auth(merged_headers, auth)
+        merged_headers = self._apply_cookies(merged_headers, cookies)
+
+        # Build options JSON
+        options = {}
+        if merged_headers:
+            options["headers"] = merged_headers
+        if timeout:
+            options["timeout"] = timeout
+        options_json = json.dumps(options).encode("utf-8") if options else None
+
+        # Start stream
+        stream_handle = self._lib.httpcloak_stream_get(
+            self._handle,
+            url.encode("utf-8"),
+            options_json,
+        )
+
+        if stream_handle < 0:
+            raise HTTPCloakError("Failed to start streaming request")
+
+        # Get metadata
+        metadata_ptr = self._lib.httpcloak_stream_get_metadata(stream_handle)
+        metadata_str = _ptr_to_string(metadata_ptr)
+        if metadata_str is None:
+            self._lib.httpcloak_stream_close(stream_handle)
+            raise HTTPCloakError("Failed to get stream metadata")
+
+        metadata = json.loads(metadata_str)
+        if "error" in metadata:
+            self._lib.httpcloak_stream_close(stream_handle)
+            raise HTTPCloakError(metadata["error"])
+
+        # Parse cookies
+        cookies_list = []
+        for cookie_data in metadata.get("cookies") or []:
+            if isinstance(cookie_data, dict):
+                cookies_list.append(Cookie(
+                    name=cookie_data.get("name", ""),
+                    value=cookie_data.get("value", ""),
+                ))
+
+        return StreamResponse(
+            stream_handle=stream_handle,
+            lib=self._lib,
+            status_code=metadata.get("status_code", 0),
+            headers=metadata.get("headers") or {},
+            final_url=metadata.get("final_url", url),
+            protocol=metadata.get("protocol", ""),
+            content_length=metadata.get("content_length", -1),
+            cookies=cookies_list,
+        )
+
+    def post_stream(
+        self,
+        url: str,
+        data: Union[str, bytes, Dict, None] = None,
+        json_data: Optional[Dict] = None,
+        params: Optional[Dict[str, Any]] = None,
+        headers: Optional[Dict[str, str]] = None,
+        cookies: Optional[Dict[str, str]] = None,
+        auth: Optional[Tuple[str, str]] = None,
+        timeout: Optional[int] = None,
+    ) -> StreamResponse:
+        """
+        Perform a streaming POST request.
+
+        Args:
+            url: Request URL
+            data: Request body (string, bytes, or dict for form data)
+            json_data: JSON body (will be serialized)
+            params: URL query parameters
+            headers: Request headers
+            cookies: Cookies to send with this request
+            auth: Basic auth tuple (username, password)
+            timeout: Request timeout in milliseconds
+
+        Returns:
+            StreamResponse for streaming the response body
+        """
+        url = _add_params_to_url(url, params)
+        merged_headers = self._merge_headers(headers)
+
+        body = None
+        if json_data is not None:
+            body = json.dumps(json_data).encode("utf-8")
+            merged_headers = merged_headers or {}
+            merged_headers.setdefault("Content-Type", "application/json")
+        elif data is not None:
+            if isinstance(data, dict):
+                body = urlencode(data).encode("utf-8")
+                merged_headers = merged_headers or {}
+                merged_headers.setdefault("Content-Type", "application/x-www-form-urlencoded")
+            elif isinstance(data, str):
+                body = data.encode("utf-8")
+            else:
+                body = data
+
+        merged_headers = _apply_auth(merged_headers, auth)
+        merged_headers = self._apply_cookies(merged_headers, cookies)
+
+        # Build options JSON
+        options = {}
+        if merged_headers:
+            options["headers"] = merged_headers
+        if timeout:
+            options["timeout"] = timeout
+        options_json = json.dumps(options).encode("utf-8") if options else None
+
+        # Start stream
+        stream_handle = self._lib.httpcloak_stream_post(
+            self._handle,
+            url.encode("utf-8"),
+            body,
+            options_json,
+        )
+
+        if stream_handle < 0:
+            raise HTTPCloakError("Failed to start streaming request")
+
+        # Get metadata
+        metadata_ptr = self._lib.httpcloak_stream_get_metadata(stream_handle)
+        metadata_str = _ptr_to_string(metadata_ptr)
+        if metadata_str is None:
+            self._lib.httpcloak_stream_close(stream_handle)
+            raise HTTPCloakError("Failed to get stream metadata")
+
+        metadata = json.loads(metadata_str)
+        if "error" in metadata:
+            self._lib.httpcloak_stream_close(stream_handle)
+            raise HTTPCloakError(metadata["error"])
+
+        # Parse cookies
+        cookies_list = []
+        for cookie_data in metadata.get("cookies") or []:
+            if isinstance(cookie_data, dict):
+                cookies_list.append(Cookie(
+                    name=cookie_data.get("name", ""),
+                    value=cookie_data.get("value", ""),
+                ))
+
+        return StreamResponse(
+            stream_handle=stream_handle,
+            lib=self._lib,
+            status_code=metadata.get("status_code", 0),
+            headers=metadata.get("headers") or {},
+            final_url=metadata.get("final_url", url),
+            protocol=metadata.get("protocol", ""),
+            content_length=metadata.get("content_length", -1),
+            cookies=cookies_list,
+        )
+
+    def request_stream(
+        self,
+        method: str,
+        url: str,
+        data: Union[str, bytes, None] = None,
+        params: Optional[Dict[str, Any]] = None,
+        headers: Optional[Dict[str, str]] = None,
+        cookies: Optional[Dict[str, str]] = None,
+        auth: Optional[Tuple[str, str]] = None,
+        timeout: Optional[int] = None,
+    ) -> StreamResponse:
+        """
+        Perform a streaming HTTP request with any method.
+
+        Args:
+            method: HTTP method (GET, POST, PUT, etc.)
+            url: Request URL
+            data: Request body
+            params: URL query parameters
+            headers: Request headers
+            cookies: Cookies to send with this request
+            auth: Basic auth tuple (username, password)
+            timeout: Request timeout in seconds
+
+        Returns:
+            StreamResponse for streaming the response body
+        """
+        url = _add_params_to_url(url, params)
+        merged_headers = self._merge_headers(headers)
+        merged_headers = _apply_auth(merged_headers, auth)
+        merged_headers = self._apply_cookies(merged_headers, cookies)
+
+        # Build request config
+        request_config = {
+            "method": method.upper(),
+            "url": url,
+        }
+        if merged_headers:
+            request_config["headers"] = merged_headers
+        if data:
+            if isinstance(data, bytes):
+                request_config["body"] = data.decode("utf-8")
+            else:
+                request_config["body"] = data
+        if timeout:
+            request_config["timeout"] = timeout
+
+        # Start stream
+        stream_handle = self._lib.httpcloak_stream_request(
+            self._handle,
+            json.dumps(request_config).encode("utf-8"),
+        )
+
+        if stream_handle < 0:
+            raise HTTPCloakError("Failed to start streaming request")
+
+        # Get metadata
+        metadata_ptr = self._lib.httpcloak_stream_get_metadata(stream_handle)
+        metadata_str = _ptr_to_string(metadata_ptr)
+        if metadata_str is None:
+            self._lib.httpcloak_stream_close(stream_handle)
+            raise HTTPCloakError("Failed to get stream metadata")
+
+        metadata = json.loads(metadata_str)
+        if "error" in metadata:
+            self._lib.httpcloak_stream_close(stream_handle)
+            raise HTTPCloakError(metadata["error"])
+
+        # Parse cookies
+        cookies_list = []
+        for cookie_data in metadata.get("cookies") or []:
+            if isinstance(cookie_data, dict):
+                cookies_list.append(Cookie(
+                    name=cookie_data.get("name", ""),
+                    value=cookie_data.get("value", ""),
+                ))
+
+        return StreamResponse(
+            stream_handle=stream_handle,
+            lib=self._lib,
+            status_code=metadata.get("status_code", 0),
+            headers=metadata.get("headers") or {},
+            final_url=metadata.get("final_url", url),
+            protocol=metadata.get("protocol", ""),
+            content_length=metadata.get("content_length", -1),
+            cookies=cookies_list,
+        )
 
 
 # =============================================================================

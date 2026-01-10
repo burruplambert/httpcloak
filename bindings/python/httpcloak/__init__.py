@@ -32,6 +32,7 @@ from .client import (
     # Classes
     Session,
     Response,
+    FastResponse,
     HTTPCloakError,
     Preset,
     # Configuration
@@ -53,6 +54,7 @@ from .client import (
 __all__ = [
     "Session",
     "Response",
+    "FastResponse",
     "HTTPCloakError",
     "Preset",
     "configure",

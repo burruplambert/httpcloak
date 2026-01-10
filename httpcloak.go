@@ -24,6 +24,7 @@ package httpcloak
 
 import (
 	"context"
+	"io"
 	"time"
 
 	"github.com/sardanioss/httpcloak/client"
@@ -118,6 +119,20 @@ type Response struct {
 	FinalURL   string
 	Protocol   string
 	History    []*RedirectInfo
+
+	// ReleaseBody returns the body buffer to the pool (exported for FFI)
+	ReleaseBody func()
+}
+
+// Release returns the response body buffer to the pool for reuse.
+// Call this when you're done with the response body to enable buffer reuse.
+// After calling Release, the Body slice must not be accessed.
+func (r *Response) Release() {
+	if r.ReleaseBody != nil {
+		r.ReleaseBody()
+		r.ReleaseBody = nil
+		r.Body = nil
+	}
 }
 
 // Do executes an HTTP request
@@ -141,11 +156,12 @@ func (c *Client) Do(ctx context.Context, req *Request) (*Response, error) {
 	}
 
 	return &Response{
-		StatusCode: resp.StatusCode,
-		Headers:    resp.Headers,
-		Body:       resp.Body,
-		FinalURL:   resp.FinalURL,
-		Protocol:   resp.Protocol,
+		StatusCode:  resp.StatusCode,
+		Headers:     resp.Headers,
+		Body:        resp.Body,
+		FinalURL:    resp.FinalURL,
+		Protocol:    resp.Protocol,
+		ReleaseBody: resp.ReleaseBody,
 	}, nil
 }
 
@@ -206,6 +222,8 @@ type SessionOption func(*sessionConfig)
 type sessionConfig struct {
 	preset             string
 	proxy              string
+	tcpProxy           string // Proxy for TCP-based protocols (HTTP/1.1, HTTP/2)
+	udpProxy           string // Proxy for UDP-based protocols (HTTP/3 via MASQUE)
 	timeout            time.Duration
 	forceHTTP1         bool
 	forceHTTP2         bool
@@ -226,6 +244,22 @@ type sessionConfig struct {
 func WithSessionProxy(proxyURL string) SessionOption {
 	return func(c *sessionConfig) {
 		c.proxy = proxyURL
+	}
+}
+
+// WithSessionTCPProxy sets a proxy for TCP-based protocols (HTTP/1.1 and HTTP/2).
+// Use this with WithSessionUDPProxy for split proxy configuration.
+func WithSessionTCPProxy(proxyURL string) SessionOption {
+	return func(c *sessionConfig) {
+		c.tcpProxy = proxyURL
+	}
+}
+
+// WithSessionUDPProxy sets a proxy for UDP-based protocols (HTTP/3 via MASQUE).
+// Use this with WithSessionTCPProxy for split proxy configuration.
+func WithSessionUDPProxy(proxyURL string) SessionOption {
+	return func(c *sessionConfig) {
+		c.udpProxy = proxyURL
 	}
 }
 
@@ -347,6 +381,8 @@ func NewSession(preset string, opts ...SessionOption) *Session {
 	sessionCfg := &protocol.SessionConfig{
 		Preset:             cfg.preset,
 		Proxy:              cfg.proxy,
+		TCPProxy:           cfg.tcpProxy,
+		UDPProxy:           cfg.udpProxy,
 		Timeout:            int(cfg.timeout.Seconds()),
 		InsecureSkipVerify: cfg.insecureSkipVerify,
 		FollowRedirects:    !cfg.disableRedirects,
@@ -411,12 +447,51 @@ func (s *Session) Do(ctx context.Context, req *Request) (*Response, error) {
 	}
 
 	return &Response{
-		StatusCode: resp.StatusCode,
-		Headers:    resp.Headers,
-		Body:       resp.Body,
-		FinalURL:   resp.FinalURL,
-		Protocol:   resp.Protocol,
-		History:    history,
+		StatusCode:  resp.StatusCode,
+		Headers:     resp.Headers,
+		Body:        resp.Body,
+		FinalURL:    resp.FinalURL,
+		Protocol:    resp.Protocol,
+		History:     history,
+		ReleaseBody: resp.ReleaseBody,
+	}, nil
+}
+
+// DoWithBody executes a request with an io.Reader as the body for streaming uploads
+func (s *Session) DoWithBody(ctx context.Context, req *Request, bodyReader io.Reader) (*Response, error) {
+	sReq := &transport.Request{
+		Method:     req.Method,
+		URL:        req.URL,
+		Headers:    req.Headers,
+		BodyReader: bodyReader,
+	}
+
+	resp, err := s.inner.Request(ctx, sReq)
+	if err != nil {
+		return nil, err
+	}
+
+	// Convert redirect history
+	var history []*RedirectInfo
+	if len(resp.History) > 0 {
+		history = make([]*RedirectInfo, len(resp.History))
+		for i, h := range resp.History {
+			history[i] = &RedirectInfo{
+				StatusCode: h.StatusCode,
+				URL:        h.URL,
+				Headers:    h.Headers,
+			}
+		}
+	}
+
+	return &Response{
+		StatusCode:  resp.StatusCode,
+		Headers:     resp.Headers,
+		Body:        resp.Body,
+		FinalURL:    resp.FinalURL,
+		Protocol:    resp.Protocol,
+		History:     history,
+		ReleaseBody: resp.ReleaseBody,
 	}, nil
 }
 
@@ -438,6 +513,75 @@ func (s *Session) SetCookie(name, value string) {
 // Close closes the session and releases resources
 func (s *Session) Close() {
 	s.inner.Close()
+}
+
+// StreamResponse represents a streaming HTTP response where the body
+// is read incrementally. Use this for large file downloads.
+type StreamResponse struct {
+	StatusCode    int
+	Headers       map[string]string
+	FinalURL      string
+	Protocol      string
+	ContentLength int64 // -1 if unknown (chunked encoding)
+
+	inner *transport.StreamResponse
+}
+
+// Read reads data from the response body
+func (r *StreamResponse) Read(p []byte) (n int, err error) {
+	return r.inner.Read(p)
+}
+
+// Close closes the response body - must be called when done
+func (r *StreamResponse) Close() error {
+	return r.inner.Close()
+}
+
+// ReadAll reads the entire response body into memory
+// This defeats the purpose of streaming but is useful for small responses
+func (r *StreamResponse) ReadAll() ([]byte, error) {
+	return r.inner.ReadAll()
+}
+
+// ReadChunk reads up to size bytes from the response
+func (r *StreamResponse) ReadChunk(size int) ([]byte, error) {
+	return r.inner.ReadChunk(size)
+}
+
+// DoStream executes an HTTP request and returns a streaming response
+// The caller is responsible for closing the response when done
+// Note: Streaming does NOT support redirects - use Do() for redirect handling
+func (s *Session) DoStream(ctx context.Context, req *Request) (*StreamResponse, error) {
+	sReq := &transport.Request{
+		Method:  req.Method,
+		URL:     req.URL,
+		Headers: req.Headers,
+		Body:    req.Body,
+	}
+
+	resp, err := s.inner.RequestStream(ctx, sReq)
+	if err != nil {
+		return nil, err
+	}
+
+	return &StreamResponse{
+		StatusCode:    resp.StatusCode,
+		Headers:       resp.Headers,
+		FinalURL:      resp.FinalURL,
+		Protocol:      resp.Protocol,
+		ContentLength: resp.ContentLength,
+		inner:         resp,
+	}, nil
+}
+
+// GetStream performs a streaming GET request
+func (s *Session) GetStream(ctx context.Context, url string) (*StreamResponse, error) {
+	return s.DoStream(ctx, &Request{Method: "GET", URL: url})
+}
+
+// GetStreamWithHeaders performs a streaming GET request with custom headers
+func (s *Session) GetStreamWithHeaders(ctx context.Context, url string, headers map[string]string) (*StreamResponse, error) {
+	return s.DoStream(ctx, &Request{Method: "GET", URL: url, Headers: headers})
 }
 
 // Presets returns available fingerprint presets

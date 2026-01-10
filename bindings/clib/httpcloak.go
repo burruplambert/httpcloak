@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"sync"
 	"time"
 	"unsafe"
@@ -31,6 +32,40 @@ var (
 	sessions       = make(map[int64]*httpcloak.Session)
 	sessionCounter int64
 )
+
+// Stream handle management for streaming responses
+var (
+	streamMu      sync.RWMutex
+	streams       = make(map[int64]*httpcloak.StreamResponse)
+	streamCounter int64
+)
+
+// Upload stream handle management for streaming uploads
+var (
+	uploadMu      sync.RWMutex
+	uploads       = make(map[int64]*UploadStream)
+	uploadCounter int64
+)
+
+// UploadStream represents an in-progress streaming upload
+type UploadStream struct {
+	session    *httpcloak.Session
+	pipeWriter *io.PipeWriter
+	pipeReader *io.PipeReader
+	url        string
+	method     string
+	headers    map[string]string
+	timeout    int
+	responseCh chan *uploadResult
+	started    bool
+	finished   bool
+	mu         sync.Mutex
+}
+
+type uploadResult struct {
+	response *httpcloak.Response
+	err      error
+}
 
 // Async callback management
 var (
@@ -61,7 +96,7 @@ type RedirectInfo struct {
 	Headers    map[string]string `json:"headers"`
 }
 
-// Response for JSON serialization
+// Response for JSON serialization (legacy - includes body as string)
 type ResponseData struct {
 	StatusCode int               `json:"status_code"`
 	Headers    map[string]string `json:"headers"`
@@ -71,6 +106,30 @@ type ResponseData struct {
 	Cookies    []Cookie          `json:"cookies"`
 	History    []RedirectInfo    `json:"history"`
 }
+
+// ResponseMetadata for optimized responses - body is passed separately as raw bytes
+type ResponseMetadata struct {
+	StatusCode int               `json:"status_code"`
+	Headers    map[string]string `json:"headers"`
+	BodyLen    int               `json:"body_len"`
+	FinalURL   string            `json:"final_url"`
+	Protocol   string            `json:"protocol"`
+	Cookies    []Cookie          `json:"cookies"`
+	History    []RedirectInfo    `json:"history"`
+}
+
+// RawResponse holds response data with body as raw bytes (not JSON encoded)
+type RawResponse struct {
+	metadata    []byte         // JSON encoded metadata
+	body        []byte         // Raw body bytes
+	releaseBody func()         // Release function for pooled buffer
+}
+
+var (
+	rawResponses   = make(map[int64]*RawResponse)
+	rawResponsesMu sync.RWMutex
+	rawResponseID  int64
+)
 
 // Session configuration
 type SessionConfig struct {
@@ -212,6 +271,260 @@ func makeResponseJSON(resp *httpcloak.Response) *C.char {
 	}
 	jsonData, _ := json.Marshal(data)
 	return C.CString(string(jsonData))
+}
+
+// makeRawResponse creates an optimized response with body as raw bytes
+func makeRawResponse(resp *httpcloak.Response) int64 {
+	// Parse cookies from Set-Cookie header
+	cookies := parseSetCookieHeaders(resp.Headers)
+
+	// Convert redirect history
+	var history []RedirectInfo
+	if len(resp.History) > 0 {
+		history = make([]RedirectInfo, len(resp.History))
+		for i, h := range resp.History {
+			history[i] = RedirectInfo{
+				StatusCode: h.StatusCode,
+				URL:        h.URL,
+				Headers:    h.Headers,
+			}
+		}
+	}
+
+	// Create metadata (without body)
+	meta := ResponseMetadata{
+		StatusCode: resp.StatusCode,
+		Headers:    resp.Headers,
+		BodyLen:    len(resp.Body),
+		FinalURL:   resp.FinalURL,
+		Protocol:   resp.Protocol,
+		Cookies:    cookies,
+		History:    history,
+	}
+	metaJSON, _ := json.Marshal(meta)
+
+	// Store the raw response with release function for buffer pooling
+	rawResponsesMu.Lock()
+	rawResponseID++
+	id := rawResponseID
+	rawResponses[id] = &RawResponse{
+		metadata:    metaJSON,
+		body:        resp.Body,
+		releaseBody: resp.ReleaseBody,
+	}
+	rawResponsesMu.Unlock()
+
+	return id
+}
+
+//export httpcloak_response_get_metadata
+func httpcloak_response_get_metadata(handle C.int64_t) *C.char {
+	rawResponsesMu.RLock()
+	resp, exists := rawResponses[int64(handle)]
+	rawResponsesMu.RUnlock()
+
+	if !exists || resp == nil {
+		return makeErrorJSON(errors.New("invalid response handle"))
+	}
+
+	return C.CString(string(resp.metadata))
+}
+
+//export httpcloak_response_get_body
+func httpcloak_response_get_body(handle C.int64_t, outLen *C.int) unsafe.Pointer {
+	rawResponsesMu.RLock()
+	resp, exists := rawResponses[int64(handle)]
+	rawResponsesMu.RUnlock()
+
+	if !exists || resp == nil || len(resp.body) == 0 {
+		*outLen = 0
+		return nil
+	}
+
+	*outLen = C.int(len(resp.body))
+	return C.CBytes(resp.body)
+}
+
+//export httpcloak_response_get_body_len
+func httpcloak_response_get_body_len(handle C.int64_t) C.int {
+	rawResponsesMu.RLock()
+	resp, exists := rawResponses[int64(handle)]
+	rawResponsesMu.RUnlock()
+
+	if !exists || resp == nil {
+		return 0
+	}
+	return C.int(len(resp.body))
+}
+
+//export httpcloak_response_copy_body_to
+func httpcloak_response_copy_body_to(handle C.int64_t, dest unsafe.Pointer, destLen C.int) C.int {
+	rawResponsesMu.RLock()
+	resp, exists := rawResponses[int64(handle)]
+	rawResponsesMu.RUnlock()
+
+	if !exists || resp == nil || len(resp.body) == 0 {
+		return 0
+	}
+
+	// Copy directly to the destination buffer (Python-allocated)
+	copyLen := len(resp.body)
+	if int(destLen) < copyLen {
+		copyLen = int(destLen)
+	}
+
+	// Use C.GoBytes in reverse - copy Go bytes to C memory
+	destSlice := (*[1 << 30]byte)(dest)[:copyLen:copyLen]
+	copy(destSlice, resp.body[:copyLen])
+
+	return C.int(copyLen)
+}
+
+//export httpcloak_response_free
+func httpcloak_response_free(handle C.int64_t) {
+	rawResponsesMu.Lock()
+	if resp, exists := rawResponses[int64(handle)]; exists {
+		// Release the pooled buffer back to the pool
+		if resp.releaseBody != nil {
+			resp.releaseBody()
+		}
+		delete(rawResponses, int64(handle))
+	}
+	rawResponsesMu.Unlock()
+}
+
+//export httpcloak_get_raw
+func httpcloak_get_raw(handle C.int64_t, url *C.char, optionsJSON *C.char) C.int64_t {
+	session := getSession(handle)
+	if session == nil {
+		return -1
+	}
+
+	urlStr := C.GoString(url)
+
+	var options RequestOptions
+	if optionsJSON != nil {
+		jsonStr := C.GoString(optionsJSON)
+		if jsonStr != "" {
+			json.Unmarshal([]byte(jsonStr), &options)
+		}
+	}
+
+	ctx := context.Background()
+	var cancel context.CancelFunc
+	if options.Timeout > 0 {
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(options.Timeout)*time.Millisecond)
+	} else {
+		ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
+	}
+	defer cancel()
+
+	req := &httpcloak.Request{
+		Method:  "GET",
+		URL:     urlStr,
+		Headers: options.Headers,
+	}
+
+	resp, err := session.Do(ctx, req)
+	if err != nil {
+		return -1
+	}
+
+	return C.int64_t(makeRawResponse(resp))
+}
+
+//export httpcloak_post_raw
+func httpcloak_post_raw(handle C.int64_t, url *C.char, body *C.char, bodyLen C.int, optionsJSON *C.char) C.int64_t {
+	session := getSession(handle)
+	if session == nil {
+		return -1
+	}
+
+	urlStr := C.GoString(url)
+	var bodyBytes []byte
+	if body != nil && bodyLen > 0 {
+		bodyBytes = C.GoBytes(unsafe.Pointer(body), bodyLen)
+	}
+
+	var options RequestOptions
+	if optionsJSON != nil {
+		jsonStr := C.GoString(optionsJSON)
+		if jsonStr != "" {
+			json.Unmarshal([]byte(jsonStr), &options)
+		}
+	}
+
+	ctx := context.Background()
+	var cancel context.CancelFunc
+	if options.Timeout > 0 {
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(options.Timeout)*time.Millisecond)
+	} else {
+		ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
+	}
+	defer cancel()
+
+	req := &httpcloak.Request{
+		Method:  "POST",
+		URL:     urlStr,
+		Headers: options.Headers,
+		Body:    bodyBytes,
+	}
+
+	resp, err := session.Do(ctx, req)
+	if err != nil {
+		return -1
+	}
+
+	return C.int64_t(makeRawResponse(resp))
+}
+
+//export httpcloak_request_raw
+func httpcloak_request_raw(handle C.int64_t, requestJSON *C.char, body *C.char, bodyLen C.int) C.int64_t {
+	session := getSession(handle)
+	if session == nil {
+		return -1
+	}
+
+	var config RequestConfig
+	if requestJSON != nil {
+		jsonStr := C.GoString(requestJSON)
+		json.Unmarshal([]byte(jsonStr), &config)
+	}
+
+	var bodyBytes []byte
+	if body != nil && bodyLen > 0 {
+		bodyBytes = C.GoBytes(unsafe.Pointer(body), bodyLen)
+	} else if config.Body != "" {
+		bodyBytes = []byte(config.Body)
+	}
+
+	ctx := context.Background()
+	var cancel context.CancelFunc
+	if config.Timeout > 0 {
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(config.Timeout)*time.Millisecond)
+	} else {
+		ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
+	}
+	defer cancel()
+
+	method := config.Method
+	if method == "" {
+		method = "GET"
+	}
+
+	req := &httpcloak.Request{
+		Method:  method,
+		URL:     config.URL,
+		Headers: config.Headers,
+		Body:    bodyBytes,
+	}
+
+	resp, err := session.Do(ctx, req)
+	if err != nil {
+		return -1
+	}
+
+	return C.int64_t(makeRawResponse(resp))
 }
 
 // ============================================================================
@@ -802,6 +1115,601 @@ func httpcloak_available_presets() *C.char {
 
 var (
 	ErrInvalidSession = errors.New("invalid session handle")
+	ErrInvalidStream  = errors.New("invalid stream handle")
 )
+
+// ============================================================================
+// Streaming API
+// ============================================================================
+
+// StreamMetadata contains metadata about a streaming response
+type StreamMetadata struct {
+	StatusCode    int               `json:"status_code"`
+	Headers       map[string]string `json:"headers"`
+	FinalURL      string            `json:"final_url"`
+	Protocol      string            `json:"protocol"`
+	ContentLength int64             `json:"content_length"` // -1 if unknown
+	Cookies       []Cookie          `json:"cookies"`
+}
+
+func getStream(handle int64) *httpcloak.StreamResponse {
+	streamMu.RLock()
+	defer streamMu.RUnlock()
+	return streams[handle]
+}
+
+//export httpcloak_stream_get
+func httpcloak_stream_get(sessionHandle C.int64_t, url *C.char, optionsJSON *C.char) C.int64_t {
+	session := getSession(sessionHandle)
+	if session == nil {
+		return -1
+	}
+
+	urlStr := C.GoString(url)
+
+	// Parse options if provided
+	var options RequestOptions
+	if optionsJSON != nil {
+		jsonStr := C.GoString(optionsJSON)
+		if jsonStr != "" {
+			json.Unmarshal([]byte(jsonStr), &options)
+		}
+	}
+
+	// Create context with timeout for streaming (longer than regular requests)
+	ctx := context.Background()
+	var cancel context.CancelFunc
+	if options.Timeout > 0 {
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(options.Timeout)*time.Millisecond)
+	} else {
+		// Use 2-minute timeout for streaming (connection + data transfer)
+		ctx, cancel = context.WithTimeout(ctx, 2*time.Minute)
+	}
+	// Note: We don't defer cancel() here - it will be called when stream is closed
+
+	req := &httpcloak.Request{
+		Method:  "GET",
+		URL:     urlStr,
+		Headers: options.Headers,
+	}
+
+	resp, err := session.DoStream(ctx, req)
+	if err != nil {
+		cancel()
+		return -1
+	}
+
+	// Store stream and return handle
+	streamMu.Lock()
+	streamCounter++
+	handle := streamCounter
+	streams[handle] = resp
+	streamMu.Unlock()
+
+	return C.int64_t(handle)
+}
+
+//export httpcloak_stream_post
+func httpcloak_stream_post(sessionHandle C.int64_t, url *C.char, body *C.char, optionsJSON *C.char) C.int64_t {
+	session := getSession(sessionHandle)
+	if session == nil {
+		return -1
+	}
+
+	urlStr := C.GoString(url)
+	bodyStr := ""
+	if body != nil {
+		bodyStr = C.GoString(body)
+	}
+
+	// Parse options if provided
+	var options RequestOptions
+	if optionsJSON != nil {
+		jsonStr := C.GoString(optionsJSON)
+		if jsonStr != "" {
+			json.Unmarshal([]byte(jsonStr), &options)
+		}
+	}
+
+	// Create context with timeout for streaming (longer than regular requests)
+	ctx := context.Background()
+	var cancel context.CancelFunc
+	if options.Timeout > 0 {
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(options.Timeout)*time.Millisecond)
+	} else {
+		ctx, cancel = context.WithTimeout(ctx, 2*time.Minute)
+	}
+
+	req := &httpcloak.Request{
+		Method:  "POST",
+		URL:     urlStr,
+		Headers: options.Headers,
+		Body:    []byte(bodyStr),
+	}
+
+	resp, err := session.DoStream(ctx, req)
+	if err != nil {
+		cancel()
+		return -1
+	}
+
+	// Store stream and return handle
+	streamMu.Lock()
+	streamCounter++
+	handle := streamCounter
+	streams[handle] = resp
+	streamMu.Unlock()
+
+	return C.int64_t(handle)
+}
+
+//export httpcloak_stream_request
+func httpcloak_stream_request(sessionHandle C.int64_t, requestJSON *C.char) C.int64_t {
+	session := getSession(sessionHandle)
+	if session == nil {
+		return -1
+	}
+
+	var config RequestConfig
+	if requestJSON != nil {
+		jsonStr := C.GoString(requestJSON)
+		if err := json.Unmarshal([]byte(jsonStr), &config); err != nil {
+			return -1
+		}
+	}
+
+	if config.Method == "" {
+		config.Method = "GET"
+	}
+
+	// Create context with timeout for streaming (longer than regular requests)
+	ctx := context.Background()
+	var cancel context.CancelFunc
+	if config.Timeout > 0 {
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(config.Timeout)*time.Second)
+	} else {
+		ctx, cancel = context.WithTimeout(ctx, 2*time.Minute)
+	}
+
+	req := &httpcloak.Request{
+		Method:  config.Method,
+		URL:     config.URL,
+		Headers: config.Headers,
+		Body:    []byte(config.Body),
+	}
+
+	resp, err := session.DoStream(ctx, req)
+	if err != nil {
+		cancel()
+		return -1
+	}
+
+	// Store stream and return handle
+	streamMu.Lock()
+	streamCounter++
+	handle := streamCounter
+	streams[handle] = resp
+	streamMu.Unlock()
+
+	return C.int64_t(handle)
+}
+
+//export httpcloak_stream_get_metadata
+func httpcloak_stream_get_metadata(streamHandle C.int64_t) *C.char {
+	stream := getStream(int64(streamHandle))
+	if stream == nil {
+		return makeErrorJSON(ErrInvalidStream)
+	}
+
+	cookies := parseSetCookieHeaders(stream.Headers)
+
+	metadata := StreamMetadata{
+		StatusCode:    stream.StatusCode,
+		Headers:       stream.Headers,
+		FinalURL:      stream.FinalURL,
+		Protocol:      stream.Protocol,
+		ContentLength: stream.ContentLength,
+		Cookies:       cookies,
+	}
+
+	jsonData, _ := json.Marshal(metadata)
+	return C.CString(string(jsonData))
+}
+
+//export httpcloak_stream_read
+func httpcloak_stream_read(streamHandle C.int64_t, bufferSize C.int) *C.char {
+	stream := getStream(int64(streamHandle))
+	if stream == nil {
+		return nil
+	}
+
+	size := int(bufferSize)
+	if size <= 0 {
+		size = 8192 // Default chunk size
+	}
+
+	chunk, err := stream.ReadChunk(size)
+	if err != nil {
+		if err.Error() == "EOF" {
+			// Return empty string to indicate EOF
+			return C.CString("")
+		}
+		return nil
+	}
+
+	// Return as base64 to handle binary data safely
+	return C.CString(encodeBase64(chunk))
+}
+
+//export httpcloak_stream_read_raw
+func httpcloak_stream_read_raw(streamHandle C.int64_t, buffer unsafe.Pointer, bufferSize C.int) C.int {
+	stream := getStream(int64(streamHandle))
+	if stream == nil {
+		return -1
+	}
+
+	size := int(bufferSize)
+	if size <= 0 {
+		return 0
+	}
+
+	// Create a Go slice backed by the C buffer
+	buf := (*[1 << 30]byte)(buffer)[:size:size]
+
+	n, err := stream.Read(buf)
+	if err != nil {
+		if err.Error() == "EOF" {
+			return 0 // EOF
+		}
+		return -1 // Error
+	}
+
+	return C.int(n)
+}
+
+//export httpcloak_stream_close
+func httpcloak_stream_close(streamHandle C.int64_t) {
+	streamMu.Lock()
+	stream, exists := streams[int64(streamHandle)]
+	if exists {
+		delete(streams, int64(streamHandle))
+	}
+	streamMu.Unlock()
+
+	if stream != nil {
+		stream.Close()
+	}
+}
+
+// ============================================================================
+// Streaming Upload Functions
+// ============================================================================
+
+// UploadOptions for configuring streaming uploads
+type UploadOptions struct {
+	Method      string            `json:"method,omitempty"`
+	Headers     map[string]string `json:"headers,omitempty"`
+	Timeout     int               `json:"timeout,omitempty"`
+	ContentType string            `json:"content_type,omitempty"`
+}
+
+//export httpcloak_upload_start
+func httpcloak_upload_start(sessionHandle C.int64_t, url *C.char, optionsJSON *C.char) C.int64_t {
+	session := getSession(sessionHandle)
+	if session == nil {
+		return -1
+	}
+
+	urlStr := C.GoString(url)
+
+	// Parse options
+	var options UploadOptions
+	options.Method = "POST" // Default
+	if optionsJSON != nil {
+		jsonStr := C.GoString(optionsJSON)
+		if jsonStr != "" {
+			json.Unmarshal([]byte(jsonStr), &options)
+		}
+	}
+
+	if options.Method == "" {
+		options.Method = "POST"
+	}
+
+	// Create pipe for streaming body
+	pr, pw := io.Pipe()
+
+	upload := &UploadStream{
+		session:    session,
+		pipeWriter: pw,
+		pipeReader: pr,
+		url:        urlStr,
+		method:     options.Method,
+		headers:    options.Headers,
+		timeout:    options.Timeout,
+		responseCh: make(chan *uploadResult, 1),
+		started:    false,
+		finished:   false,
+	}
+
+	// Set Content-Type if specified
+	if options.ContentType != "" {
+		if upload.headers == nil {
+			upload.headers = make(map[string]string)
+		}
+		upload.headers["Content-Type"] = options.ContentType
+	}
+
+	// Store upload and return handle
+	uploadMu.Lock()
+	uploadCounter++
+	handle := uploadCounter
+	uploads[handle] = upload
+	uploadMu.Unlock()
+
+	// Start the request in a goroutine
+	go func() {
+		ctx := context.Background()
+		var cancel context.CancelFunc
+		if upload.timeout > 0 {
+			ctx, cancel = context.WithTimeout(ctx, time.Duration(upload.timeout)*time.Millisecond)
+		} else {
+			// Default 5 minute timeout for uploads
+			ctx, cancel = context.WithTimeout(ctx, 5*time.Minute)
+		}
+		defer cancel()
+
+		req := &httpcloak.Request{
+			Method:  upload.method,
+			URL:     upload.url,
+			Headers: upload.headers,
+			Body:    nil, // Will use pipe reader
+		}
+
+		// Use the pipe reader as body
+		resp, err := session.DoWithBody(ctx, req, upload.pipeReader)
+		upload.responseCh <- &uploadResult{response: resp, err: err}
+	}()
+
+	upload.started = true
+	return C.int64_t(handle)
+}
+
+//export httpcloak_upload_write
+func httpcloak_upload_write(uploadHandle C.int64_t, dataBase64 *C.char) C.int {
+	uploadMu.RLock()
+	upload, exists := uploads[int64(uploadHandle)]
+	uploadMu.RUnlock()
+
+	if !exists || upload == nil {
+		return -1
+	}
+
+	upload.mu.Lock()
+	defer upload.mu.Unlock()
+
+	if upload.finished {
+		return -1
+	}
+
+	// Decode base64 data
+	dataStr := C.GoString(dataBase64)
+	data, err := decodeBase64(dataStr)
+	if err != nil {
+		return -1
+	}
+
+	// Write to pipe
+	n, err := upload.pipeWriter.Write(data)
+	if err != nil {
+		return -1
+	}
+
+	return C.int(n)
+}
+
+//export httpcloak_upload_write_raw
+func httpcloak_upload_write_raw(uploadHandle C.int64_t, data unsafe.Pointer, dataLen C.int) C.int {
+	uploadMu.RLock()
+	upload, exists := uploads[int64(uploadHandle)]
+	uploadMu.RUnlock()
+
+	if !exists || upload == nil {
+		return -1
+	}
+
+	upload.mu.Lock()
+	defer upload.mu.Unlock()
+
+	if upload.finished {
+		return -1
+	}
+
+	// Convert to Go slice
+	buf := C.GoBytes(data, dataLen)
+
+	// Write to pipe
+	n, err := upload.pipeWriter.Write(buf)
+	if err != nil {
+		return -1
+	}
+
+	return C.int(n)
+}
+
+//export httpcloak_upload_finish
+func httpcloak_upload_finish(uploadHandle C.int64_t) *C.char {
+	uploadMu.Lock()
+	upload, exists := uploads[int64(uploadHandle)]
+	if exists {
+		delete(uploads, int64(uploadHandle)) // Clean up the upload from the map
+	}
+	uploadMu.Unlock()
+
+	if !exists || upload == nil {
+		return makeErrorJSON(errors.New("invalid upload handle"))
+	}
+
+	upload.mu.Lock()
+	if upload.finished {
+		upload.mu.Unlock()
+		return makeErrorJSON(errors.New("upload already finished"))
+	}
+	upload.finished = true
+	upload.mu.Unlock()
+
+	// Close the pipe writer to signal end of body
+	upload.pipeWriter.Close()
+
+	// Wait for response
+	result := <-upload.responseCh
+
+	if result.err != nil {
+		return makeErrorJSON(result.err)
+	}
+
+	// Build response JSON
+	resp := result.response
+	cookies := parseSetCookieHeaders(resp.Headers)
+
+	responseData := ResponseData{
+		StatusCode: resp.StatusCode,
+		Headers:    resp.Headers,
+		Body:       string(resp.Body),
+		FinalURL:   resp.FinalURL,
+		Protocol:   resp.Protocol,
+		Cookies:    cookies,
+	}
+
+	jsonData, err := json.Marshal(responseData)
+	if err != nil {
+		return makeErrorJSON(err)
+	}
+
+	return C.CString(string(jsonData))
+}
+
+//export httpcloak_upload_cancel
+func httpcloak_upload_cancel(uploadHandle C.int64_t) {
+	uploadMu.Lock()
+	upload, exists := uploads[int64(uploadHandle)]
+	if exists {
+		delete(uploads, int64(uploadHandle))
+	}
+	uploadMu.Unlock()
+
+	if upload != nil {
+		upload.mu.Lock()
+		if !upload.finished {
+			upload.pipeWriter.CloseWithError(errors.New("upload cancelled"))
+		}
+		upload.mu.Unlock()
+	}
+}
+
+// decodeBase64 decodes a base64 string to bytes
+func decodeBase64(s string) ([]byte, error) {
+	const base64Chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+	// Remove padding
+	s = trimRight(s, "=")
+
+	if len(s) == 0 {
+		return []byte{}, nil
+	}
+
+	// Build decode table
+	decodeTable := make(map[byte]int)
+	for i, c := range base64Chars {
+		decodeTable[byte(c)] = i
+	}
+
+	// Calculate output length
+	outLen := len(s) * 3 / 4
+	result := make([]byte, outLen)
+
+	j := 0
+	for i := 0; i < len(s); i += 4 {
+		var n uint32
+		count := 0
+		for k := 0; k < 4 && i+k < len(s); k++ {
+			if val, ok := decodeTable[s[i+k]]; ok {
+				n = n<<6 | uint32(val)
+				count++
+			}
+		}
+
+		// Pad with zeros for incomplete groups
+		for k := count; k < 4; k++ {
+			n = n << 6
+		}
+
+		if count >= 2 && j < len(result) {
+			result[j] = byte(n >> 16)
+			j++
+		}
+		if count >= 3 && j < len(result) {
+			result[j] = byte(n >> 8)
+			j++
+		}
+		if count >= 4 && j < len(result) {
+			result[j] = byte(n)
+			j++
+		}
+	}
+
+	return result[:j], nil
+}
+
+func trimRight(s, cutset string) string {
+	for len(s) > 0 {
+		found := false
+		for _, c := range cutset {
+			if rune(s[len(s)-1]) == c {
+				s = s[:len(s)-1]
+				found = true
+				break
+			}
+		}
+		if !found {
+			break
+		}
+	}
+	return s
+}
+
+// encodeBase64 encodes bytes to base64 string
+func encodeBase64(data []byte) string {
+	const base64Chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+	result := make([]byte, 0, ((len(data)+2)/3)*4)
+
+	for i := 0; i < len(data); i += 3 {
+		var b0, b1, b2 byte
+		b0 = data[i]
+		if i+1 < len(data) {
+			b1 = data[i+1]
+		}
+		if i+2 < len(data) {
+			b2 = data[i+2]
+		}
+
+		result = append(result, base64Chars[b0>>2])
+		result = append(result, base64Chars[((b0&0x03)<<4)|(b1>>4)])
+
+		if i+1 < len(data) {
+			result = append(result, base64Chars[((b1&0x0f)<<2)|(b2>>6)])
+		} else {
+			result = append(result, '=')
+		}
+
+		if i+2 < len(data) {
+			result = append(result, base64Chars[b2&0x3f])
+		} else {
+			result = append(result, '=')
+		}
+	}
+
+	return string(result)
+}
 
 func main() {}
