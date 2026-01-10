@@ -1692,6 +1692,309 @@ internal class StreamMetadata
     public List<CookieData>? Cookies { get; set; }
 }
 
+/// <summary>
+/// HttpMessageHandler implementation that routes all requests through httpcloak.
+/// Use this with HttpClient to get browser fingerprint impersonation for all requests.
+/// </summary>
+/// <example>
+/// <code>
+/// // Create handler with browser fingerprint
+/// var handler = new HttpCloakHandler(preset: "chrome-143");
+/// var client = new HttpClient(handler);
+///
+/// // All requests now go through httpcloak with TLS fingerprinting
+/// var response = await client.GetAsync("https://example.com");
+/// var content = await response.Content.ReadAsStringAsync();
+/// </code>
+/// </example>
+public sealed class HttpCloakHandler : HttpMessageHandler
+{
+    private readonly Session _session;
+    private bool _disposed;
+
+    /// <summary>
+    /// Create a new HttpCloakHandler with the specified options.
+    /// </summary>
+    /// <param name="preset">Browser preset (default: "chrome-143")</param>
+    /// <param name="proxy">Proxy URL (e.g., "http://user:pass@host:port" or "socks5://host:port")</param>
+    /// <param name="tcpProxy">Proxy URL for TCP protocols (HTTP/1.1, HTTP/2)</param>
+    /// <param name="udpProxy">Proxy URL for UDP protocols (HTTP/3 via MASQUE)</param>
+    /// <param name="timeout">Request timeout in seconds (default: 30)</param>
+    /// <param name="httpVersion">HTTP version: "auto", "h1", "h2", "h3" (default: "auto")</param>
+    /// <param name="verify">SSL certificate verification (default: true)</param>
+    /// <param name="allowRedirects">Follow redirects (default: true)</param>
+    /// <param name="maxRedirects">Maximum number of redirects (default: 10)</param>
+    /// <param name="retry">Number of retries on failure (default: 0)</param>
+    /// <param name="preferIpv4">Prefer IPv4 addresses over IPv6 (default: false)</param>
+    /// <param name="echConfigDomain">Domain to fetch ECH config from (e.g., "cloudflare-ech.com")</param>
+    public HttpCloakHandler(
+        string preset = "chrome-143",
+        string? proxy = null,
+        string? tcpProxy = null,
+        string? udpProxy = null,
+        int timeout = 30,
+        string httpVersion = "auto",
+        bool verify = true,
+        bool allowRedirects = true,
+        int maxRedirects = 10,
+        int retry = 0,
+        bool preferIpv4 = false,
+        string? echConfigDomain = null)
+    {
+        _session = new Session(
+            preset: preset,
+            proxy: proxy,
+            tcpProxy: tcpProxy,
+            udpProxy: udpProxy,
+            timeout: timeout,
+            httpVersion: httpVersion,
+            verify: verify,
+            allowRedirects: allowRedirects,
+            maxRedirects: maxRedirects,
+            retry: retry,
+            preferIpv4: preferIpv4,
+            echConfigDomain: echConfigDomain);
+    }
+
+    /// <summary>
+    /// Create a new HttpCloakHandler with an existing Session.
+    /// The Session will NOT be disposed when the handler is disposed.
+    /// </summary>
+    /// <param name="session">Existing Session to use</param>
+    public HttpCloakHandler(Session session)
+    {
+        _session = session ?? throw new ArgumentNullException(nameof(session));
+        _ownsSession = false;
+    }
+
+    private readonly bool _ownsSession = true;
+
+    /// <summary>
+    /// Gets the underlying Session for advanced configuration (e.g., cookies, default headers).
+    /// </summary>
+    public Session Session => _session;
+
+    /// <summary>
+    /// When true, responses are streamed instead of buffered in memory.
+    /// This is more memory efficient for large downloads.
+    /// Default: true
+    /// </summary>
+    public bool UseStreaming { get; set; } = true;
+
+    /// <inheritdoc/>
+    protected override async Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken)
+    {
+        if (_disposed)
+            throw new ObjectDisposedException(nameof(HttpCloakHandler));
+        cancellationToken.ThrowIfCancellationRequested();
+
+        // Extract request details
+        string method = request.Method.Method;
+        string url = request.RequestUri?.ToString() ?? throw new ArgumentException("Request URI is required");
+
+        // Collect all headers (from request + content)
+        var headers = new Dictionary<string, string>();
+
+        // Add request headers
+        foreach (var header in request.Headers)
+        {
+            // Join multiple values with comma (standard HTTP header format)
+            headers[header.Key] = string.Join(", ", header.Value);
+        }
+
+        // Add content headers if present
+        if (request.Content != null)
+        {
+            foreach (var header in request.Content.Headers)
+            {
+                headers[header.Key] = string.Join(", ", header.Value);
+            }
+        }
+
+        // Read request body if present
+        byte[]? bodyBytes = null;
+        string? bodyString = null;
+        if (request.Content != null)
+        {
+            bodyBytes = await request.Content.ReadAsByteArrayAsync(cancellationToken);
+            // Try to interpret as string for streaming mode
+            if (UseStreaming && bodyBytes.Length > 0)
+            {
+                try
+                {
+                    bodyString = System.Text.Encoding.UTF8.GetString(bodyBytes);
+                }
+                catch
+                {
+                    // Binary content - can't use streaming mode for upload
+                    bodyString = null;
+                }
+            }
+        }
+
+        // Determine if we can use streaming
+        bool canStream = UseStreaming && (bodyBytes == null || bodyBytes.Length == 0 || bodyString != null);
+
+        try
+        {
+            if (canStream)
+            {
+                return await SendStreamingAsync(request, method, url, headers, bodyString, cancellationToken);
+            }
+            else
+            {
+                return SendBuffered(request, method, url, headers, bodyBytes);
+            }
+        }
+        catch (HttpCloakException ex)
+        {
+            throw new HttpRequestException(ex.Message, ex);
+        }
+    }
+
+    private async Task<HttpResponseMessage> SendStreamingAsync(
+        HttpRequestMessage request,
+        string method,
+        string url,
+        Dictionary<string, string> headers,
+        string? body,
+        CancellationToken cancellationToken)
+    {
+        // Use streaming API - response body is read on-demand
+        StreamResponse streamResponse;
+        try
+        {
+            streamResponse = _session.RequestStream(method, url, body, headers);
+        }
+        catch (HttpCloakException)
+        {
+            // Streaming failed, fall back to buffered
+            byte[]? bodyBytes = body != null ? System.Text.Encoding.UTF8.GetBytes(body) : null;
+            return SendBuffered(request, method, url, headers, bodyBytes);
+        }
+
+        // Build response with streaming content
+        var httpResponse = new HttpResponseMessage((System.Net.HttpStatusCode)streamResponse.StatusCode)
+        {
+            RequestMessage = request,
+            Version = streamResponse.Protocol switch
+            {
+                "h3" => new Version(3, 0),
+                "h2" => new Version(2, 0),
+                _ => new Version(1, 1)
+            }
+        };
+
+        // Create streaming content that wraps the StreamResponse
+        var contentStream = streamResponse.GetContentStream();
+        httpResponse.Content = new StreamContent(contentStream);
+
+        // Copy response headers
+        foreach (var (key, values) in streamResponse.Headers)
+        {
+            string lowerKey = key.ToLowerInvariant();
+            if (IsContentHeader(lowerKey))
+            {
+                httpResponse.Content.Headers.TryAddWithoutValidation(key, values);
+            }
+            else
+            {
+                httpResponse.Headers.TryAddWithoutValidation(key, values);
+            }
+        }
+
+        return httpResponse;
+    }
+
+    private HttpResponseMessage SendBuffered(
+        HttpRequestMessage request,
+        string method,
+        string url,
+        Dictionary<string, string> headers,
+        byte[]? bodyBytes)
+    {
+        // Make buffered request - entire response is read into memory
+        Response response;
+        if (bodyBytes != null && bodyBytes.Length > 0)
+        {
+            response = _session.RequestBinary(method, url, bodyBytes, headers);
+        }
+        else
+        {
+            response = _session.Request(method, url, null, headers);
+        }
+
+        // Convert to HttpResponseMessage
+        var httpResponse = new HttpResponseMessage((System.Net.HttpStatusCode)response.StatusCode)
+        {
+            RequestMessage = request,
+            Version = response.Protocol switch
+            {
+                "h3" => new Version(3, 0),
+                "h2" => new Version(2, 0),
+                _ => new Version(1, 1)
+            },
+            ReasonPhrase = response.Reason
+        };
+
+        // Set response content
+        httpResponse.Content = new ByteArrayContent(response.Content);
+
+        // Copy response headers
+        foreach (var (key, values) in response.Headers)
+        {
+            string lowerKey = key.ToLowerInvariant();
+            if (IsContentHeader(lowerKey))
+            {
+                httpResponse.Content.Headers.TryAddWithoutValidation(key, values);
+            }
+            else
+            {
+                httpResponse.Headers.TryAddWithoutValidation(key, values);
+            }
+        }
+
+        return httpResponse;
+    }
+
+    /// <summary>
+    /// Determines if a header is a content header (should go on HttpContent.Headers).
+    /// </summary>
+    private static bool IsContentHeader(string headerName)
+    {
+        return headerName switch
+        {
+            "content-type" => true,
+            "content-length" => true,
+            "content-encoding" => true,
+            "content-language" => true,
+            "content-location" => true,
+            "content-md5" => true,
+            "content-range" => true,
+            "content-disposition" => true,
+            "expires" => true,
+            "last-modified" => true,
+            _ => false
+        };
+    }
+
+    /// <inheritdoc/>
+    protected override void Dispose(bool disposing)
+    {
+        if (!_disposed)
+        {
+            if (disposing && _ownsSession)
+            {
+                _session.Dispose();
+            }
+            _disposed = true;
+        }
+        base.Dispose(disposing);
+    }
+}
+
 [JsonSerializable(typeof(SessionConfig))]
 [JsonSerializable(typeof(RequestConfig))]
 [JsonSerializable(typeof(ResponseData))]
