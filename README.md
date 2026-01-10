@@ -121,6 +121,7 @@ dotnet add package HttpCloak
 package main
 
 import (
+    "bytes"
     "context"
     "fmt"
     "log"
@@ -141,7 +142,8 @@ func main() {
 
     fmt.Printf("Status: %d\n", resp.StatusCode)
     fmt.Printf("Protocol: %s\n", resp.Protocol) // "h2" or "h3"
-    fmt.Println(resp.Text())
+    text, _ := resp.Text()
+    fmt.Println(text)
 }
 ```
 
@@ -155,9 +157,9 @@ body := []byte(`{"username": "test", "password": "secret"}`)
 resp, err := c.Do(context.Background(), &client.Request{
     Method:  "POST",
     URL:     "https://api.example.com/login",
-    Body:    body,
-    Headers: map[string]string{
-        "Content-Type": "application/json",
+    Body:    bytes.NewReader(body),
+    Headers: map[string][]string{
+        "Content-Type": {"application/json"},
     },
 })
 ```
@@ -171,8 +173,8 @@ defer session.Close()
 
 // Login - cookies are saved automatically
 session.Post(ctx, "https://example.com/login",
-    []byte(`{"user":"test"}`),
-    map[string]string{"Content-Type": "application/json"})
+    bytes.NewReader([]byte(`{"user":"test"}`)),
+    map[string][]string{"Content-Type": {"application/json"}})
 
 // Subsequent requests include cookies
 resp, _ := session.Get(ctx, "https://example.com/dashboard", nil)
@@ -610,7 +612,8 @@ func main() {
     }
 
     fmt.Printf("Protocol: %s\n", resp.Protocol) // "h3" if proxy supports UDP
-    fmt.Println(resp.Text())
+    text, _ := resp.Text()
+    fmt.Println(text)
 }
 ```
 
@@ -656,9 +659,13 @@ session.close();
 ### Go
 ```go
 resp.StatusCode    // int
-resp.Headers       // map[string]string
-resp.Body          // []byte
-resp.Text()        // string
+resp.Headers       // map[string][]string (multi-value headers)
+resp.Body          // io.ReadCloser (streaming)
+resp.Bytes()       // ([]byte, error) - read entire body
+resp.Text()        // (string, error) - read body as string
+resp.JSON(&v)      // error - unmarshal body to struct
+resp.GetHeader(k)  // string - first value for header
+resp.GetHeaders(k) // []string - all values for header
 resp.FinalURL      // string (after redirects)
 resp.Protocol      // "h1", "h2", or "h3"
 ```
