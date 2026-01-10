@@ -692,6 +692,11 @@ func (t *HTTP1Transport) writeHeadersInOrder(w *bufio.Writer, req *http.Request,
 		if strings.EqualFold(key, "Host") {
 			continue
 		}
+		// Skip internal header ordering keys - these are used internally to control
+		// header order but MUST NOT be sent to the server
+		if key == http.HeaderOrderKey || key == http.PHeaderOrderKey {
+			continue
+		}
 		// Skip Transfer-Encoding and Content-Length if we're handling them specially
 		if useChunked && (strings.EqualFold(key, "Transfer-Encoding") || strings.EqualFold(key, "Content-Length")) {
 			continue
