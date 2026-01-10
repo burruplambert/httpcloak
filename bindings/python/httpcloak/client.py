@@ -630,6 +630,8 @@ class Session:
     Args:
         preset: Browser preset (default: "chrome-143")
         proxy: Proxy URL (e.g., "http://user:pass@host:port" or "socks5://host:port")
+        tcp_proxy: Proxy URL for TCP protocols (HTTP/1.1, HTTP/2) - use with udp_proxy for split config
+        udp_proxy: Proxy URL for UDP protocols (HTTP/3 via MASQUE) - use with tcp_proxy for split config
         timeout: Default request timeout in seconds (default: 30)
         http_version: Force HTTP version - "auto", "h1", "h2", "h3" (default: "auto")
         verify: SSL certificate verification (default: True)
@@ -658,12 +660,22 @@ class Session:
         with httpcloak.Session(preset="chrome-143", ech_config_domain="cloudflare-ech.com") as session:
             r = session.get("https://www.cloudflare.com/cdn-cgi/trace")
             # Should show sni=encrypted in response
+
+        # Split proxy configuration (e.g., Bright Data MASQUE for H3, HTTP proxy for H1/H2)
+        with httpcloak.Session(
+            preset="chrome-143",
+            tcp_proxy="http://user:pass@datacenter-proxy:8080",
+            udp_proxy="masque://user:pass@brd.superproxy.io:443"
+        ) as session:
+            r = session.get("https://example.com")
     """
 
     def __init__(
         self,
         preset: str = "chrome-143",
         proxy: Optional[str] = None,
+        tcp_proxy: Optional[str] = None,
+        udp_proxy: Optional[str] = None,
         timeout: int = 30,
         http_version: str = "auto",
         verify: bool = True,
@@ -684,6 +696,10 @@ class Session:
         config = {"preset": preset, "timeout": timeout, "http_version": http_version}
         if proxy:
             config["proxy"] = proxy
+        if tcp_proxy:
+            config["tcp_proxy"] = tcp_proxy
+        if udp_proxy:
+            config["udp_proxy"] = udp_proxy
         if not verify:
             config["verify"] = False
         if not allow_redirects:
@@ -780,12 +796,17 @@ class Session:
         if timeout:
             return self.request("GET", url, headers=merged_headers, timeout=timeout)
 
-        headers_json = json.dumps(merged_headers).encode("utf-8") if merged_headers else None
+        # Build options JSON with headers wrapper (clib expects {"headers": {...}})
+        options = {}
+        if merged_headers:
+            options["headers"] = merged_headers
+        options_json = json.dumps(options).encode("utf-8") if options else None
+
         start_time = time.perf_counter()
         result = self._lib.httpcloak_get(
             self._handle,
             url.encode("utf-8"),
-            headers_json,
+            options_json,
         )
         elapsed = time.perf_counter() - start_time
         return _parse_response(result, elapsed=elapsed)
@@ -866,13 +887,18 @@ class Session:
         if timeout:
             return self.request("POST", url, headers=merged_headers, data=body, timeout=timeout)
 
-        headers_json = json_module.dumps(merged_headers).encode("utf-8") if merged_headers else None
+        # Build options JSON with headers wrapper (clib expects {"headers": {...}})
+        options = {}
+        if merged_headers:
+            options["headers"] = merged_headers
+        options_json = json_module.dumps(options).encode("utf-8") if options else None
+
         start_time = time.perf_counter()
         result = self._lib.httpcloak_post(
             self._handle,
             url.encode("utf-8"),
             body,
-            headers_json,
+            options_json,
         )
         elapsed = time.perf_counter() - start_time
         return _parse_response(result, elapsed=elapsed)

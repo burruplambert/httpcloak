@@ -76,6 +76,8 @@ type ResponseData struct {
 type SessionConfig struct {
 	Preset          string            `json:"preset"`
 	Proxy           string            `json:"proxy,omitempty"`
+	TCPProxy        string            `json:"tcp_proxy,omitempty"`         // Proxy for TCP (HTTP/1.1, HTTP/2)
+	UDPProxy        string            `json:"udp_proxy,omitempty"`         // Proxy for UDP (HTTP/3 via MASQUE)
 	Timeout         int               `json:"timeout,omitempty"`           // seconds
 	HTTPVersion     string            `json:"http_version,omitempty"`      // "auto", "h1", "h2", "h3"
 	Verify          *bool             `json:"verify,omitempty"`            // SSL verification (default: true)
@@ -234,6 +236,12 @@ func httpcloak_session_new(configJSON *C.char) C.int64_t {
 	var opts []httpcloak.SessionOption
 	if config.Proxy != "" {
 		opts = append(opts, httpcloak.WithSessionProxy(config.Proxy))
+	}
+	if config.TCPProxy != "" {
+		opts = append(opts, httpcloak.WithSessionTCPProxy(config.TCPProxy))
+	}
+	if config.UDPProxy != "" {
+		opts = append(opts, httpcloak.WithSessionUDPProxy(config.UDPProxy))
 	}
 	if config.Timeout > 0 {
 		opts = append(opts, httpcloak.WithSessionTimeout(time.Duration(config.Timeout)*time.Second))
@@ -529,15 +537,16 @@ func invokeCallback(callbackID int64, responseJSON string, errStr string) {
 }
 
 //export httpcloak_get_async
-func httpcloak_get_async(handle C.int64_t, url *C.char, headersJSON *C.char, callbackID C.int64_t) {
+func httpcloak_get_async(handle C.int64_t, url *C.char, optionsJSON *C.char, callbackID C.int64_t) {
 	session := getSession(handle)
 	urlStr := C.GoString(url)
 
-	var headers map[string]string
-	if headersJSON != nil {
-		jsonStr := C.GoString(headersJSON)
+	// Parse options (headers + timeout) if provided - same format as sync version
+	var options RequestOptions
+	if optionsJSON != nil {
+		jsonStr := C.GoString(optionsJSON)
 		if jsonStr != "" {
-			json.Unmarshal([]byte(jsonStr), &headers)
+			json.Unmarshal([]byte(jsonStr), &options)
 		}
 	}
 
@@ -551,7 +560,7 @@ func httpcloak_get_async(handle C.int64_t, url *C.char, headersJSON *C.char, cal
 		req := &httpcloak.Request{
 			Method:  "GET",
 			URL:     urlStr,
-			Headers: headers,
+			Headers: options.Headers,
 		}
 
 		resp, err := session.Do(ctx, req)
@@ -593,7 +602,7 @@ func httpcloak_get_async(handle C.int64_t, url *C.char, headersJSON *C.char, cal
 }
 
 //export httpcloak_post_async
-func httpcloak_post_async(handle C.int64_t, url *C.char, body *C.char, headersJSON *C.char, callbackID C.int64_t) {
+func httpcloak_post_async(handle C.int64_t, url *C.char, body *C.char, optionsJSON *C.char, callbackID C.int64_t) {
 	session := getSession(handle)
 	urlStr := C.GoString(url)
 	bodyStr := ""
@@ -601,11 +610,12 @@ func httpcloak_post_async(handle C.int64_t, url *C.char, body *C.char, headersJS
 		bodyStr = C.GoString(body)
 	}
 
-	var headers map[string]string
-	if headersJSON != nil {
-		jsonStr := C.GoString(headersJSON)
+	// Parse options (headers + timeout) if provided - same format as sync version
+	var options RequestOptions
+	if optionsJSON != nil {
+		jsonStr := C.GoString(optionsJSON)
 		if jsonStr != "" {
-			json.Unmarshal([]byte(jsonStr), &headers)
+			json.Unmarshal([]byte(jsonStr), &options)
 		}
 	}
 
@@ -619,7 +629,7 @@ func httpcloak_post_async(handle C.int64_t, url *C.char, body *C.char, headersJS
 		req := &httpcloak.Request{
 			Method:  "POST",
 			URL:     urlStr,
-			Headers: headers,
+			Headers: options.Headers,
 			Body:    []byte(bodyStr),
 		}
 

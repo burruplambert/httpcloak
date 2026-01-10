@@ -675,6 +675,8 @@ class Session {
    * @param {Object} options - Session options
    * @param {string} [options.preset="chrome-143"] - Browser preset to use
    * @param {string} [options.proxy] - Proxy URL (e.g., "http://user:pass@host:port" or "socks5://host:port")
+   * @param {string} [options.tcpProxy] - Proxy URL for TCP protocols (HTTP/1.1, HTTP/2) - use with udpProxy for split config
+   * @param {string} [options.udpProxy] - Proxy URL for UDP protocols (HTTP/3 via MASQUE) - use with tcpProxy for split config
    * @param {number} [options.timeout=30] - Request timeout in seconds
    * @param {string} [options.httpVersion="auto"] - HTTP version: "auto", "h1", "h2", "h3"
    * @param {boolean} [options.verify=true] - SSL certificate verification
@@ -690,6 +692,8 @@ class Session {
     const {
       preset = "chrome-143",
       proxy = null,
+      tcpProxy = null,
+      udpProxy = null,
       timeout = 30,
       httpVersion = "auto",
       verify = true,
@@ -714,6 +718,12 @@ class Session {
     };
     if (proxy) {
       config.proxy = proxy;
+    }
+    if (tcpProxy) {
+      config.tcp_proxy = tcpProxy;
+    }
+    if (udpProxy) {
+      config.udp_proxy = udpProxy;
     }
     if (!verify) {
       config.verify = false;
@@ -814,9 +824,15 @@ class Session {
     mergedHeaders = applyAuth(mergedHeaders, effectiveAuth);
     mergedHeaders = this._applyCookies(mergedHeaders, cookies);
 
-    const headersJson = mergedHeaders ? JSON.stringify(mergedHeaders) : null;
+    // Build request options JSON with headers wrapper (clib expects {"headers": {...}})
+    const reqOptions = {};
+    if (mergedHeaders) {
+      reqOptions.headers = mergedHeaders;
+    }
+    const optionsJson = Object.keys(reqOptions).length > 0 ? JSON.stringify(reqOptions) : null;
+
     const startTime = Date.now();
-    const result = this._lib.httpcloak_get(this._handle, url, headersJson);
+    const result = this._lib.httpcloak_get(this._handle, url, optionsJson);
     const elapsed = Date.now() - startTime;
     return parseResponse(result, elapsed);
   }
@@ -878,9 +894,15 @@ class Session {
     mergedHeaders = applyAuth(mergedHeaders, effectiveAuth);
     mergedHeaders = this._applyCookies(mergedHeaders, cookies);
 
-    const headersJson = mergedHeaders ? JSON.stringify(mergedHeaders) : null;
+    // Build request options JSON with headers wrapper (clib expects {"headers": {...}})
+    const reqOptions = {};
+    if (mergedHeaders) {
+      reqOptions.headers = mergedHeaders;
+    }
+    const optionsJson = Object.keys(reqOptions).length > 0 ? JSON.stringify(reqOptions) : null;
+
     const startTime = Date.now();
-    const result = this._lib.httpcloak_post(this._handle, url, body, headersJson);
+    const result = this._lib.httpcloak_post(this._handle, url, body, optionsJson);
     const elapsed = Date.now() - startTime;
     return parseResponse(result, elapsed);
   }
@@ -972,14 +994,19 @@ class Session {
     mergedHeaders = applyAuth(mergedHeaders, effectiveAuth);
     mergedHeaders = this._applyCookies(mergedHeaders, cookies);
 
-    const headersJson = mergedHeaders ? JSON.stringify(mergedHeaders) : null;
+    // Build request options JSON with headers wrapper (clib expects {"headers": {...}})
+    const reqOptions = {};
+    if (mergedHeaders) {
+      reqOptions.headers = mergedHeaders;
+    }
+    const optionsJson = Object.keys(reqOptions).length > 0 ? JSON.stringify(reqOptions) : null;
 
     // Register async request with callback manager
     const manager = getAsyncManager();
     const { callbackId, promise } = manager.registerRequest(this._lib);
 
     // Start async request
-    this._lib.httpcloak_get_async(this._handle, url, headersJson, callbackId);
+    this._lib.httpcloak_get_async(this._handle, url, optionsJson, callbackId);
 
     return promise;
   }
@@ -1031,14 +1058,19 @@ class Session {
     mergedHeaders = applyAuth(mergedHeaders, effectiveAuth);
     mergedHeaders = this._applyCookies(mergedHeaders, cookies);
 
-    const headersJson = mergedHeaders ? JSON.stringify(mergedHeaders) : null;
+    // Build request options JSON with headers wrapper (clib expects {"headers": {...}})
+    const reqOptions = {};
+    if (mergedHeaders) {
+      reqOptions.headers = mergedHeaders;
+    }
+    const optionsJson = Object.keys(reqOptions).length > 0 ? JSON.stringify(reqOptions) : null;
 
     // Register async request with callback manager
     const manager = getAsyncManager();
     const { callbackId, promise } = manager.registerRequest(this._lib);
 
     // Start async request
-    this._lib.httpcloak_post_async(this._handle, url, body, headersJson, callbackId);
+    this._lib.httpcloak_post_async(this._handle, url, body, optionsJson, callbackId);
 
     return promise;
   }

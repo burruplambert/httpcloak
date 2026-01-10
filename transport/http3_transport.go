@@ -203,6 +203,20 @@ func NewHTTP3TransportWithTransportConfig(preset *fingerprint.Preset, dnsCache *
 		greaseSettingID:              greaseSettingValue, // GREASE setting
 	}
 
+	// Create QUIC transport for direct connections
+	// We need a bound UDP socket for quic.Transport
+	udpConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
+	if err != nil {
+		// Fallback to IPv6 if IPv4 fails
+		udpConn, err = net.ListenUDP("udp6", &net.UDPAddr{IP: net.IPv6zero, Port: 0})
+		if err != nil {
+			return nil // Will use http3.Transport's default behavior
+		}
+	}
+	t.quicTransport = &quic.Transport{
+		Conn: udpConn,
+	}
+
 	// Create HTTP/3 transport with custom dial for DNS caching
 	// http3.Transport handles connection pooling internally
 	t.transport = &http3.Transport{

@@ -122,6 +122,8 @@ public sealed class Session : IDisposable
     /// </summary>
     /// <param name="preset">Browser preset (default: "chrome-143")</param>
     /// <param name="proxy">Proxy URL (e.g., "http://user:pass@host:port" or "socks5://host:port")</param>
+    /// <param name="tcpProxy">Proxy URL for TCP protocols (HTTP/1.1, HTTP/2) - use with udpProxy for split config</param>
+    /// <param name="udpProxy">Proxy URL for UDP protocols (HTTP/3 via MASQUE) - use with tcpProxy for split config</param>
     /// <param name="timeout">Request timeout in seconds (default: 30)</param>
     /// <param name="httpVersion">HTTP version: "auto", "h1", "h2", "h3" (default: "auto")</param>
     /// <param name="verify">SSL certificate verification (default: true)</param>
@@ -135,6 +137,8 @@ public sealed class Session : IDisposable
     public Session(
         string preset = "chrome-143",
         string? proxy = null,
+        string? tcpProxy = null,
+        string? udpProxy = null,
         int timeout = 30,
         string httpVersion = "auto",
         bool verify = true,
@@ -152,6 +156,8 @@ public sealed class Session : IDisposable
         {
             Preset = preset,
             Proxy = proxy,
+            TcpProxy = tcpProxy,
+            UdpProxy = udpProxy,
             Timeout = timeout,
             HttpVersion = httpVersion,
             Verify = verify,
@@ -964,6 +970,14 @@ internal class SessionConfig
     [JsonPropertyName("proxy")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Proxy { get; set; }
+
+    [JsonPropertyName("tcp_proxy")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? TcpProxy { get; set; }
+
+    [JsonPropertyName("udp_proxy")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? UdpProxy { get; set; }
 
     [JsonPropertyName("timeout")]
     public int Timeout { get; set; } = 30;
