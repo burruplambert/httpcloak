@@ -461,6 +461,104 @@ public sealed class Session : IDisposable
         => Request("OPTIONS", url, null, headers, timeout, auth, parameters, cookies);
 
     // =========================================================================
+    // Binary Body Methods (for uploads)
+    // =========================================================================
+
+    /// <summary>
+    /// Perform a POST request with binary body.
+    /// </summary>
+    /// <param name="url">Request URL</param>
+    /// <param name="body">Binary request body</param>
+    /// <param name="headers">Custom headers</param>
+    /// <param name="parameters">Query parameters</param>
+    /// <param name="cookies">Cookies to send with this request</param>
+    /// <param name="auth">Basic auth (username, password). If null, uses session Auth.</param>
+    /// <param name="timeout">Request timeout in seconds</param>
+    public Response Post(string url, byte[] body, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
+        => RequestBinary("POST", url, body, headers, timeout, auth, parameters, cookies);
+
+    /// <summary>
+    /// Perform a PUT request with binary body.
+    /// </summary>
+    public Response Put(string url, byte[] body, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
+        => RequestBinary("PUT", url, body, headers, timeout, auth, parameters, cookies);
+
+    /// <summary>
+    /// Perform a PATCH request with binary body.
+    /// </summary>
+    public Response Patch(string url, byte[] body, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
+        => RequestBinary("PATCH", url, body, headers, timeout, auth, parameters, cookies);
+
+    /// <summary>
+    /// Perform a POST request with Stream body.
+    /// Note: The entire stream is read into memory before sending.
+    /// </summary>
+    /// <param name="url">Request URL</param>
+    /// <param name="bodyStream">Stream containing the request body</param>
+    /// <param name="headers">Custom headers</param>
+    /// <param name="parameters">Query parameters</param>
+    /// <param name="cookies">Cookies to send with this request</param>
+    /// <param name="auth">Basic auth (username, password). If null, uses session Auth.</param>
+    /// <param name="timeout">Request timeout in seconds</param>
+    public Response Post(string url, Stream bodyStream, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
+        => RequestStream("POST", url, bodyStream, headers, timeout, auth, parameters, cookies);
+
+    /// <summary>
+    /// Perform a PUT request with Stream body.
+    /// Note: The entire stream is read into memory before sending.
+    /// </summary>
+    public Response Put(string url, Stream bodyStream, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
+        => RequestStream("PUT", url, bodyStream, headers, timeout, auth, parameters, cookies);
+
+    /// <summary>
+    /// Perform a PATCH request with Stream body.
+    /// Note: The entire stream is read into memory before sending.
+    /// </summary>
+    public Response Patch(string url, Stream bodyStream, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
+        => RequestStream("PATCH", url, bodyStream, headers, timeout, auth, parameters, cookies);
+
+    /// <summary>
+    /// Perform a custom HTTP request with binary body.
+    /// </summary>
+    public Response RequestBinary(string method, string url, byte[] body, Dictionary<string, string>? headers = null, int? timeout = null, (string, string)? auth = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null)
+    {
+        ThrowIfDisposed();
+
+        url = AddParamsToUrl(url, parameters);
+        headers = ApplyAuth(headers, auth);
+        headers = ApplyCookies(headers, cookies);
+
+        var request = new RequestConfig
+        {
+            Method = method.ToUpperInvariant(),
+            Url = url,
+            Body = Convert.ToBase64String(body),
+            BodyEncoding = "base64",
+            Headers = headers.Count > 0 ? headers : null,
+            Timeout = timeout
+        };
+
+        string requestJson = JsonSerializer.Serialize(request, JsonContext.Default.RequestConfig);
+
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        IntPtr resultPtr = Native.Request(_handle, requestJson);
+        stopwatch.Stop();
+
+        return ParseResponse(resultPtr, stopwatch.Elapsed);
+    }
+
+    /// <summary>
+    /// Perform a custom HTTP request with Stream body.
+    /// Note: The entire stream is read into memory before sending.
+    /// </summary>
+    public Response RequestStream(string method, string url, Stream bodyStream, Dictionary<string, string>? headers = null, int? timeout = null, (string, string)? auth = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null)
+    {
+        using var ms = new MemoryStream();
+        bodyStream.CopyTo(ms);
+        return RequestBinary(method, url, ms.ToArray(), headers, timeout, auth, parameters, cookies);
+    }
+
+    // =========================================================================
     // Async Methods (Native - using Go goroutines)
     // =========================================================================
 
@@ -921,14 +1019,25 @@ public sealed class RedirectInfo
     /// <summary>URL that was requested.</summary>
     public string Url { get; }
 
-    /// <summary>Response headers from the redirect.</summary>
-    public Dictionary<string, string> Headers { get; }
+    /// <summary>Response headers from the redirect (multi-value).</summary>
+    public Dictionary<string, string[]> Headers { get; }
 
-    internal RedirectInfo(int statusCode, string url, Dictionary<string, string>? headers)
+    internal RedirectInfo(int statusCode, string url, Dictionary<string, string[]>? headers)
     {
         StatusCode = statusCode;
         Url = url;
-        Headers = headers ?? new Dictionary<string, string>();
+        Headers = headers ?? new Dictionary<string, string[]>();
+    }
+
+    /// <summary>Get first value of a header (case-insensitive).</summary>
+    public string? GetHeader(string name)
+    {
+        if (Headers.TryGetValue(name, out var values) && values.Length > 0)
+            return values[0];
+        var key = Headers.Keys.FirstOrDefault(k => k.Equals(name, StringComparison.OrdinalIgnoreCase));
+        if (key != null && Headers.TryGetValue(key, out values) && values.Length > 0)
+            return values[0];
+        return null;
     }
 
     public override string ToString() => $"RedirectInfo(StatusCode={StatusCode}, Url={Url})";
@@ -965,7 +1074,7 @@ public sealed class Response
     internal Response(ResponseData data, TimeSpan elapsed = default)
     {
         StatusCode = data.StatusCode;
-        Headers = data.Headers ?? new Dictionary<string, string>();
+        Headers = data.Headers ?? new Dictionary<string, string[]>();
         Text = data.Body ?? "";
         Url = data.FinalUrl ?? "";
         Protocol = data.Protocol ?? "";
@@ -983,8 +1092,42 @@ public sealed class Response
     /// <summary>HTTP status code.</summary>
     public int StatusCode { get; }
 
-    /// <summary>Response headers.</summary>
-    public Dictionary<string, string> Headers { get; }
+    /// <summary>Response headers (multi-value). Use GetHeader() for single value access.</summary>
+    public Dictionary<string, string[]> Headers { get; }
+
+    /// <summary>Get first value of a header (case-insensitive).</summary>
+    /// <param name="name">Header name</param>
+    /// <returns>First header value, or null if not found</returns>
+    public string? GetHeader(string name)
+    {
+        // Try exact match first
+        if (Headers.TryGetValue(name, out var values) && values.Length > 0)
+            return values[0];
+
+        // Try case-insensitive
+        var key = Headers.Keys.FirstOrDefault(k => k.Equals(name, StringComparison.OrdinalIgnoreCase));
+        if (key != null && Headers.TryGetValue(key, out values) && values.Length > 0)
+            return values[0];
+
+        return null;
+    }
+
+    /// <summary>Get all values of a header (case-insensitive).</summary>
+    /// <param name="name">Header name</param>
+    /// <returns>All header values, or empty array if not found</returns>
+    public string[] GetHeaders(string name)
+    {
+        // Try exact match first
+        if (Headers.TryGetValue(name, out var values))
+            return values;
+
+        // Try case-insensitive
+        var key = Headers.Keys.FirstOrDefault(k => k.Equals(name, StringComparison.OrdinalIgnoreCase));
+        if (key != null && Headers.TryGetValue(key, out values))
+            return values;
+
+        return Array.Empty<string>();
+    }
 
     /// <summary>Response body as string.</summary>
     public string Text { get; }
@@ -1018,11 +1161,9 @@ public sealed class Response
     {
         get
         {
-            string contentType = "";
-            if (Headers.TryGetValue("content-type", out var ct))
-                contentType = ct;
-            else if (Headers.TryGetValue("Content-Type", out ct))
-                contentType = ct;
+            string? contentType = GetHeader("Content-Type");
+            if (string.IsNullOrEmpty(contentType))
+                return null;
 
             if (contentType.Contains("charset="))
             {
@@ -1069,6 +1210,9 @@ public class HttpCloakException : Exception
 /// {
 ///     file.Write(chunk);
 /// }
+/// // Or use as a standard Stream:
+/// using var contentStream = stream.GetContentStream();
+/// await contentStream.CopyToAsync(fileStream);
 /// </code>
 /// </example>
 public sealed class StreamResponse : IDisposable
@@ -1088,12 +1232,13 @@ public sealed class StreamResponse : IDisposable
 
     private readonly long _handle;
     private bool _disposed;
+    private HttpCloakContentStream? _contentStream;
 
     internal StreamResponse(long handle, StreamMetadata metadata)
     {
         _handle = handle;
         StatusCode = metadata.StatusCode;
-        Headers = metadata.Headers ?? new Dictionary<string, string>();
+        Headers = metadata.Headers ?? new Dictionary<string, string[]>();
         Url = metadata.FinalUrl ?? "";
         Protocol = metadata.Protocol ?? "";
         ContentLength = metadata.ContentLength;
@@ -1104,8 +1249,8 @@ public sealed class StreamResponse : IDisposable
     /// <summary>HTTP status code.</summary>
     public int StatusCode { get; }
 
-    /// <summary>Response headers.</summary>
-    public Dictionary<string, string> Headers { get; }
+    /// <summary>Response headers (multi-value). Use GetHeader() for single value access.</summary>
+    public Dictionary<string, string[]> Headers { get; }
 
     /// <summary>Final URL after redirects.</summary>
     public string Url { get; }
@@ -1124,6 +1269,32 @@ public sealed class StreamResponse : IDisposable
 
     /// <summary>HTTP status reason phrase.</summary>
     public string Reason => HttpStatusPhrases.TryGetValue(StatusCode, out var phrase) ? phrase : "Unknown";
+
+    /// <summary>Get first value of a header (case-insensitive).</summary>
+    /// <param name="name">Header name</param>
+    /// <returns>First header value, or null if not found</returns>
+    public string? GetHeader(string name)
+    {
+        if (Headers.TryGetValue(name, out var values) && values.Length > 0)
+            return values[0];
+        var key = Headers.Keys.FirstOrDefault(k => k.Equals(name, StringComparison.OrdinalIgnoreCase));
+        if (key != null && Headers.TryGetValue(key, out values) && values.Length > 0)
+            return values[0];
+        return null;
+    }
+
+    /// <summary>Get all values of a header (case-insensitive).</summary>
+    /// <param name="name">Header name</param>
+    /// <returns>All header values, or empty array if not found</returns>
+    public string[] GetHeaders(string name)
+    {
+        if (Headers.TryGetValue(name, out var values))
+            return values;
+        var key = Headers.Keys.FirstOrDefault(k => k.Equals(name, StringComparison.OrdinalIgnoreCase));
+        if (key != null && Headers.TryGetValue(key, out values))
+            return values;
+        return Array.Empty<string>();
+    }
 
     /// <summary>
     /// Read a chunk of data from the stream.
@@ -1157,6 +1328,35 @@ public sealed class StreamResponse : IDisposable
                 yield break;
             yield return chunk;
         }
+    }
+
+    /// <summary>
+    /// Get a standard System.IO.Stream for the response body.
+    /// Ideal for use with HttpClient, StreamContent, or CopyToAsync.
+    /// Note: The stream will be disposed when the StreamResponse is disposed.
+    /// </summary>
+    /// <param name="bufferSize">Internal buffer size (default: 65536)</param>
+    /// <returns>A readable Stream wrapping the response body</returns>
+    /// <example>
+    /// <code>
+    /// using var streamResponse = session.GetStream("https://example.com/file");
+    /// using var contentStream = streamResponse.GetContentStream();
+    ///
+    /// // Use with HttpResponseMessage
+    /// var response = new HttpResponseMessage { Content = new StreamContent(contentStream) };
+    ///
+    /// // Or copy to file
+    /// await contentStream.CopyToAsync(fileStream);
+    /// </code>
+    /// </example>
+    public Stream GetContentStream(int bufferSize = 65536)
+    {
+        ThrowIfDisposed();
+        if (_contentStream != null)
+            throw new InvalidOperationException("GetContentStream can only be called once per StreamResponse");
+
+        _contentStream = new HttpCloakContentStream(this, bufferSize);
+        return _contentStream;
     }
 
     /// <summary>
@@ -1202,10 +1402,95 @@ public sealed class StreamResponse : IDisposable
     {
         if (!_disposed)
         {
+            _contentStream?.MarkParentDisposed();
             Native.StreamClose(_handle);
             _disposed = true;
         }
     }
+}
+
+/// <summary>
+/// A Stream wrapper around StreamResponse for standard .NET streaming APIs.
+/// Enables use with HttpClient, StreamContent, CopyToAsync, etc.
+/// </summary>
+public sealed class HttpCloakContentStream : Stream
+{
+    private readonly StreamResponse _parent;
+    private readonly int _bufferSize;
+    private byte[]? _buffer;
+    private int _bufferPos;
+    private int _bufferLen;
+    private bool _eof;
+    private bool _parentDisposed;
+    private long _position;
+
+    internal HttpCloakContentStream(StreamResponse parent, int bufferSize)
+    {
+        _parent = parent;
+        _bufferSize = bufferSize;
+    }
+
+    internal void MarkParentDisposed() => _parentDisposed = true;
+
+    public override bool CanRead => !_parentDisposed;
+    public override bool CanSeek => false;
+    public override bool CanWrite => false;
+    public override long Length => _parent.ContentLength;
+    public override long Position
+    {
+        get => _position;
+        set => throw new NotSupportedException("Seeking is not supported");
+    }
+
+    public override int Read(byte[] buffer, int offset, int count)
+    {
+        if (_parentDisposed)
+            throw new ObjectDisposedException(nameof(HttpCloakContentStream));
+        if (_eof)
+            return 0;
+
+        int totalRead = 0;
+
+        while (count > 0)
+        {
+            // If buffer is empty, fetch more data
+            if (_buffer == null || _bufferPos >= _bufferLen)
+            {
+                var chunk = _parent.ReadChunk(_bufferSize);
+                if (chunk == null || chunk.Length == 0)
+                {
+                    _eof = true;
+                    break;
+                }
+                _buffer = chunk;
+                _bufferPos = 0;
+                _bufferLen = chunk.Length;
+            }
+
+            // Copy from buffer to output
+            int available = _bufferLen - _bufferPos;
+            int toCopy = Math.Min(available, count);
+            Array.Copy(_buffer, _bufferPos, buffer, offset, toCopy);
+            _bufferPos += toCopy;
+            offset += toCopy;
+            count -= toCopy;
+            totalRead += toCopy;
+            _position += toCopy;
+        }
+
+        return totalRead;
+    }
+
+    public override async Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+    {
+        // The underlying native call is synchronous, so we just wrap it
+        return await Task.Run(() => Read(buffer, offset, count), cancellationToken);
+    }
+
+    public override void Flush() { }
+    public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+    public override void SetLength(long value) => throw new NotSupportedException();
+    public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
 }
 
 /// <summary>
@@ -1315,6 +1600,10 @@ internal class RequestConfig
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Body { get; set; }
 
+    [JsonPropertyName("body_encoding")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? BodyEncoding { get; set; }
+
     [JsonPropertyName("timeout")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? Timeout { get; set; }
@@ -1338,7 +1627,7 @@ internal class RedirectInfoData
     public string? Url { get; set; }
 
     [JsonPropertyName("headers")]
-    public Dictionary<string, string>? Headers { get; set; }
+    public Dictionary<string, string[]>? Headers { get; set; }
 }
 
 internal class ResponseData
@@ -1347,7 +1636,7 @@ internal class ResponseData
     public int StatusCode { get; set; }
 
     [JsonPropertyName("headers")]
-    public Dictionary<string, string>? Headers { get; set; }
+    public Dictionary<string, string[]>? Headers { get; set; }
 
     [JsonPropertyName("body")]
     public string? Body { get; set; }
@@ -1388,7 +1677,7 @@ internal class StreamMetadata
     public int StatusCode { get; set; }
 
     [JsonPropertyName("headers")]
-    public Dictionary<string, string>? Headers { get; set; }
+    public Dictionary<string, string[]>? Headers { get; set; }
 
     [JsonPropertyName("final_url")]
     public string? FinalUrl { get; set; }
@@ -1412,6 +1701,7 @@ internal class StreamMetadata
 [JsonSerializable(typeof(List<CookieData>))]
 [JsonSerializable(typeof(List<RedirectInfoData>))]
 [JsonSerializable(typeof(Dictionary<string, string>))]
+[JsonSerializable(typeof(Dictionary<string, string[]>))]
 [JsonSerializable(typeof(string[]))]
 [JsonSerializable(typeof(StreamOptions))]
 [JsonSerializable(typeof(StreamMetadata))]

@@ -17,6 +17,7 @@ import "C"
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -26,6 +27,17 @@ import (
 
 	"github.com/sardanioss/httpcloak"
 )
+
+// decodeRequestBody decodes the request body based on encoding type
+func decodeRequestBody(body, encoding string) ([]byte, error) {
+	if body == "" {
+		return nil, nil
+	}
+	if encoding == "base64" {
+		return base64.StdEncoding.DecodeString(body)
+	}
+	return []byte(body), nil
+}
 
 // Session handle management
 var (
@@ -77,11 +89,12 @@ var (
 
 // Request configuration for JSON parsing
 type RequestConfig struct {
-	Method  string            `json:"method"`
-	URL     string            `json:"url"`
-	Headers map[string]string `json:"headers,omitempty"`
-	Body    string            `json:"body,omitempty"`
-	Timeout int               `json:"timeout,omitempty"` // seconds
+	Method       string            `json:"method"`
+	URL          string            `json:"url"`
+	Headers      map[string]string `json:"headers,omitempty"`
+	Body         string            `json:"body,omitempty"`
+	BodyEncoding string            `json:"body_encoding,omitempty"` // "text" (default) or "base64"
+	Timeout      int               `json:"timeout,omitempty"`       // seconds
 }
 
 // Cookie represents a parsed cookie from Set-Cookie header
@@ -572,7 +585,11 @@ func httpcloak_request_raw(handle C.int64_t, requestJSON *C.char, body *C.char, 
 	if body != nil && bodyLen > 0 {
 		bodyBytes = C.GoBytes(unsafe.Pointer(body), bodyLen)
 	} else if config.Body != "" {
-		bodyBytes = []byte(config.Body)
+		var err error
+		bodyBytes, err = decodeRequestBody(config.Body, config.BodyEncoding)
+		if err != nil {
+			return -1 // Invalid base64
+		}
 	}
 
 	ctx := context.Background()
@@ -869,7 +886,11 @@ func httpcloak_request(handle C.int64_t, requestJSON *C.char) *C.char {
 
 	var bodyReader io.Reader
 	if config.Body != "" {
-		bodyReader = bytes.NewReader([]byte(config.Body))
+		bodyBytes, err := decodeRequestBody(config.Body, config.BodyEncoding)
+		if err != nil {
+			return makeErrorJSON(err)
+		}
+		bodyReader = bytes.NewReader(bodyBytes)
 	}
 
 	req := &httpcloak.Request{
@@ -1124,7 +1145,14 @@ func httpcloak_request_async(handle C.int64_t, requestJSON *C.char, callbackID C
 
 		var bodyReader io.Reader
 		if config.Body != "" {
-			bodyReader = bytes.NewReader([]byte(config.Body))
+			bodyBytes, err := decodeRequestBody(config.Body, config.BodyEncoding)
+			if err != nil {
+				errResp := ErrorResponse{Error: err.Error()}
+				errJSON, _ := json.Marshal(errResp)
+				invokeCallback(int64(callbackID), "", string(errJSON))
+				return
+			}
+			bodyReader = bytes.NewReader(bodyBytes)
 		}
 
 		req := &httpcloak.Request{
@@ -1401,7 +1429,12 @@ func httpcloak_stream_request(sessionHandle C.int64_t, requestJSON *C.char) C.in
 
 	var bodyReader io.Reader
 	if config.Body != "" {
-		bodyReader = bytes.NewReader([]byte(config.Body))
+		bodyBytes, err := decodeRequestBody(config.Body, config.BodyEncoding)
+		if err != nil {
+			cancel()
+			return -1
+		}
+		bodyReader = bytes.NewReader(bodyBytes)
 	}
 
 	req := &httpcloak.Request{
