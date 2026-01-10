@@ -143,7 +143,15 @@ func (t *HTTP1Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if err == nil && conn != nil {
 		resp, err := t.doRequest(conn, req)
 		if err == nil {
-			t.putIdleConn(key, conn)
+			// Wrap the body to handle connection lifecycle
+			// Connection will be returned to pool or closed when body is fully read
+			resp.Body = &pooledBodyWrapper{
+				body:        resp.Body,
+				conn:        conn,
+				key:         key,
+				transport:   t,
+				keepAlive:   t.shouldKeepAlive(req, resp),
+			}
 			return resp, nil
 		}
 		// Connection failed, close it and try new one
@@ -162,11 +170,113 @@ func (t *HTTP1Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return nil, WrapError("request", host, port, "h1", err)
 	}
 
-	// Check if connection should be kept alive
-	if t.shouldKeepAlive(req, resp) {
-		t.putIdleConn(key, conn)
+	// Wrap the body to handle connection lifecycle
+	resp.Body = &pooledBodyWrapper{
+		body:        resp.Body,
+		conn:        conn,
+		key:         key,
+		transport:   t,
+		keepAlive:   t.shouldKeepAlive(req, resp),
+	}
+
+	return resp, nil
+}
+
+// pooledBodyWrapper wraps response body to return connection to pool when done
+type pooledBodyWrapper struct {
+	body      io.ReadCloser
+	conn      *http1Conn
+	key       string
+	transport *HTTP1Transport
+	keepAlive bool
+	closed    bool
+}
+
+func (w *pooledBodyWrapper) Read(p []byte) (n int, err error) {
+	n, err = w.body.Read(p)
+	if err == io.EOF && !w.closed {
+		// Body fully read, handle connection
+		w.handleClose()
+	}
+	return n, err
+}
+
+func (w *pooledBodyWrapper) Close() error {
+	if !w.closed {
+		w.handleClose()
+	}
+	return w.body.Close()
+}
+
+func (w *pooledBodyWrapper) handleClose() {
+	w.closed = true
+	if w.keepAlive {
+		w.transport.putIdleConn(w.key, w.conn)
 	} else {
+		w.conn.close()
+	}
+}
+
+// streamBodyWrapper wraps response body to close connection when body is closed
+type streamBodyWrapper struct {
+	body io.ReadCloser
+	conn *http1Conn
+}
+
+func (w *streamBodyWrapper) Read(p []byte) (n int, err error) {
+	return w.body.Read(p)
+}
+
+func (w *streamBodyWrapper) Close() error {
+	err := w.body.Close()
+	w.conn.close()
+	return err
+}
+
+// StreamRoundTrip performs an HTTP request for streaming - connection is NOT pooled
+// The connection will be closed when the response body is closed
+func (t *HTTP1Transport) StreamRoundTrip(req *http.Request) (*http.Response, error) {
+	t.closedMu.RLock()
+	if t.closed {
+		t.closedMu.RUnlock()
+		return nil, &TransportError{
+			Op:       "stream_roundtrip",
+			Host:     req.URL.Hostname(),
+			Protocol: "h1",
+			Cause:    ErrClosed,
+			Category: ErrClosed,
+		}
+	}
+	t.closedMu.RUnlock()
+
+	host := req.URL.Hostname()
+	port := req.URL.Port()
+	scheme := req.URL.Scheme
+
+	if port == "" {
+		if scheme == "https" {
+			port = "443"
+		} else {
+			port = "80"
+		}
+	}
+
+	// Create new connection (don't use pool for streaming)
+	conn, err := t.createConn(req.Context(), host, port, scheme)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := t.doRequest(conn, req)
+	if err != nil {
 		conn.close()
+		return nil, WrapError("stream_request", host, port, "h1", err)
+	}
+
+	// Wrap the response body to close connection when body is closed
+	resp.Body = &streamBodyWrapper{
+		body: resp.Body,
+		conn: conn,
 	}
 
 	return resp, nil
@@ -279,8 +389,8 @@ func (t *HTTP1Transport) createConn(ctx context.Context, host, port, scheme stri
 		conn.conn = tlsConn
 	}
 
-	conn.br = bufio.NewReaderSize(conn.conn, 4096)
-	conn.bw = bufio.NewWriterSize(conn.conn, 4096)
+	conn.br = bufio.NewReaderSize(conn.conn, 64*1024)  // 64KB read buffer
+	conn.bw = bufio.NewWriterSize(conn.conn, 256*1024) // 256KB write buffer for fast uploads
 
 	_ = targetAddr // suppress unused warning
 
@@ -430,8 +540,11 @@ func (t *HTTP1Transport) writeRequest(conn *http1Conn, req *http.Request) error 
 	}
 	fmt.Fprintf(conn.bw, "Host: %s\r\n", host)
 
+	// Determine if we need chunked encoding (unknown content length with body)
+	useChunked := req.Body != nil && req.ContentLength <= 0 && req.Header.Get("Content-Length") == ""
+
 	// Write headers in browser-like order
-	t.writeHeadersInOrder(conn.bw, req)
+	t.writeHeadersInOrder(conn.bw, req, useChunked)
 
 	// End headers
 	conn.bw.WriteString("\r\n")
@@ -443,9 +556,16 @@ func (t *HTTP1Transport) writeRequest(conn *http1Conn, req *http.Request) error 
 
 	// Write body if present
 	if req.Body != nil {
-		_, err := io.Copy(conn.bw, req.Body)
-		if err != nil {
-			return err
+		if useChunked {
+			// Write body in chunked encoding
+			if err := t.writeChunkedBody(conn.bw, req.Body); err != nil {
+				return err
+			}
+		} else {
+			_, err := io.Copy(conn.bw, req.Body)
+			if err != nil {
+				return err
+			}
 		}
 		conn.bw.Flush()
 	}
@@ -453,8 +573,43 @@ func (t *HTTP1Transport) writeRequest(conn *http1Conn, req *http.Request) error 
 	return nil
 }
 
+// writeChunkedBody writes the body using chunked transfer encoding
+func (t *HTTP1Transport) writeChunkedBody(w *bufio.Writer, body io.Reader) error {
+	buf := make([]byte, 32*1024) // 32KB chunks
+	for {
+		n, err := body.Read(buf)
+		if n > 0 {
+			// Write chunk size in hex
+			fmt.Fprintf(w, "%x\r\n", n)
+			// Write chunk data
+			if _, werr := w.Write(buf[:n]); werr != nil {
+				return werr
+			}
+			// Write chunk terminator
+			if _, werr := w.WriteString("\r\n"); werr != nil {
+				return werr
+			}
+			// Flush each chunk to ensure it's sent
+			if ferr := w.Flush(); ferr != nil {
+				return ferr
+			}
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+	}
+	// Write final chunk (0-length)
+	if _, err := w.WriteString("0\r\n\r\n"); err != nil {
+		return err
+	}
+	return nil
+}
+
 // writeHeadersInOrder writes headers in a browser-like order
-func (t *HTTP1Transport) writeHeadersInOrder(w *bufio.Writer, req *http.Request) {
+func (t *HTTP1Transport) writeHeadersInOrder(w *bufio.Writer, req *http.Request, useChunked bool) {
 	// Browser-like header order for HTTP/1.1
 	headerOrder := []string{
 		"Connection",
@@ -473,14 +628,19 @@ func (t *HTTP1Transport) writeHeadersInOrder(w *bufio.Writer, req *http.Request)
 		"Sec-Fetch-User",
 		"Content-Type",
 		"Content-Length",
+		"Transfer-Encoding",
 	}
 
 	written := make(map[string]bool)
 
 	// Write headers in preferred order
 	for _, key := range headerOrder {
-		// Special handling for Content-Length - also check req.ContentLength
+		// Special handling for Content-Length
 		if key == "Content-Length" {
+			if useChunked {
+				// Skip Content-Length when using chunked encoding
+				continue
+			}
 			// First check if header is set
 			if values, ok := req.Header[key]; ok {
 				for _, v := range values {
@@ -491,9 +651,18 @@ func (t *HTTP1Transport) writeHeadersInOrder(w *bufio.Writer, req *http.Request)
 				// Fallback to ContentLength field
 				fmt.Fprintf(w, "Content-Length: %d\r\n", req.ContentLength)
 				written[key] = true
-			} else if req.ContentLength == 0 && req.Body != nil {
+			} else if req.ContentLength == 0 && req.Body != nil && !useChunked {
 				// Empty body but Body is set (POST/PUT/PATCH with empty body)
 				fmt.Fprintf(w, "Content-Length: 0\r\n")
+				written[key] = true
+			}
+			continue
+		}
+
+		// Special handling for Transfer-Encoding
+		if key == "Transfer-Encoding" {
+			if useChunked {
+				fmt.Fprintf(w, "Transfer-Encoding: chunked\r\n")
 				written[key] = true
 			}
 			continue
@@ -521,6 +690,10 @@ func (t *HTTP1Transport) writeHeadersInOrder(w *bufio.Writer, req *http.Request)
 		}
 		// Skip Host (already written) and certain headers
 		if strings.EqualFold(key, "Host") {
+			continue
+		}
+		// Skip Transfer-Encoding and Content-Length if we're handling them specially
+		if useChunked && (strings.EqualFold(key, "Transfer-Encoding") || strings.EqualFold(key, "Content-Length")) {
 			continue
 		}
 		for _, v := range values {

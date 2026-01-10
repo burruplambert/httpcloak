@@ -345,6 +345,26 @@ func httpcloak_response_get_body(handle C.int64_t, outLen *C.int) unsafe.Pointer
 	return C.CBytes(resp.body)
 }
 
+// httpcloak_response_get_body_ptr returns a DIRECT pointer to the body data (zero-copy)
+// WARNING: The pointer is only valid until httpcloak_response_free is called!
+// The caller must NOT free this pointer - it's managed by Go.
+//
+//export httpcloak_response_get_body_ptr
+func httpcloak_response_get_body_ptr(handle C.int64_t, outLen *C.int) unsafe.Pointer {
+	rawResponsesMu.RLock()
+	resp, exists := rawResponses[int64(handle)]
+	rawResponsesMu.RUnlock()
+
+	if !exists || resp == nil || len(resp.body) == 0 {
+		*outLen = 0
+		return nil
+	}
+
+	*outLen = C.int(len(resp.body))
+	// Return direct pointer to Go memory - caller must not free!
+	return unsafe.Pointer(&resp.body[0])
+}
+
 //export httpcloak_response_get_body_len
 func httpcloak_response_get_body_len(handle C.int64_t) C.int {
 	rawResponsesMu.RLock()
@@ -391,6 +411,41 @@ func httpcloak_response_free(handle C.int64_t) {
 		delete(rawResponses, int64(handle))
 	}
 	rawResponsesMu.Unlock()
+}
+
+// httpcloak_response_finalize copies body to buffer, returns metadata with body_len, and frees response
+// This combines get_metadata + get_body_len + copy_body_to + response_free into one FFI call
+//
+//export httpcloak_response_finalize
+func httpcloak_response_finalize(handle C.int64_t, dest unsafe.Pointer, destLen C.int) *C.char {
+	rawResponsesMu.Lock()
+	resp, exists := rawResponses[int64(handle)]
+	if !exists || resp == nil {
+		rawResponsesMu.Unlock()
+		return C.CString(`{"error":"invalid response handle"}`)
+	}
+
+	// Copy body to destination buffer
+	copyLen := len(resp.body)
+	if int(destLen) < copyLen {
+		copyLen = int(destLen)
+	}
+	if copyLen > 0 && dest != nil {
+		destSlice := (*[1 << 30]byte)(dest)[:copyLen:copyLen]
+		copy(destSlice, resp.body[:copyLen])
+	}
+
+	// Get metadata (already includes body_len)
+	metadata := resp.metadata
+
+	// Release pooled buffer and clean up
+	if resp.releaseBody != nil {
+		resp.releaseBody()
+	}
+	delete(rawResponses, int64(handle))
+	rawResponsesMu.Unlock()
+
+	return C.CString(string(metadata))
 }
 
 //export httpcloak_get_raw
@@ -1329,6 +1384,13 @@ func httpcloak_stream_read(streamHandle C.int64_t, bufferSize C.int) *C.char {
 	}
 
 	chunk, err := stream.ReadChunk(size)
+
+	// If we got data, return it (even if there's also an EOF)
+	if len(chunk) > 0 {
+		return C.CString(encodeBase64(chunk))
+	}
+
+	// No data - check for EOF or error
 	if err != nil {
 		if err.Error() == "EOF" {
 			// Return empty string to indicate EOF
@@ -1337,8 +1399,8 @@ func httpcloak_stream_read(streamHandle C.int64_t, bufferSize C.int) *C.char {
 		return nil
 	}
 
-	// Return as base64 to handle binary data safely
-	return C.CString(encodeBase64(chunk))
+	// No data and no error - return empty (shouldn't happen normally)
+	return C.CString("")
 }
 
 //export httpcloak_stream_read_raw

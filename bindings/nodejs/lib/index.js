@@ -236,6 +236,364 @@ class Response {
 }
 
 /**
+ * High-performance buffer pool using SharedArrayBuffer for zero-allocation copies.
+ * Pre-allocates a large buffer once and reuses it across requests.
+ */
+class FastBufferPool {
+  constructor() {
+    // Pre-allocate 256MB SharedArrayBuffer for maximum performance
+    this._sharedBuffer = new SharedArrayBuffer(256 * 1024 * 1024);
+    this._bufferView = Buffer.from(this._sharedBuffer);
+    this._inUse = false;
+
+    // Fallback pool for concurrent requests or very large files
+    this._fallbackPools = new Map();
+    this._tiers = [1024, 4096, 16384, 65536, 262144, 1048576, 4194304, 16777216, 67108864, 134217728];
+  }
+
+  /**
+   * Get a buffer of at least the requested size
+   * @param {number} size - Minimum buffer size needed
+   * @returns {Buffer} - A buffer (may be larger than requested)
+   */
+  acquire(size) {
+    // Use pre-allocated SharedArrayBuffer if available and large enough
+    if (!this._inUse && size <= this._sharedBuffer.byteLength) {
+      this._inUse = true;
+      return this._bufferView;
+    }
+
+    // Fallback to regular buffer pool for concurrent requests
+    let tier = this._tiers[this._tiers.length - 1];
+    for (const t of this._tiers) {
+      if (t >= size) {
+        tier = t;
+        break;
+      }
+    }
+
+    const pool = this._fallbackPools.get(tier);
+    if (pool && pool.length > 0) {
+      return pool.pop();
+    }
+
+    return Buffer.allocUnsafe(Math.max(tier, size));
+  }
+
+  /**
+   * Return a buffer to the pool for reuse
+   * @param {Buffer} buffer - Buffer to return
+   */
+  release(buffer) {
+    // Check if this is our shared buffer
+    if (buffer.buffer === this._sharedBuffer) {
+      this._inUse = false;
+      return;
+    }
+
+    // Otherwise add to fallback pool
+    const size = buffer.length;
+    if (!this._tiers.includes(size)) {
+      return;
+    }
+
+    let pool = this._fallbackPools.get(size);
+    if (!pool) {
+      pool = [];
+      this._fallbackPools.set(size, pool);
+    }
+
+    if (pool.length < 2) {
+      pool.push(buffer);
+    }
+  }
+}
+
+// Global buffer pool instance
+const _bufferPool = new FastBufferPool();
+
+/**
+ * Fast response object with zero-copy buffer transfer.
+ *
+ * This response type avoids JSON serialization and base64 encoding for the body,
+ * copying data directly from Go's memory to a Node.js Buffer.
+ *
+ * Use session.getFast() for maximum download performance.
+ */
+class FastResponse {
+  /**
+   * @param {Object} metadata - Response metadata from native library
+   * @param {Buffer} body - Response body as Buffer (view of pooled buffer)
+   * @param {number} [elapsed=0] - Elapsed time in milliseconds
+   * @param {Buffer} [pooledBuffer=null] - The underlying pooled buffer for release
+   */
+  constructor(metadata, body, elapsed = 0, pooledBuffer = null) {
+    this.statusCode = metadata.status_code || 0;
+    this.headers = metadata.headers || {};
+    this._body = body;
+    this._pooledBuffer = pooledBuffer;
+    this.finalUrl = metadata.final_url || "";
+    this.protocol = metadata.protocol || "";
+    this.elapsed = elapsed;
+
+    // Parse cookies from response
+    this._cookies = (metadata.cookies || []).map(c => new Cookie(c.name || "", c.value || ""));
+
+    // Parse redirect history
+    this._history = (metadata.history || []).map(h => new RedirectInfo(
+      h.status_code || 0,
+      h.url || "",
+      h.headers || {}
+    ));
+  }
+
+  /**
+   * Release the underlying buffer back to the pool.
+   * Call this when done with the response to enable buffer reuse.
+   * After calling release(), the body buffer should not be used.
+   */
+  release() {
+    if (this._pooledBuffer) {
+      _bufferPool.release(this._pooledBuffer);
+      this._pooledBuffer = null;
+      this._body = null;
+    }
+  }
+
+  /** Cookies set by this response */
+  get cookies() {
+    return this._cookies;
+  }
+
+  /** Redirect history (list of RedirectInfo objects) */
+  get history() {
+    return this._history;
+  }
+
+  /** Response body as string */
+  get text() {
+    return this._body.toString("utf8");
+  }
+
+  /** Response body as Buffer */
+  get body() {
+    return this._body;
+  }
+
+  /** Response body as Buffer (requests compatibility alias) */
+  get content() {
+    return this._body;
+  }
+
+  /** Final URL after redirects (requests compatibility alias) */
+  get url() {
+    return this.finalUrl;
+  }
+
+  /** True if status code < 400 (requests compatibility) */
+  get ok() {
+    return this.statusCode < 400;
+  }
+
+  /** HTTP status reason phrase (e.g., 'OK', 'Not Found') */
+  get reason() {
+    return HTTP_STATUS_PHRASES[this.statusCode] || "Unknown";
+  }
+
+  /**
+   * Response encoding from Content-Type header.
+   * Returns null if not specified.
+   */
+  get encoding() {
+    let contentType = this.headers["content-type"] || this.headers["Content-Type"] || "";
+    if (contentType.includes("charset=")) {
+      const parts = contentType.split(";");
+      for (const part of parts) {
+        const trimmed = part.trim();
+        if (trimmed.toLowerCase().startsWith("charset=")) {
+          return trimmed.split("=")[1].trim().replace(/['"]/g, "");
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Parse response body as JSON
+   */
+  json() {
+    return JSON.parse(this._body.toString("utf8"));
+  }
+
+  /**
+   * Raise error if status >= 400 (requests compatibility)
+   */
+  raiseForStatus() {
+    if (!this.ok) {
+      throw new HTTPCloakError(`HTTP ${this.statusCode}: ${this.reason}`);
+    }
+  }
+}
+
+/**
+ * Streaming HTTP Response for downloading large files.
+ *
+ * Example:
+ *   const stream = session.getStream(url);
+ *   for await (const chunk of stream) {
+ *     file.write(chunk);
+ *   }
+ *   stream.close();
+ */
+class StreamResponse {
+  /**
+   * @param {number} streamHandle - Native stream handle
+   * @param {Object} lib - Native library
+   * @param {Object} metadata - Stream metadata
+   */
+  constructor(streamHandle, lib, metadata) {
+    this._handle = streamHandle;
+    this._lib = lib;
+    this.statusCode = metadata.status_code || 0;
+    this.headers = metadata.headers || {};
+    this.finalUrl = metadata.final_url || "";
+    this.protocol = metadata.protocol || "";
+    this.contentLength = metadata.content_length || -1;
+    this._cookies = (metadata.cookies || []).map(c => new Cookie(c.name || "", c.value || ""));
+    this._closed = false;
+  }
+
+  /** Cookies set by this response */
+  get cookies() {
+    return this._cookies;
+  }
+
+  /** Final URL after redirects */
+  get url() {
+    return this.finalUrl;
+  }
+
+  /** True if status code < 400 */
+  get ok() {
+    return this.statusCode < 400;
+  }
+
+  /** HTTP status reason phrase */
+  get reason() {
+    return HTTP_STATUS_PHRASES[this.statusCode] || "Unknown";
+  }
+
+  /**
+   * Read a chunk of data from the stream.
+   * @param {number} [chunkSize=8192] - Maximum bytes to read
+   * @returns {Buffer|null} - Chunk of data or null if EOF
+   */
+  readChunk(chunkSize = 8192) {
+    if (this._closed) {
+      throw new HTTPCloakError("Stream is closed");
+    }
+
+    const result = this._lib.httpcloak_stream_read(this._handle, chunkSize);
+    if (!result || result === "") {
+      return null; // EOF
+    }
+
+    // Decode base64 to Buffer
+    return Buffer.from(result, "base64");
+  }
+
+  /**
+   * Async generator for iterating over chunks.
+   * @param {number} [chunkSize=8192] - Size of each chunk
+   * @yields {Buffer} - Chunks of response content
+   *
+   * Example:
+   *   for await (const chunk of stream.iterate()) {
+   *     file.write(chunk);
+   *   }
+   */
+  async *iterate(chunkSize = 8192) {
+    while (true) {
+      const chunk = this.readChunk(chunkSize);
+      if (!chunk) {
+        break;
+      }
+      yield chunk;
+    }
+  }
+
+  /**
+   * Symbol.asyncIterator for for-await-of loops.
+   * @yields {Buffer} - Chunks of response content
+   *
+   * Example:
+   *   for await (const chunk of stream) {
+   *     file.write(chunk);
+   *   }
+   */
+  [Symbol.asyncIterator]() {
+    return this.iterate();
+  }
+
+  /**
+   * Read the entire response body as Buffer.
+   * Warning: This defeats the purpose of streaming for large files.
+   * @returns {Buffer}
+   */
+  readAll() {
+    const chunks = [];
+    let chunk;
+    while ((chunk = this.readChunk()) !== null) {
+      chunks.push(chunk);
+    }
+    return Buffer.concat(chunks);
+  }
+
+  /**
+   * Read the entire response body as string.
+   * @returns {string}
+   */
+  get text() {
+    return this.readAll().toString("utf8");
+  }
+
+  /**
+   * Read the entire response body as Buffer.
+   * @returns {Buffer}
+   */
+  get body() {
+    return this.readAll();
+  }
+
+  /**
+   * Parse the response body as JSON.
+   * @returns {any}
+   */
+  json() {
+    return JSON.parse(this.text);
+  }
+
+  /**
+   * Close the stream and release resources.
+   */
+  close() {
+    if (!this._closed) {
+      this._lib.httpcloak_stream_close(this._handle);
+      this._closed = true;
+    }
+  }
+
+  /**
+   * Raise error if status >= 400
+   */
+  raiseForStatus() {
+    if (!this.ok) {
+      throw new HTTPCloakError(`HTTP ${this.statusCode}: ${this.reason}`);
+    }
+  }
+}
+
+/**
  * Get the platform package name for the current platform
  */
 function getPlatformPackageName() {
@@ -357,6 +715,22 @@ function getLib() {
       httpcloak_get_async: nativeLibHandle.func("httpcloak_get_async", "void", ["int64", "str", "str", "int64"]),
       httpcloak_post_async: nativeLibHandle.func("httpcloak_post_async", "void", ["int64", "str", "str", "str", "int64"]),
       httpcloak_request_async: nativeLibHandle.func("httpcloak_request_async", "void", ["int64", "str", "int64"]),
+      // Streaming functions
+      httpcloak_stream_get: nativeLibHandle.func("httpcloak_stream_get", "int64", ["int64", "str", "str"]),
+      httpcloak_stream_post: nativeLibHandle.func("httpcloak_stream_post", "int64", ["int64", "str", "str", "str"]),
+      httpcloak_stream_request: nativeLibHandle.func("httpcloak_stream_request", "int64", ["int64", "str"]),
+      httpcloak_stream_get_metadata: nativeLibHandle.func("httpcloak_stream_get_metadata", "str", ["int64"]),
+      httpcloak_stream_read: nativeLibHandle.func("httpcloak_stream_read", "str", ["int64", "int64"]),
+      httpcloak_stream_close: nativeLibHandle.func("httpcloak_stream_close", "void", ["int64"]),
+      // Raw response functions for fast-path (zero-copy)
+      httpcloak_get_raw: nativeLibHandle.func("httpcloak_get_raw", "int64", ["int64", "str", "str"]),
+      httpcloak_post_raw: nativeLibHandle.func("httpcloak_post_raw", "int64", ["int64", "str", "void*", "int", "str"]),
+      httpcloak_response_get_metadata: nativeLibHandle.func("httpcloak_response_get_metadata", "str", ["int64"]),
+      httpcloak_response_get_body_len: nativeLibHandle.func("httpcloak_response_get_body_len", "int", ["int64"]),
+      httpcloak_response_copy_body_to: nativeLibHandle.func("httpcloak_response_copy_body_to", "int", ["int64", "void*", "int"]),
+      httpcloak_response_free: nativeLibHandle.func("httpcloak_response_free", "void", ["int64"]),
+      // Combined finalize function (copy + metadata + free in one call)
+      httpcloak_response_finalize: nativeLibHandle.func("httpcloak_response_finalize", "str", ["int64", "void*", "int"]),
     };
   }
   return lib;
@@ -1237,6 +1611,394 @@ class Session {
   get cookies() {
     return this.getCookies();
   }
+
+  // ===========================================================================
+  // Streaming Methods
+  // ===========================================================================
+
+  /**
+   * Perform a streaming GET request.
+   *
+   * @param {string} url - Request URL
+   * @param {Object} [options] - Request options
+   * @param {Object} [options.params] - URL query parameters
+   * @param {Object} [options.headers] - Request headers
+   * @param {Object} [options.cookies] - Cookies to send
+   * @param {number} [options.timeout] - Request timeout in milliseconds
+   * @returns {StreamResponse} - Streaming response for chunked reading
+   *
+   * Example:
+   *   const stream = session.getStream("https://example.com/large-file.zip");
+   *   for await (const chunk of stream) {
+   *     file.write(chunk);
+   *   }
+   *   stream.close();
+   */
+  getStream(url, options = {}) {
+    const { params, headers, cookies, timeout } = options;
+
+    // Add params to URL
+    if (params) {
+      url = addParamsToUrl(url, params);
+    }
+
+    // Merge headers
+    let mergedHeaders = { ...this.headers };
+    if (headers) {
+      mergedHeaders = { ...mergedHeaders, ...headers };
+    }
+    if (cookies) {
+      const cookieStr = Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join("; ");
+      mergedHeaders["Cookie"] = mergedHeaders["Cookie"]
+        ? `${mergedHeaders["Cookie"]}; ${cookieStr}`
+        : cookieStr;
+    }
+
+    // Build options JSON
+    const reqOptions = {};
+    if (Object.keys(mergedHeaders).length > 0) {
+      reqOptions.headers = mergedHeaders;
+    }
+    if (timeout) {
+      reqOptions.timeout = timeout;
+    }
+    const optionsJson = Object.keys(reqOptions).length > 0 ? JSON.stringify(reqOptions) : null;
+
+    // Start stream
+    const streamHandle = this._lib.httpcloak_stream_get(this._handle, url, optionsJson);
+    if (streamHandle < 0) {
+      throw new HTTPCloakError("Failed to start streaming request");
+    }
+
+    // Get metadata
+    const metadataStr = this._lib.httpcloak_stream_get_metadata(streamHandle);
+    if (!metadataStr) {
+      this._lib.httpcloak_stream_close(streamHandle);
+      throw new HTTPCloakError("Failed to get stream metadata");
+    }
+
+    const metadata = JSON.parse(metadataStr);
+    if (metadata.error) {
+      this._lib.httpcloak_stream_close(streamHandle);
+      throw new HTTPCloakError(metadata.error);
+    }
+
+    return new StreamResponse(streamHandle, this._lib, metadata);
+  }
+
+  /**
+   * Perform a streaming POST request.
+   *
+   * @param {string} url - Request URL
+   * @param {Object} [options] - Request options
+   * @param {string|Buffer|Object} [options.body] - Request body
+   * @param {Object} [options.json] - JSON body (will be serialized)
+   * @param {Object} [options.form] - Form data (will be URL-encoded)
+   * @param {Object} [options.params] - URL query parameters
+   * @param {Object} [options.headers] - Request headers
+   * @param {Object} [options.cookies] - Cookies to send
+   * @param {number} [options.timeout] - Request timeout in milliseconds
+   * @returns {StreamResponse} - Streaming response for chunked reading
+   */
+  postStream(url, options = {}) {
+    const { body: bodyOpt, json: jsonBody, form, params, headers, cookies, timeout } = options;
+
+    // Add params to URL
+    if (params) {
+      url = addParamsToUrl(url, params);
+    }
+
+    // Merge headers
+    let mergedHeaders = { ...this.headers };
+    if (headers) {
+      mergedHeaders = { ...mergedHeaders, ...headers };
+    }
+
+    // Process body
+    let body = null;
+    if (jsonBody) {
+      body = JSON.stringify(jsonBody);
+      mergedHeaders["Content-Type"] = mergedHeaders["Content-Type"] || "application/json";
+    } else if (form) {
+      body = Object.entries(form).map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join("&");
+      mergedHeaders["Content-Type"] = mergedHeaders["Content-Type"] || "application/x-www-form-urlencoded";
+    } else if (bodyOpt) {
+      body = typeof bodyOpt === "string" ? bodyOpt : bodyOpt.toString();
+    }
+
+    if (cookies) {
+      const cookieStr = Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join("; ");
+      mergedHeaders["Cookie"] = mergedHeaders["Cookie"]
+        ? `${mergedHeaders["Cookie"]}; ${cookieStr}`
+        : cookieStr;
+    }
+
+    // Build options JSON
+    const reqOptions = {};
+    if (Object.keys(mergedHeaders).length > 0) {
+      reqOptions.headers = mergedHeaders;
+    }
+    if (timeout) {
+      reqOptions.timeout = timeout;
+    }
+    const optionsJson = Object.keys(reqOptions).length > 0 ? JSON.stringify(reqOptions) : null;
+
+    // Start stream
+    const streamHandle = this._lib.httpcloak_stream_post(this._handle, url, body, optionsJson);
+    if (streamHandle < 0) {
+      throw new HTTPCloakError("Failed to start streaming request");
+    }
+
+    // Get metadata
+    const metadataStr = this._lib.httpcloak_stream_get_metadata(streamHandle);
+    if (!metadataStr) {
+      this._lib.httpcloak_stream_close(streamHandle);
+      throw new HTTPCloakError("Failed to get stream metadata");
+    }
+
+    const metadata = JSON.parse(metadataStr);
+    if (metadata.error) {
+      this._lib.httpcloak_stream_close(streamHandle);
+      throw new HTTPCloakError(metadata.error);
+    }
+
+    return new StreamResponse(streamHandle, this._lib, metadata);
+  }
+
+  /**
+   * Perform a streaming request with any HTTP method.
+   *
+   * @param {string} method - HTTP method
+   * @param {string} url - Request URL
+   * @param {Object} [options] - Request options
+   * @param {string|Buffer} [options.body] - Request body
+   * @param {Object} [options.params] - URL query parameters
+   * @param {Object} [options.headers] - Request headers
+   * @param {Object} [options.cookies] - Cookies to send
+   * @param {number} [options.timeout] - Request timeout in seconds
+   * @returns {StreamResponse} - Streaming response for chunked reading
+   */
+  requestStream(method, url, options = {}) {
+    const { body, params, headers, cookies, timeout } = options;
+
+    // Add params to URL
+    if (params) {
+      url = addParamsToUrl(url, params);
+    }
+
+    // Merge headers
+    let mergedHeaders = { ...this.headers };
+    if (headers) {
+      mergedHeaders = { ...mergedHeaders, ...headers };
+    }
+    if (cookies) {
+      const cookieStr = Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join("; ");
+      mergedHeaders["Cookie"] = mergedHeaders["Cookie"]
+        ? `${mergedHeaders["Cookie"]}; ${cookieStr}`
+        : cookieStr;
+    }
+
+    // Build request config
+    const requestConfig = {
+      method: method.toUpperCase(),
+      url,
+    };
+    if (Object.keys(mergedHeaders).length > 0) {
+      requestConfig.headers = mergedHeaders;
+    }
+    if (body) {
+      requestConfig.body = typeof body === "string" ? body : body.toString();
+    }
+    if (timeout) {
+      requestConfig.timeout = timeout;
+    }
+
+    // Start stream
+    const streamHandle = this._lib.httpcloak_stream_request(this._handle, JSON.stringify(requestConfig));
+    if (streamHandle < 0) {
+      throw new HTTPCloakError("Failed to start streaming request");
+    }
+
+    // Get metadata
+    const metadataStr = this._lib.httpcloak_stream_get_metadata(streamHandle);
+    if (!metadataStr) {
+      this._lib.httpcloak_stream_close(streamHandle);
+      throw new HTTPCloakError("Failed to get stream metadata");
+    }
+
+    const metadata = JSON.parse(metadataStr);
+    if (metadata.error) {
+      this._lib.httpcloak_stream_close(streamHandle);
+      throw new HTTPCloakError(metadata.error);
+    }
+
+    return new StreamResponse(streamHandle, this._lib, metadata);
+  }
+
+  // ===========================================================================
+  // Fast-path Methods (Zero-copy for maximum performance)
+  // ===========================================================================
+
+  /**
+   * Perform a fast GET request with zero-copy buffer transfer.
+   *
+   * This method bypasses JSON serialization and base64 encoding for the response body,
+   * copying data directly from Go's memory to a Node.js Buffer.
+   *
+   * Use this method for downloading large files when you need maximum throughput.
+   *
+   * @param {string} url - Request URL
+   * @param {Object} [options] - Request options
+   * @param {Object} [options.headers] - Custom headers
+   * @param {Object} [options.params] - Query parameters
+   * @param {Object} [options.cookies] - Cookies to send with this request
+   * @param {Array} [options.auth] - Basic auth [username, password]
+   * @returns {FastResponse} Fast response object with Buffer body
+   *
+   * Example:
+   *   const response = session.getFast("https://example.com/large-file.zip");
+   *   console.log(`Downloaded ${response.body.length} bytes`);
+   *   fs.writeFileSync("file.zip", response.body);
+   */
+  getFast(url, options = {}) {
+    const { headers = null, params = null, cookies = null, auth = null } = options;
+
+    url = addParamsToUrl(url, params);
+    let mergedHeaders = this._mergeHeaders(headers);
+    // Use request auth if provided, otherwise fall back to session auth
+    const effectiveAuth = auth !== null ? auth : this.auth;
+    mergedHeaders = applyAuth(mergedHeaders, effectiveAuth);
+    mergedHeaders = this._applyCookies(mergedHeaders, cookies);
+
+    // Build request options JSON with headers wrapper
+    const reqOptions = {};
+    if (mergedHeaders) {
+      reqOptions.headers = mergedHeaders;
+    }
+    const optionsJson = Object.keys(reqOptions).length > 0 ? JSON.stringify(reqOptions) : null;
+
+    const startTime = Date.now();
+
+    // Get raw response handle
+    const responseHandle = this._lib.httpcloak_get_raw(this._handle, url, optionsJson);
+    if (responseHandle === 0 || responseHandle === 0n) {
+      throw new HTTPCloakError("Failed to make request");
+    }
+
+    // Get body length first (1 FFI call)
+    const bodyLen = this._lib.httpcloak_response_get_body_len(responseHandle);
+    if (bodyLen < 0) {
+      this._lib.httpcloak_response_free(responseHandle);
+      throw new HTTPCloakError("Failed to get response body length");
+    }
+
+    // Acquire pooled buffer
+    const pooledBuffer = _bufferPool.acquire(bodyLen);
+
+    // Finalize: copy body + get metadata + free handle (1 FFI call instead of 3)
+    const metadataStr = this._lib.httpcloak_response_finalize(responseHandle, pooledBuffer, bodyLen);
+    if (!metadataStr) {
+      _bufferPool.release(pooledBuffer);
+      throw new HTTPCloakError("Failed to finalize response");
+    }
+
+    const metadata = JSON.parse(metadataStr);
+    if (metadata.error) {
+      _bufferPool.release(pooledBuffer);
+      throw new HTTPCloakError(metadata.error);
+    }
+
+    // Create a view of just the used portion
+    const buffer = pooledBuffer.subarray(0, bodyLen);
+
+    const elapsed = Date.now() - startTime;
+    return new FastResponse(metadata, buffer, elapsed, pooledBuffer);
+  }
+
+  /**
+   * High-performance POST request optimized for large uploads.
+   *
+   * Uses binary buffer passing and response pooling for maximum throughput.
+   * Call response.release() when done to return buffers to pool.
+   *
+   * @param {string} url - Request URL
+   * @param {Object} [options] - Request options
+   * @param {Buffer} [options.body] - Request body as Buffer
+   * @param {Object} [options.headers] - Request headers
+   * @param {Object} [options.params] - Query parameters
+   * @param {Object} [options.cookies] - Cookies to send with this request
+   * @param {Array} [options.auth] - Basic auth [username, password]
+   * @returns {FastResponse} Fast response object with Buffer body
+   *
+   * Example:
+   *   const data = Buffer.alloc(10 * 1024 * 1024); // 10MB
+   *   const response = session.postFast("https://example.com/upload", { body: data });
+   *   console.log(`Uploaded, response: ${response.statusCode}`);
+   *   response.release();
+   */
+  postFast(url, options = {}) {
+    let { body = null, headers = null, params = null, cookies = null, auth = null } = options;
+
+    url = addParamsToUrl(url, params);
+    let mergedHeaders = this._mergeHeaders(headers);
+    // Use request auth if provided, otherwise fall back to session auth
+    const effectiveAuth = auth !== null ? auth : this.auth;
+    mergedHeaders = applyAuth(mergedHeaders, effectiveAuth);
+    mergedHeaders = this._applyCookies(mergedHeaders, cookies);
+
+    // Ensure body is a Buffer
+    if (body === null) {
+      body = Buffer.alloc(0);
+    } else if (typeof body === "string") {
+      body = Buffer.from(body, "utf8");
+    } else if (!Buffer.isBuffer(body)) {
+      throw new HTTPCloakError("postFast body must be a Buffer or string");
+    }
+
+    // Build request options JSON with headers wrapper
+    const reqOptions = {};
+    if (mergedHeaders) {
+      reqOptions.headers = mergedHeaders;
+    }
+    const optionsJson = Object.keys(reqOptions).length > 0 ? JSON.stringify(reqOptions) : null;
+
+    const startTime = Date.now();
+
+    // Use httpcloak_post_raw with binary buffer (no string conversion!)
+    const responseHandle = this._lib.httpcloak_post_raw(this._handle, url, body, body.length, optionsJson);
+    if (responseHandle === 0 || responseHandle === 0n || responseHandle < 0) {
+      throw new HTTPCloakError("Failed to make POST request");
+    }
+
+    // Get body length first (1 FFI call)
+    const bodyLen = this._lib.httpcloak_response_get_body_len(responseHandle);
+    if (bodyLen < 0) {
+      this._lib.httpcloak_response_free(responseHandle);
+      throw new HTTPCloakError("Failed to get response body length");
+    }
+
+    // Acquire pooled buffer for response
+    const pooledBuffer = _bufferPool.acquire(bodyLen);
+
+    // Finalize: copy body + get metadata + free handle (1 FFI call instead of 3)
+    const metadataStr = this._lib.httpcloak_response_finalize(responseHandle, pooledBuffer, bodyLen);
+    if (!metadataStr) {
+      _bufferPool.release(pooledBuffer);
+      throw new HTTPCloakError("Failed to finalize response");
+    }
+
+    const metadata = JSON.parse(metadataStr);
+    if (metadata.error) {
+      _bufferPool.release(pooledBuffer);
+      throw new HTTPCloakError(metadata.error);
+    }
+
+    // Create a view of just the used portion
+    const responseBuffer = pooledBuffer.subarray(0, bodyLen);
+
+    const elapsed = Date.now() - startTime;
+    return new FastResponse(metadata, responseBuffer, elapsed, pooledBuffer);
+  }
 }
 
 // =============================================================================
@@ -1416,6 +2178,8 @@ module.exports = {
   // Classes
   Session,
   Response,
+  FastResponse,
+  StreamResponse,
   Cookie,
   RedirectInfo,
   HTTPCloakError,
