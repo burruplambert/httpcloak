@@ -12,6 +12,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net/url"
@@ -58,7 +59,8 @@ func main() {
 		fmt.Printf("Error: %v\n", err)
 		return
 	}
-	fmt.Printf("Cookies sent with request: %s\n", resp.Text())
+	respText, _ := resp.Text()
+	fmt.Printf("Cookies sent with request: %s\n", respText)
 
 	// =========================================================================
 	// Example 2: Login flow simulation
@@ -83,8 +85,8 @@ func main() {
 	// Step 2: Submit login (cookies sent automatically)
 	fmt.Println("Step 2: Submitting login...")
 	loginBody := []byte(`{"username": "testuser", "password": "testpass"}`)
-	resp, err = loginSession.Post(ctx, "https://httpbin.org/post", loginBody, map[string]string{
-		"Content-Type": "application/json",
+	resp, err = loginSession.Post(ctx, "https://httpbin.org/post", bytes.NewReader(loginBody), map[string][]string{
+		"Content-Type": {"application/json"},
 	})
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
@@ -125,7 +127,8 @@ func main() {
 		fmt.Printf("Error: %v\n", err)
 		return
 	}
-	fmt.Printf("Response shows cookies: %s\n", resp.Text())
+	respText, _ = resp.Text()
+	fmt.Printf("Response shows cookies: %s\n", respText)
 
 	// =========================================================================
 	// Example 4: Cookie inspection
@@ -229,8 +232,10 @@ func main() {
 	resp1, _ := session1.Get(ctx, "https://httpbin.org/cookies", nil)
 	resp2, _ := session2.Get(ctx, "https://httpbin.org/cookies", nil)
 
-	fmt.Printf("Session 1 cookies: %s", resp1.Text())
-	fmt.Printf("Session 2 cookies: %s", resp2.Text())
+	resp1Text, _ := resp1.Text()
+	resp2Text, _ := resp2.Text()
+	fmt.Printf("Session 1 cookies: %s", resp1Text)
+	fmt.Printf("Session 2 cookies: %s", resp2Text)
 
 	fmt.Println("\n" + strings.Repeat("=", 70))
 	fmt.Println("All session examples completed!")

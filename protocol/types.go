@@ -136,8 +136,16 @@ type SessionConfig struct {
 	// Base URL for relative paths
 	BaseURL string `json:"baseUrl,omitempty"`
 
-	// Proxy URL (http://, https://, socks5://)
+	// Proxy URL (http://, https://, socks5://) - used for all protocols
 	Proxy string `json:"proxy,omitempty"`
+
+	// TCPProxy is the proxy URL for TCP-based protocols (HTTP/1.1 and HTTP/2)
+	// Use with UDPProxy for split proxy configuration
+	TCPProxy string `json:"tcpProxy,omitempty"`
+
+	// UDPProxy is the proxy URL for UDP-based protocols (HTTP/3 via MASQUE)
+	// Use with TCPProxy for split proxy configuration
+	UDPProxy string `json:"udpProxy,omitempty"`
 
 	// Default timeout in milliseconds
 	Timeout int `json:"timeout,omitempty"`

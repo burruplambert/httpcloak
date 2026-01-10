@@ -46,9 +46,16 @@ func buildHTTPRequest(ctx context.Context, req *Request, preset *fingerprint.Pre
 		method = "GET"
 	}
 
+	// Read body into bytes if present (for Content-Length calculation)
+	var bodyBytes []byte
 	var bodyReader io.Reader
-	if len(req.Body) > 0 {
-		bodyReader = bytes.NewReader(req.Body)
+	if req.Body != nil {
+		var err error
+		bodyBytes, err = io.ReadAll(req.Body)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read request body: %w", err)
+		}
+		bodyReader = bytes.NewReader(bodyBytes)
 	} else if method == "POST" || method == "PUT" || method == "PATCH" {
 		// POST/PUT/PATCH with empty body must send Content-Length: 0
 		bodyReader = bytes.NewReader([]byte{})
@@ -60,7 +67,7 @@ func buildHTTPRequest(ctx context.Context, req *Request, preset *fingerprint.Pre
 	}
 
 	// Normalize request (Content-Length: 0 for empty POST/PUT/PATCH, Content-Type detection, etc.)
-	normalizeRequestWithBody(httpReq, req.Body)
+	normalizeRequestWithBody(httpReq, bodyBytes)
 
 	// Set preset headers first
 	for key, value := range preset.Headers {
@@ -73,9 +80,15 @@ func buildHTTPRequest(ctx context.Context, req *Request, preset *fingerprint.Pre
 	// Set Host header
 	httpReq.Header.Set("Host", host)
 
-	// Override with custom headers
-	for key, value := range req.Headers {
-		httpReq.Header.Set(key, value)
+	// Override with custom headers (multi-value support)
+	for key, values := range req.Headers {
+		for i, value := range values {
+			if i == 0 {
+				httpReq.Header.Set(key, value)
+			} else {
+				httpReq.Header.Add(key, value)
+			}
+		}
 	}
 
 	return httpReq, nil
@@ -98,18 +111,23 @@ func processResponse(resp *http.Response, originalURL string, startTime time.Tim
 
 	timing.Total = float64(time.Since(startTime).Milliseconds())
 
-	// Build response headers map
-	headers := make(map[string]string)
+	// Build response headers map (multi-value support)
+	headers := make(map[string][]string)
 	for key, values := range resp.Header {
-		headers[strings.ToLower(key)] = strings.Join(values, ", ")
+		lowerKey := strings.ToLower(key)
+		headerValues := make([]string, len(values))
+		copy(headerValues, values)
+		headers[lowerKey] = headerValues
 	}
 
 	return &Response{
 		StatusCode: resp.StatusCode,
 		Headers:    headers,
-		Body:       body,
+		Body:       io.NopCloser(bytes.NewReader(body)),
 		FinalURL:   originalURL,
 		Timing:     timing,
+		bodyBytes:  body,
+		bodyRead:   true,
 	}, nil
 }
 
@@ -192,6 +210,41 @@ func normalizeRequestWithBody(req *http.Request, body []byte) {
 		if contentType != "" {
 			req.Header.Set("Content-Type", contentType)
 		}
+	}
+}
+
+// normalizeRequestWithReader applies standard HTTP behaviors for io.Reader body
+// Content-Length is only set if the reader size can be determined
+func normalizeRequestWithReader(req *http.Request, body io.Reader) {
+	if body == nil {
+		normalizeRequest(req, 0)
+		return
+	}
+
+	// Try to get length from common reader types
+	var bodyLen int64 = -1
+	switch r := body.(type) {
+	case *bytes.Reader:
+		bodyLen = int64(r.Len())
+	case *bytes.Buffer:
+		bodyLen = int64(r.Len())
+	case *strings.Reader:
+		bodyLen = int64(r.Len())
+	case io.Seeker:
+		// Get current position and seek to end to get length
+		if cur, err := r.Seek(0, io.SeekCurrent); err == nil {
+			if end, err := r.Seek(0, io.SeekEnd); err == nil {
+				bodyLen = end - cur
+				r.Seek(cur, io.SeekStart) // Reset position
+			}
+		}
+	}
+
+	if bodyLen >= 0 {
+		normalizeRequest(req, int(bodyLen))
+	} else {
+		// Unknown length - will use chunked transfer encoding
+		normalizeRequest(req, 0)
 	}
 }
 

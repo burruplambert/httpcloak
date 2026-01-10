@@ -124,6 +124,10 @@ type HostPool struct {
 	connectTimeout     time.Duration
 	insecureSkipVerify bool
 	proxyURL           string
+
+	// ECH (Encrypted Client Hello) configuration
+	echConfig       []byte // Custom ECH configuration
+	echConfigDomain string // Domain to fetch ECH config from
 }
 
 // NewHostPool creates a new pool for a specific host
@@ -170,6 +174,20 @@ func (p *HostPool) SetMaxConns(max int) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.maxConns = max
+}
+
+// SetECHConfig sets a custom ECH configuration for this pool
+func (p *HostPool) SetECHConfig(echConfig []byte) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.echConfig = echConfig
+}
+
+// SetECHConfigDomain sets a domain to fetch ECH config from
+func (p *HostPool) SetECHConfigDomain(domain string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.echConfigDomain = domain
 }
 
 // GetConn returns an available connection or creates a new one
@@ -256,16 +274,37 @@ func (p *HostPool) createConn(ctx context.Context) (*Conn, error) {
 		}
 	}
 
+	// Fetch ECH config if needed
+	var echConfigList []byte
+	if len(p.echConfig) > 0 {
+		echConfigList = p.echConfig
+	} else if p.echConfigDomain != "" {
+		// Fetch ECH config from DNS
+		echConfigList, err = dns.FetchECHConfigs(ctx, p.echConfigDomain)
+		if err != nil {
+			// ECH fetch failed - continue without ECH (SNI will be visible)
+			echConfigList = nil
+		}
+	}
+
+	// Determine MinVersion based on ECH usage
+	// ECH requires TLS 1.3, so set MinVersion accordingly
+	minVersion := uint16(tls.VersionTLS12)
+	if len(echConfigList) > 0 {
+		minVersion = tls.VersionTLS13
+	}
+
 	// Wrap with uTLS for fingerprinting
 	// Enable session tickets for PSK resumption (Chrome does this)
 	tlsConfig := &utls.Config{
-		ServerName:             p.host,
-		InsecureSkipVerify:     p.insecureSkipVerify,
-		MinVersion:             tls.VersionTLS12,
-		MaxVersion:             tls.VersionTLS13,
-		SessionTicketsDisabled: false,          // Enable session tickets
-		ClientSessionCache:     p.sessionCache, // Use per-host session cache
-		OmitEmptyPsk:           true,           // Chrome doesn't send empty PSK on first connection
+		ServerName:                     p.host,
+		InsecureSkipVerify:             p.insecureSkipVerify,
+		MinVersion:                     minVersion,
+		MaxVersion:                     tls.VersionTLS13,
+		SessionTicketsDisabled:         false,          // Enable session tickets
+		ClientSessionCache:             p.sessionCache, // Use per-host session cache
+		OmitEmptyPsk:                   true,           // Chrome doesn't send empty PSK on first connection
+		EncryptedClientHelloConfigList: echConfigList,  // ECH configuration (if available)
 	}
 
 	// Determine which cached spec to use:
@@ -1012,6 +1051,13 @@ func (m *Manager) GetPool(host, port string) (*HostPool, error) {
 	pool = NewHostPoolWithConfig(host, port, m.preset, m.dnsCache, m.insecureSkipVerify, m.proxyURL, m.cachedSpec, m.cachedPSKSpec)
 	if m.maxConnsPerHost > 0 {
 		pool.SetMaxConns(m.maxConnsPerHost)
+	}
+	// Pass ECH configuration to the pool
+	if len(m.echConfig) > 0 {
+		pool.SetECHConfig(m.echConfig)
+	}
+	if m.echConfigDomain != "" {
+		pool.SetECHConfigDomain(m.echConfigDomain)
 	}
 	m.pools[key] = pool
 	return pool, nil

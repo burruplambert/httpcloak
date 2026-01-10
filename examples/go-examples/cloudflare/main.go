@@ -60,7 +60,8 @@ func main() {
 		}
 
 		// Parse trace response
-		trace := parseTrace(resp.Text())
+		text, _ := resp.Text()
+		trace := parseTrace(text)
 
 		fmt.Printf("[%d] %s | %s | Protocol: %s | h=%s | loc=%s | %v\n",
 			i,
@@ -138,7 +139,8 @@ func main() {
 			continue
 		}
 
-		trace := parseTrace(resp.Text())
+		text, _ := resp.Text()
+		trace := parseTrace(text)
 		fmt.Printf("%-15s | Protocol: %s | http=%s | tls=%s\n",
 			preset,
 			resp.Protocol,
@@ -165,7 +167,8 @@ func main() {
 	if err != nil {
 		fmt.Printf("HTTP/2: Error - %v\n", err)
 	} else {
-		trace := parseTrace(resp.Text())
+		text, _ := resp.Text()
+		trace := parseTrace(text)
 		fmt.Printf("Force HTTP/2:  Protocol=%s | http=%s\n", resp.Protocol, trace["http"])
 	}
 
@@ -178,7 +181,8 @@ func main() {
 	if err != nil {
 		fmt.Printf("HTTP/3: Error - %v (expected if H3 not supported)\n", err)
 	} else {
-		trace := parseTrace(resp.Text())
+		text, _ := resp.Text()
+		trace := parseTrace(text)
 		fmt.Printf("Force HTTP/3:  Protocol=%s | http=%s\n", resp.Protocol, trace["http"])
 	}
 
@@ -198,7 +202,8 @@ func main() {
 			continue
 		}
 
-		trace := parseTrace(resp.Text())
+		text, _ := resp.Text()
+		trace := parseTrace(text)
 		cookieCount := 0
 		if session.Cookies() != nil {
 			cookieCount = session.Cookies().Count()
@@ -221,7 +226,8 @@ func main() {
 		fmt.Printf("Error: %v\n", err)
 	} else {
 		fmt.Printf("Protocol: %s\n\n", resp.Protocol)
-		fmt.Println(resp.Text())
+		text, _ := resp.Text()
+		fmt.Println(text)
 	}
 
 	fmt.Println(strings.Repeat("=", 70))

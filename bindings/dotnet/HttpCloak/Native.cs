@@ -123,6 +123,25 @@ internal static class Native
     [DllImport(LibraryName, EntryPoint = "httpcloak_request_async", CallingConvention = CallingConvention.Cdecl)]
     public static extern void RequestAsync(long handle, [MarshalAs(UnmanagedType.LPUTF8Str)] string requestJson, long callbackId);
 
+    // Streaming functions
+    [DllImport(LibraryName, EntryPoint = "httpcloak_stream_get", CallingConvention = CallingConvention.Cdecl)]
+    public static extern long StreamGet(long handle, [MarshalAs(UnmanagedType.LPUTF8Str)] string url, [MarshalAs(UnmanagedType.LPUTF8Str)] string? optionsJson);
+
+    [DllImport(LibraryName, EntryPoint = "httpcloak_stream_post", CallingConvention = CallingConvention.Cdecl)]
+    public static extern long StreamPost(long handle, [MarshalAs(UnmanagedType.LPUTF8Str)] string url, [MarshalAs(UnmanagedType.LPUTF8Str)] string? body, [MarshalAs(UnmanagedType.LPUTF8Str)] string? optionsJson);
+
+    [DllImport(LibraryName, EntryPoint = "httpcloak_stream_request", CallingConvention = CallingConvention.Cdecl)]
+    public static extern long StreamRequest(long handle, [MarshalAs(UnmanagedType.LPUTF8Str)] string requestJson);
+
+    [DllImport(LibraryName, EntryPoint = "httpcloak_stream_get_metadata", CallingConvention = CallingConvention.Cdecl)]
+    public static extern IntPtr StreamGetMetadata(long streamHandle);
+
+    [DllImport(LibraryName, EntryPoint = "httpcloak_stream_read", CallingConvention = CallingConvention.Cdecl)]
+    public static extern IntPtr StreamRead(long streamHandle, long bufferSize);
+
+    [DllImport(LibraryName, EntryPoint = "httpcloak_stream_close", CallingConvention = CallingConvention.Cdecl)]
+    public static extern void StreamClose(long streamHandle);
+
     /// <summary>
     /// Convert a native string pointer to a managed string and free the native memory.
     /// </summary>

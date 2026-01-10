@@ -20,8 +20,8 @@ type PreparedRequest struct {
 	// Original request data (for reference)
 	Method  string
 	URL     string
-	Headers map[string]string
-	Body    []byte
+	Headers map[string][]string
+	Body    []byte // Cached body bytes
 
 	// Configuration
 	Timeout       int64    // Timeout in milliseconds
@@ -63,10 +63,19 @@ func (c *Client) Prepare(ctx context.Context, req *Request) (*PreparedRequest, e
 		method = "GET"
 	}
 
+	// Cache body bytes (io.Reader can only be read once)
+	var bodyBytes []byte
+	if req.Body != nil {
+		bodyBytes, err = io.ReadAll(req.Body)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	// Build body reader
 	var bodyReader io.Reader
-	if len(req.Body) > 0 {
-		bodyReader = bytes.NewReader(req.Body)
+	if len(bodyBytes) > 0 {
+		bodyReader = bytes.NewReader(bodyBytes)
 	} else if method == "POST" || method == "PUT" || method == "PATCH" {
 		// POST/PUT/PATCH with empty body must send Content-Length: 0
 		bodyReader = bytes.NewReader([]byte{})
@@ -79,7 +88,7 @@ func (c *Client) Prepare(ctx context.Context, req *Request) (*PreparedRequest, e
 	}
 
 	// Normalize request (Content-Length: 0 for empty POST/PUT/PATCH, Content-Type detection, etc.)
-	normalizeRequestWithBody(httpReq, req.Body)
+	normalizeRequestWithBody(httpReq, bodyBytes)
 
 	// Apply preset headers
 	for key, value := range c.preset.Headers {
@@ -93,9 +102,15 @@ func (c *Client) Prepare(ctx context.Context, req *Request) (*PreparedRequest, e
 	}
 	httpReq.Header.Set("User-Agent", userAgent)
 
-	// Apply custom headers
-	for key, value := range req.Headers {
-		httpReq.Header.Set(key, value)
+	// Apply custom headers (multi-value support)
+	for key, values := range req.Headers {
+		for i, value := range values {
+			if i == 0 {
+				httpReq.Header.Set(key, value)
+			} else {
+				httpReq.Header.Add(key, value)
+			}
+		}
 	}
 
 	// Apply Sec-Fetch headers based on mode
@@ -124,7 +139,7 @@ func (c *Client) Prepare(ctx context.Context, req *Request) (*PreparedRequest, e
 		Method:          method,
 		URL:             reqURL,
 		Headers:         req.Headers,
-		Body:            req.Body,
+		Body:            bodyBytes,
 		Timeout:         int64(req.Timeout.Milliseconds()),
 		ForceProtocol:   req.ForceProtocol,
 		FetchMode:       req.FetchMode,
@@ -211,11 +226,15 @@ func (p *PreparedRequest) Send(ctx context.Context) (*Response, error) {
 	}
 
 	// Rebuild the Request struct for doOnce
+	var bodyReader io.Reader
+	if len(p.Body) > 0 {
+		bodyReader = bytes.NewReader(p.Body)
+	}
 	req := &Request{
 		Method:          p.Method,
 		URL:             p.URL,
 		Headers:         p.Headers,
-		Body:            p.Body,
+		Body:            bodyReader,
 		Timeout:         time.Duration(p.Timeout) * time.Millisecond, // Convert ms back to Duration
 		ForceProtocol:   p.ForceProtocol,
 		FetchMode:       p.FetchMode,
@@ -241,7 +260,7 @@ func (e *RequestError) Error() string {
 }
 
 // PrepareGet creates a prepared GET request
-func (c *Client) PrepareGet(ctx context.Context, url string, headers map[string]string) (*PreparedRequest, error) {
+func (c *Client) PrepareGet(ctx context.Context, url string, headers map[string][]string) (*PreparedRequest, error) {
 	return c.Prepare(ctx, &Request{
 		Method:  "GET",
 		URL:     url,
@@ -250,7 +269,7 @@ func (c *Client) PrepareGet(ctx context.Context, url string, headers map[string]
 }
 
 // PreparePost creates a prepared POST request
-func (c *Client) PreparePost(ctx context.Context, url string, body []byte, headers map[string]string) (*PreparedRequest, error) {
+func (c *Client) PreparePost(ctx context.Context, url string, body io.Reader, headers map[string][]string) (*PreparedRequest, error) {
 	return c.Prepare(ctx, &Request{
 		Method:  "POST",
 		URL:     url,

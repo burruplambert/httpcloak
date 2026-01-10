@@ -19,11 +19,12 @@ import (
 
 // StreamResponse represents a streaming HTTP response
 type StreamResponse struct {
-	StatusCode int
-	Headers    map[string]string
-	FinalURL   string
-	Timing     *protocol.Timing
-	Protocol   string
+	StatusCode    int
+	Headers       map[string][]string
+	FinalURL      string
+	Timing        *protocol.Timing
+	Protocol      string
+	ContentLength int64 // -1 if unknown (chunked encoding)
 
 	// Request info
 	Request *Request
@@ -128,9 +129,19 @@ func (c *Client) DoStream(ctx context.Context, req *Request) (*StreamResponse, e
 		method = "GET"
 	}
 
+	// Cache body bytes (io.Reader can only be read once)
+	var bodyBytes []byte
+	if req.Body != nil {
+		bodyBytes, err = io.ReadAll(req.Body)
+		if err != nil {
+			cancel()
+			return nil, fmt.Errorf("failed to read request body: %w", err)
+		}
+	}
+
 	var bodyReader io.Reader
-	if len(req.Body) > 0 {
-		bodyReader = bytes.NewReader(req.Body)
+	if len(bodyBytes) > 0 {
+		bodyReader = bytes.NewReader(bodyBytes)
 	} else if method == "POST" || method == "PUT" || method == "PATCH" {
 		// POST/PUT/PATCH with empty body must send Content-Length: 0
 		bodyReader = bytes.NewReader([]byte{})
@@ -143,7 +154,7 @@ func (c *Client) DoStream(ctx context.Context, req *Request) (*StreamResponse, e
 	}
 
 	// Normalize request (Content-Length: 0 for empty POST/PUT/PATCH, Content-Type detection, etc.)
-	normalizeRequestWithBody(httpReq, req.Body)
+	normalizeRequestWithBody(httpReq, bodyBytes)
 
 	// Apply headers based on FetchMode
 	applyModeHeaders(httpReq, c.preset, req, parsedURL)
@@ -208,8 +219,8 @@ func (c *Client) DoStream(ctx context.Context, req *Request) (*StreamResponse, e
 			resp, usedProtocol, err = c.doHTTP3(ctx, host, port, httpReq, timing, startTime)
 			if err != nil {
 				c.markH3Failed(hostKey)
-				resetRequestBody(httpReq, req.Body)
-				
+				resetRequestBody(httpReq, bodyBytes)
+
 				resp, usedProtocol, err = c.doHTTP2(ctx, host, port, httpReq, timing, startTime)
 			}
 		} else {
@@ -219,8 +230,8 @@ func (c *Client) DoStream(ctx context.Context, req *Request) (*StreamResponse, e
 		// If H2 failed and we should try H1, attempt fallback
 		if err != nil && c.shouldUseH1(hostKey) {
 			c.markH2Failed(hostKey)
-			resetRequestBody(httpReq, req.Body)
-			
+			resetRequestBody(httpReq, bodyBytes)
+
 			resp, usedProtocol, err = c.doHTTP1(ctx, host, port, httpReq, timing, startTime)
 		}
 
@@ -230,10 +241,13 @@ func (c *Client) DoStream(ctx context.Context, req *Request) (*StreamResponse, e
 		}
 	}
 
-	// Build response headers map
-	headers := make(map[string]string)
+	// Build response headers map (multi-value support)
+	headers := make(map[string][]string)
 	for key, values := range resp.Header {
-		headers[strings.ToLower(key)] = strings.Join(values, ", ")
+		lowerKey := strings.ToLower(key)
+		headerValues := make([]string, len(values))
+		copy(headerValues, values)
+		headers[lowerKey] = headerValues
 	}
 
 	// Setup decompression reader
@@ -242,16 +256,17 @@ func (c *Client) DoStream(ctx context.Context, req *Request) (*StreamResponse, e
 	timing.FirstByte = float64(time.Since(startTime).Milliseconds())
 
 	return &StreamResponse{
-		StatusCode:   resp.StatusCode,
-		Headers:      headers,
-		FinalURL:     reqURL,
-		Timing:       timing,
-		Protocol:     usedProtocol,
-		Request:      req,
-		reader:       reader,
-		decompressor: decompressor,
-		rawReader:    resp.Body,
-		cancel:       cancel,
+		StatusCode:    resp.StatusCode,
+		Headers:       headers,
+		FinalURL:      reqURL,
+		Timing:        timing,
+		Protocol:      usedProtocol,
+		ContentLength: resp.ContentLength,
+		Request:       req,
+		reader:        reader,
+		decompressor:  decompressor,
+		rawReader:     resp.Body,
+		cancel:        cancel,
 	}, nil
 }
 
@@ -301,7 +316,7 @@ func (z *zstdReadCloser) Close() error {
 }
 
 // GetStream performs a streaming GET request
-func (c *Client) GetStream(ctx context.Context, url string, headers map[string]string) (*StreamResponse, error) {
+func (c *Client) GetStream(ctx context.Context, url string, headers map[string][]string) (*StreamResponse, error) {
 	return c.DoStream(ctx, &Request{
 		Method:  "GET",
 		URL:     url,

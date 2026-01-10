@@ -23,8 +23,11 @@
 package httpcloak
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/sardanioss/httpcloak/client"
@@ -99,8 +102,8 @@ func New(preset string, opts ...Option) *Client {
 type Request struct {
 	Method  string
 	URL     string
-	Headers map[string]string
-	Body    []byte
+	Headers map[string][]string // Multi-value headers (matches http.Header)
+	Body    io.Reader           // Streaming body for uploads
 	Timeout time.Duration
 }
 
@@ -108,31 +111,80 @@ type Request struct {
 type RedirectInfo struct {
 	StatusCode int
 	URL        string
-	Headers    map[string]string
+	Headers    map[string][]string // Multi-value headers
 }
 
 // Response represents an HTTP response
 type Response struct {
 	StatusCode int
-	Headers    map[string]string
-	Body       []byte
+	Headers    map[string][]string // Multi-value headers (matches http.Header)
+	Body       io.ReadCloser       // Streaming body - call Close() when done
 	FinalURL   string
 	Protocol   string
 	History    []*RedirectInfo
 
-	// ReleaseBody returns the body buffer to the pool (exported for FFI)
-	ReleaseBody func()
+	// bodyBytes caches the body after reading
+	bodyBytes []byte
+	bodyRead  bool
 }
 
-// Release returns the response body buffer to the pool for reuse.
-// Call this when you're done with the response body to enable buffer reuse.
-// After calling Release, the Body slice must not be accessed.
-func (r *Response) Release() {
-	if r.ReleaseBody != nil {
-		r.ReleaseBody()
-		r.ReleaseBody = nil
-		r.Body = nil
+// Close closes the response body.
+func (r *Response) Close() error {
+	if r.Body != nil {
+		return r.Body.Close()
 	}
+	return nil
+}
+
+// Bytes reads and returns the entire response body.
+// The body can only be read once unless cached.
+func (r *Response) Bytes() ([]byte, error) {
+	if r.bodyRead {
+		return r.bodyBytes, nil
+	}
+	if r.Body == nil {
+		return nil, nil
+	}
+
+	data, err := io.ReadAll(r.Body)
+	if err != nil {
+		return nil, err
+	}
+	r.Body.Close()
+	r.bodyBytes = data
+	r.bodyRead = true
+	return data, nil
+}
+
+// Text reads and returns the response body as a string.
+func (r *Response) Text() (string, error) {
+	data, err := r.Bytes()
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+// JSON decodes the response body into the given interface.
+func (r *Response) JSON(v interface{}) error {
+	data, err := r.Bytes()
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, v)
+}
+
+// GetHeader returns the first value for the given header key.
+func (r *Response) GetHeader(key string) string {
+	if values := r.Headers[strings.ToLower(key)]; len(values) > 0 {
+		return values[0]
+	}
+	return ""
+}
+
+// GetHeaders returns all values for the given header key.
+func (r *Response) GetHeaders(key string) []string {
+	return r.Headers[strings.ToLower(key)]
 }
 
 // Do executes an HTTP request
@@ -156,12 +208,11 @@ func (c *Client) Do(ctx context.Context, req *Request) (*Response, error) {
 	}
 
 	return &Response{
-		StatusCode:  resp.StatusCode,
-		Headers:     resp.Headers,
-		Body:        resp.Body,
-		FinalURL:    resp.FinalURL,
-		Protocol:    resp.Protocol,
-		ReleaseBody: resp.ReleaseBody,
+		StatusCode: resp.StatusCode,
+		Headers:    resp.Headers,
+		Body:       resp.Body,
+		FinalURL:   resp.FinalURL,
+		Protocol:   resp.Protocol,
 	}, nil
 }
 
@@ -174,7 +225,7 @@ func (c *Client) Get(ctx context.Context, url string) (*Response, error) {
 }
 
 // GetWithHeaders performs a GET request with custom headers
-func (c *Client) GetWithHeaders(ctx context.Context, url string, headers map[string]string) (*Response, error) {
+func (c *Client) GetWithHeaders(ctx context.Context, url string, headers map[string][]string) (*Response, error) {
 	return c.Do(ctx, &Request{
 		Method:  "GET",
 		URL:     url,
@@ -183,10 +234,10 @@ func (c *Client) GetWithHeaders(ctx context.Context, url string, headers map[str
 }
 
 // Post performs a POST request
-func (c *Client) Post(ctx context.Context, url string, body []byte, contentType string) (*Response, error) {
-	headers := map[string]string{}
+func (c *Client) Post(ctx context.Context, url string, body io.Reader, contentType string) (*Response, error) {
+	headers := map[string][]string{}
 	if contentType != "" {
-		headers["Content-Type"] = contentType
+		headers["Content-Type"] = []string{contentType}
 	}
 	return c.Do(ctx, &Request{
 		Method:  "POST",
@@ -198,12 +249,12 @@ func (c *Client) Post(ctx context.Context, url string, body []byte, contentType 
 
 // PostJSON performs a POST request with JSON body
 func (c *Client) PostJSON(ctx context.Context, url string, body []byte) (*Response, error) {
-	return c.Post(ctx, url, body, "application/json")
+	return c.Post(ctx, url, bytes.NewReader(body), "application/json")
 }
 
 // PostForm performs a POST request with form data
 func (c *Client) PostForm(ctx context.Context, url string, body []byte) (*Response, error) {
-	return c.Post(ctx, url, body, "application/x-www-form-urlencoded")
+	return c.Post(ctx, url, bytes.NewReader(body), "application/x-www-form-urlencoded")
 }
 
 // Close releases all resources held by the client
@@ -422,10 +473,10 @@ func NewSession(preset string, opts ...SessionOption) *Session {
 // Do executes a request within the session, maintaining cookies
 func (s *Session) Do(ctx context.Context, req *Request) (*Response, error) {
 	sReq := &transport.Request{
-		Method:  req.Method,
-		URL:     req.URL,
-		Headers: req.Headers,
-		Body:    req.Body,
+		Method:     req.Method,
+		URL:        req.URL,
+		Headers:    req.Headers,
+		BodyReader: req.Body,
 	}
 
 	resp, err := s.inner.Request(ctx, sReq)
@@ -447,13 +498,12 @@ func (s *Session) Do(ctx context.Context, req *Request) (*Response, error) {
 	}
 
 	return &Response{
-		StatusCode:  resp.StatusCode,
-		Headers:     resp.Headers,
-		Body:        resp.Body,
-		FinalURL:    resp.FinalURL,
-		Protocol:    resp.Protocol,
-		History:     history,
-		ReleaseBody: resp.ReleaseBody,
+		StatusCode: resp.StatusCode,
+		Headers:    resp.Headers,
+		Body:       resp.Body,
+		FinalURL:   resp.FinalURL,
+		Protocol:   resp.Protocol,
+		History:    history,
 	}, nil
 }
 
@@ -485,13 +535,12 @@ func (s *Session) DoWithBody(ctx context.Context, req *Request, bodyReader io.Re
 	}
 
 	return &Response{
-		StatusCode:  resp.StatusCode,
-		Headers:     resp.Headers,
-		Body:        resp.Body,
-		FinalURL:    resp.FinalURL,
-		Protocol:    resp.Protocol,
-		History:     history,
-		ReleaseBody: resp.ReleaseBody,
+		StatusCode: resp.StatusCode,
+		Headers:    resp.Headers,
+		Body:       resp.Body,
+		FinalURL:   resp.FinalURL,
+		Protocol:   resp.Protocol,
+		History:    history,
 	}, nil
 }
 
@@ -519,7 +568,7 @@ func (s *Session) Close() {
 // is read incrementally. Use this for large file downloads.
 type StreamResponse struct {
 	StatusCode    int
-	Headers       map[string]string
+	Headers       map[string][]string
 	FinalURL      string
 	Protocol      string
 	ContentLength int64 // -1 if unknown (chunked encoding)
@@ -553,10 +602,10 @@ func (r *StreamResponse) ReadChunk(size int) ([]byte, error) {
 // Note: Streaming does NOT support redirects - use Do() for redirect handling
 func (s *Session) DoStream(ctx context.Context, req *Request) (*StreamResponse, error) {
 	sReq := &transport.Request{
-		Method:  req.Method,
-		URL:     req.URL,
-		Headers: req.Headers,
-		Body:    req.Body,
+		Method:     req.Method,
+		URL:        req.URL,
+		Headers:    req.Headers,
+		BodyReader: req.Body,
 	}
 
 	resp, err := s.inner.RequestStream(ctx, sReq)
@@ -580,7 +629,7 @@ func (s *Session) GetStream(ctx context.Context, url string) (*StreamResponse, e
 }
 
 // GetStreamWithHeaders performs a streaming GET request with custom headers
-func (s *Session) GetStreamWithHeaders(ctx context.Context, url string, headers map[string]string) (*StreamResponse, error) {
+func (s *Session) GetStreamWithHeaders(ctx context.Context, url string, headers map[string][]string) (*StreamResponse, error) {
 	return s.DoStream(ctx, &Request{Method: "GET", URL: url, Headers: headers})
 }
 

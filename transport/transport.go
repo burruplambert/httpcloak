@@ -126,7 +126,7 @@ type TransportConfig struct {
 type Request struct {
 	Method     string
 	URL        string
-	Headers    map[string]string
+	Headers    map[string][]string // Multi-value headers (matches http.Header)
 	Body       []byte
 	BodyReader io.Reader // For streaming uploads - used instead of Body if set
 	Timeout    time.Duration
@@ -136,33 +136,75 @@ type Request struct {
 type RedirectInfo struct {
 	StatusCode int
 	URL        string
-	Headers    map[string]string
+	Headers    map[string][]string // Multi-value headers
 }
 
 // Response represents an HTTP response
 type Response struct {
 	StatusCode int
-	Headers    map[string]string
-	Body       []byte
+	Headers    map[string][]string // Multi-value headers (matches http.Header)
+	Body       io.ReadCloser       // Streaming body - call Close() when done
 	FinalURL   string
 	Timing     *protocol.Timing
 	Protocol   string // "h1", "h2", or "h3"
 	History    []*RedirectInfo
 
-	// ReleaseBody returns the body buffer to the pool (if pooled)
-	// This is called automatically but can be called early to release memory
-	ReleaseBody func()
+	// bodyBytes caches the body after reading for multiple access
+	bodyBytes []byte
+	bodyRead  bool
 }
 
-// Release returns the response body buffer to the pool for reuse.
-// After calling Release, the Body slice must not be accessed.
-// This is optional - if not called, the buffer will be garbage collected.
-func (r *Response) Release() {
-	if r.ReleaseBody != nil {
-		r.ReleaseBody()
-		r.ReleaseBody = nil
-		r.Body = nil
+// Close closes the response body.
+// Should be called when done reading the body.
+func (r *Response) Close() error {
+	if r.Body != nil {
+		return r.Body.Close()
 	}
+	return nil
+}
+
+// GetHeader returns the first value for the given header key (case-insensitive).
+// Use GetHeaders() for multi-value headers like Set-Cookie.
+func (r *Response) GetHeader(key string) string {
+	if values := r.Headers[strings.ToLower(key)]; len(values) > 0 {
+		return values[0]
+	}
+	return ""
+}
+
+// GetHeaders returns all values for the given header key (case-insensitive).
+func (r *Response) GetHeaders(key string) []string {
+	return r.Headers[strings.ToLower(key)]
+}
+
+// Bytes returns the response body as a byte slice.
+// If the body has already been read, returns the cached bytes.
+// Otherwise reads the body and caches it.
+func (r *Response) Bytes() ([]byte, error) {
+	if r.bodyRead {
+		return r.bodyBytes, nil
+	}
+	if r.Body == nil {
+		return nil, nil
+	}
+
+	data, err := io.ReadAll(r.Body)
+	if err != nil {
+		return nil, err
+	}
+	r.Body.Close()
+	r.bodyBytes = data
+	r.bodyRead = true
+	return data, nil
+}
+
+// Text returns the response body as a string.
+func (r *Response) Text() (string, error) {
+	data, err := r.Bytes()
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
 }
 
 // Transport is a unified HTTP transport supporting HTTP/1.1, HTTP/2, and HTTP/3
@@ -791,9 +833,11 @@ func (t *Transport) doHTTP1(ctx context.Context, req *Request) (*Response, error
 	// Set preset headers (with ordering for fingerprinting)
 	applyPresetHeaders(httpReq, t.preset)
 
-	// Override with custom headers
-	for key, value := range req.Headers {
-		httpReq.Header.Set(key, value)
+	// Override with custom headers (multi-value support)
+	for key, values := range req.Headers {
+		for _, value := range values {
+			httpReq.Header.Add(key, value)
+		}
 	}
 
 	// Record timing before request
@@ -833,13 +877,14 @@ func (t *Transport) doHTTP1(ctx context.Context, req *Request) (*Response, error
 	headers := buildHeadersMap(resp.Header)
 
 	return &Response{
-		StatusCode:  resp.StatusCode,
-		Headers:     headers,
-		Body:        body,
-		FinalURL:    req.URL,
-		Timing:      timing,
-		Protocol:    "h1",
-		ReleaseBody: releaseBody,
+		StatusCode: resp.StatusCode,
+		Headers:    headers,
+		Body:       io.NopCloser(bytes.NewReader(body)),
+		FinalURL:   req.URL,
+		Timing:     timing,
+		Protocol:   "h1",
+		bodyBytes:  body,
+		bodyRead:   true,
 	}, nil
 }
 
@@ -896,9 +941,11 @@ func (t *Transport) doHTTP2(ctx context.Context, req *Request) (*Response, error
 	// Set preset headers (with ordering for fingerprinting)
 	applyPresetHeaders(httpReq, t.preset)
 
-	// Override with custom headers
-	for key, value := range req.Headers {
-		httpReq.Header.Set(key, value)
+	// Override with custom headers (multi-value support)
+	for key, values := range req.Headers {
+		for _, value := range values {
+			httpReq.Header.Add(key, value)
+		}
 	}
 
 	// Record timing before request
@@ -953,13 +1000,14 @@ func (t *Transport) doHTTP2(ctx context.Context, req *Request) (*Response, error
 	headers := buildHeadersMap(resp.Header)
 
 	return &Response{
-		StatusCode:  resp.StatusCode,
-		Headers:     headers,
-		Body:        body,
-		FinalURL:    req.URL,
-		Timing:      timing,
-		Protocol:    "h2",
-		ReleaseBody: releaseBody,
+		StatusCode: resp.StatusCode,
+		Headers:    headers,
+		Body:       io.NopCloser(bytes.NewReader(body)),
+		FinalURL:   req.URL,
+		Timing:     timing,
+		Protocol:   "h2",
+		bodyBytes:  body,
+		bodyRead:   true,
 	}, nil
 }
 
@@ -1016,9 +1064,11 @@ func (t *Transport) doHTTP3(ctx context.Context, req *Request) (*Response, error
 	// Set preset headers (with ordering for fingerprinting)
 	applyPresetHeaders(httpReq, t.preset)
 
-	// Override with custom headers
-	for key, value := range req.Headers {
-		httpReq.Header.Set(key, value)
+	// Override with custom headers (multi-value support)
+	for key, values := range req.Headers {
+		for _, value := range values {
+			httpReq.Header.Add(key, value)
+		}
 	}
 
 	// Record timing before request
@@ -1074,13 +1124,14 @@ func (t *Transport) doHTTP3(ctx context.Context, req *Request) (*Response, error
 	headers := buildHeadersMap(resp.Header)
 
 	return &Response{
-		StatusCode:  resp.StatusCode,
-		Headers:     headers,
-		Body:        body,
-		FinalURL:    req.URL,
-		Timing:      timing,
-		Protocol:    "h3",
-		ReleaseBody: releaseBody,
+		StatusCode: resp.StatusCode,
+		Headers:    headers,
+		Body:       io.NopCloser(bytes.NewReader(body)),
+		FinalURL:   req.URL,
+		Timing:     timing,
+		Protocol:   "h3",
+		bodyBytes:  body,
+		bodyRead:   true,
 	}, nil
 }
 
@@ -1139,15 +1190,16 @@ func extractHost(urlStr string) string {
 	return parsed.Hostname()
 }
 
-func buildHeadersMap(h http.Header) map[string]string {
-	headers := make(map[string]string)
+// buildHeadersMap converts http.Header to map[string][]string.
+// Preserves all values for multi-value headers (Set-Cookie, etc.)
+func buildHeadersMap(h http.Header) map[string][]string {
+	headers := make(map[string][]string)
 	for key, values := range h {
 		lowerKey := strings.ToLower(key)
-		if lowerKey == "set-cookie" {
-			headers[lowerKey] = strings.Join(values, "\n")
-		} else {
-			headers[lowerKey] = strings.Join(values, ", ")
-		}
+		// Copy values to avoid sharing underlying array
+		headerValues := make([]string, len(values))
+		copy(headerValues, values)
+		headers[lowerKey] = headerValues
 	}
 	return headers
 }

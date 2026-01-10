@@ -64,6 +64,10 @@ export interface SessionOptions {
   preset?: string;
   /** Proxy URL (e.g., "http://user:pass@host:port" or "socks5://host:port") */
   proxy?: string;
+  /** Proxy URL for TCP protocols (HTTP/1.1, HTTP/2) - use with udpProxy for split config */
+  tcpProxy?: string;
+  /** Proxy URL for UDP protocols (HTTP/3 via MASQUE) - use with tcpProxy for split config */
+  udpProxy?: string;
   /** Request timeout in seconds (default: 30) */
   timeout?: number;
   /** HTTP version: "auto", "h1", "h2", "h3" (default: "auto") */

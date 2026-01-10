@@ -34,6 +34,6 @@ temp/
 # Test binaries (in root)
 /test_cloudflare
 /test_fingerprint
-
+/tests
 # Internal tests (not published)
 internal_tests/

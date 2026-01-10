@@ -1,6 +1,7 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -279,7 +280,7 @@ func TestResponseHelpers(t *testing.T) {
 	jsonBody := `{"name": "John", "age": 30}`
 	resp := &Response{
 		StatusCode: 200,
-		Body:       []byte(jsonBody),
+		Body:       io.NopCloser(bytes.NewReader([]byte(jsonBody))),
 	}
 
 	var data map[string]interface{}
@@ -292,7 +293,8 @@ func TestResponseHelpers(t *testing.T) {
 	}
 
 	// Test Text
-	if resp.Text() != jsonBody {
+	text, _ := resp.Text()
+	if text != jsonBody {
 		t.Errorf("Text() should return body as string")
 	}
 
@@ -686,7 +688,7 @@ func TestTLSFingerprint_Httpcloak(t *testing.T) {
 	}
 
 	var fp TLSFingerprint
-	if err := json.Unmarshal(resp.Body, &fp); err != nil {
+	if err := resp.JSON(&fp); err != nil {
 		t.Fatalf("Failed to parse response: %v", err)
 	}
 
@@ -771,7 +773,7 @@ func TestTLSFingerprint_Comparison(t *testing.T) {
 	}
 
 	var httpcloakFP TLSFingerprint
-	if err := json.Unmarshal(httpcloakResp.Body, &httpcloakFP); err != nil {
+	if err := httpcloakResp.JSON(&httpcloakFP); err != nil {
 		t.Fatalf("Failed to parse httpcloak response: %v", err)
 	}
 

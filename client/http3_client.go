@@ -128,9 +128,18 @@ func (c *HTTP3Client) Do(ctx context.Context, req *Request) (*Response, error) {
 		method = "GET"
 	}
 
+	// Cache body bytes for retry support (io.Reader can only be read once)
+	var bodyBytes []byte
+	if req.Body != nil {
+		bodyBytes, err = io.ReadAll(req.Body)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read request body: %w", err)
+		}
+	}
+
 	var bodyReader io.Reader
-	if len(req.Body) > 0 {
-		bodyReader = bytes.NewReader(req.Body)
+	if len(bodyBytes) > 0 {
+		bodyReader = bytes.NewReader(bodyBytes)
 	} else if method == "POST" || method == "PUT" || method == "PATCH" {
 		// POST/PUT/PATCH with empty body must send Content-Length: 0
 		bodyReader = bytes.NewReader([]byte{})
@@ -142,7 +151,7 @@ func (c *HTTP3Client) Do(ctx context.Context, req *Request) (*Response, error) {
 	}
 
 	// Normalize request (Content-Length: 0 for empty POST/PUT/PATCH, Content-Type detection, etc.)
-	normalizeRequestWithBody(httpReq, req.Body)
+	normalizeRequestWithBody(httpReq, bodyBytes)
 
 	// Set preset headers first
 	for key, value := range c.preset.Headers {
@@ -155,9 +164,15 @@ func (c *HTTP3Client) Do(ctx context.Context, req *Request) (*Response, error) {
 	// Set Host header
 	httpReq.Header.Set("Host", host)
 
-	// Override with custom headers
-	for key, value := range req.Headers {
-		httpReq.Header.Set(key, value)
+	// Override with custom headers (multi-value support)
+	for key, values := range req.Headers {
+		for i, value := range values {
+			if i == 0 {
+				httpReq.Header.Set(key, value)
+			} else {
+				httpReq.Header.Add(key, value)
+			}
+		}
 	}
 
 	// Send request via HTTP/3
@@ -185,23 +200,28 @@ func (c *HTTP3Client) Do(ctx context.Context, req *Request) (*Response, error) {
 
 	timing.Total = float64(time.Since(startTime).Milliseconds())
 
-	// Build response headers map
-	headers := make(map[string]string)
+	// Build response headers map (multi-value support)
+	headers := make(map[string][]string)
 	for key, values := range resp.Header {
-		headers[strings.ToLower(key)] = strings.Join(values, ", ")
+		lowerKey := strings.ToLower(key)
+		headerValues := make([]string, len(values))
+		copy(headerValues, values)
+		headers[lowerKey] = headerValues
 	}
 
 	return &Response{
 		StatusCode: resp.StatusCode,
 		Headers:    headers,
-		Body:       body,
+		Body:       io.NopCloser(bytes.NewReader(body)),
 		FinalURL:   req.URL,
 		Timing:     timing,
+		bodyBytes:  body,
+		bodyRead:   true,
 	}, nil
 }
 
 // Get performs a GET request over HTTP/3
-func (c *HTTP3Client) Get(ctx context.Context, url string, headers map[string]string) (*Response, error) {
+func (c *HTTP3Client) Get(ctx context.Context, url string, headers map[string][]string) (*Response, error) {
 	return c.Do(ctx, &Request{
 		Method:  "GET",
 		URL:     url,
@@ -210,7 +230,7 @@ func (c *HTTP3Client) Get(ctx context.Context, url string, headers map[string]st
 }
 
 // Post performs a POST request over HTTP/3
-func (c *HTTP3Client) Post(ctx context.Context, url string, body []byte, headers map[string]string) (*Response, error) {
+func (c *HTTP3Client) Post(ctx context.Context, url string, body io.Reader, headers map[string][]string) (*Response, error) {
 	return c.Do(ctx, &Request{
 		Method:  "POST",
 		URL:     url,

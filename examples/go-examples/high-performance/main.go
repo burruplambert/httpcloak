@@ -1,17 +1,16 @@
-// Example: High-Performance Downloads with Buffer Pooling
+// Example: High-Performance Downloads
 //
 // This example demonstrates:
-// - Using resp.Release() for maximum download performance
-// - Buffer pooling to avoid memory allocation overhead
+// - Using Bytes() method to get response body
 // - Benchmarking download speeds
 // - Best practices for high-throughput scenarios
+// - When to use streaming vs buffered downloads
 //
 // Run: go run main.go
 package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -30,25 +29,26 @@ func main() {
 	defer session.Close()
 
 	// =========================================================================
-	// Understanding Buffer Pooling
+	// Understanding Response Body Handling
 	// =========================================================================
-	fmt.Println("\n[INFO] Buffer Pooling Explanation")
+	fmt.Println("\n[INFO] Response Body Handling")
 	fmt.Println(strings.Repeat("-", 50))
 	fmt.Println(`
-HTTPCloak uses internal buffer pools to minimize memory allocation
-overhead during downloads. When you call resp.Release(), the internal
-buffer is returned to the pool for reuse by subsequent requests.
+HTTPCloak uses io.ReadCloser for response bodies, enabling:
+- Streaming large responses without loading into memory
+- Efficient body handling with Bytes(), Text(), JSON() methods
+- Automatic decompression (gzip, br, zstd)
 
-Without Release(): ~5000 MB/s (allocates new buffer each time)
-With Release():    ~9000 MB/s (reuses pooled buffers)
-
-IMPORTANT: After calling Release(), the resp.Body slice is invalidated
-and must not be accessed.`)
+Methods:
+- resp.Bytes() - Read entire body as []byte (cached for reuse)
+- resp.Text()  - Read body as string
+- resp.JSON(&v) - Unmarshal body into struct
+- resp.Body    - Raw io.ReadCloser for streaming`)
 
 	// =========================================================================
-	// Example 1: Basic usage with Release()
+	// Example 1: Basic usage with Bytes()
 	// =========================================================================
-	fmt.Println("\n[1] Basic Usage with Release()")
+	fmt.Println("\n[1] Basic Usage with Bytes()")
 	fmt.Println(strings.Repeat("-", 50))
 
 	resp, err := session.Get(ctx, "https://httpbin.org/bytes/1024")
@@ -57,41 +57,41 @@ and must not be accessed.`)
 		return
 	}
 
-	// Process the response body while it's valid
-	size := len(resp.Body)
-	fmt.Printf("Downloaded %d bytes\n", size)
+	// Get the response body bytes
+	body, err := resp.Bytes()
+	if err != nil {
+		fmt.Printf("Error reading body: %v\n", err)
+		return
+	}
+	fmt.Printf("Downloaded %d bytes\n", len(body))
 
-	// Release the buffer back to pool when done
-	// After this, resp.Body is nil and must not be accessed
-	resp.Release()
-	fmt.Println("Buffer released to pool")
+	// Bytes() caches the result - multiple calls return same data
+	body2, _ := resp.Bytes()
+	fmt.Printf("Second Bytes() call: %d bytes (cached)\n", len(body2))
 
 	// =========================================================================
-	// Example 2: Copy data before releasing (if you need to keep it)
+	// Example 2: Using Text() for string responses
 	// =========================================================================
-	fmt.Println("\n[2] Copy Data Before Releasing")
+	fmt.Println("\n[2] Using Text() for String Responses")
 	fmt.Println(strings.Repeat("-", 50))
 
-	resp, err = session.Get(ctx, "https://httpbin.org/bytes/1024")
+	resp, err = session.Get(ctx, "https://httpbin.org/get")
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
 		return
 	}
 
-	// Copy the data if you need to keep it after Release()
-	dataCopy := make([]byte, len(resp.Body))
-	copy(dataCopy, resp.Body)
-
-	// Now safe to release
-	resp.Release()
-
-	// dataCopy is still valid
-	fmt.Printf("Kept copy of %d bytes after release\n", len(dataCopy))
+	text, err := resp.Text()
+	if err != nil {
+		fmt.Printf("Error reading text: %v\n", err)
+		return
+	}
+	fmt.Printf("Response text length: %d chars\n", len(text))
 
 	// =========================================================================
-	// Example 3: Process in place (most efficient)
+	// Example 3: Using JSON() for structured responses
 	// =========================================================================
-	fmt.Println("\n[3] Process In Place (Most Efficient)")
+	fmt.Println("\n[3] Using JSON() for Structured Responses")
 	fmt.Println(strings.Repeat("-", 50))
 
 	resp, err = session.Get(ctx, "https://httpbin.org/json")
@@ -100,15 +100,11 @@ and must not be accessed.`)
 		return
 	}
 
-	// Process the data directly from the pooled buffer
-	// This is the most efficient pattern - no extra copies
+	// Parse JSON directly from response
 	var result map[string]interface{}
-	if err := json.Unmarshal(resp.Body, &result); err == nil {
-		fmt.Printf("Parsed JSON with %d keys\n", len(result))
+	if err := resp.JSON(&result); err == nil {
+		fmt.Printf("Parsed JSON with %d top-level keys\n", len(result))
 	}
-
-	// Release after processing
-	resp.Release()
 
 	// =========================================================================
 	// Example 4: High-throughput download loop
@@ -116,11 +112,6 @@ and must not be accessed.`)
 	fmt.Println("\n[4] High-Throughput Download Loop")
 	fmt.Println(strings.Repeat("-", 50))
 
-	// Warm up the buffer pool with initial request
-	warmup, _ := session.Get(ctx, "https://httpbin.org/bytes/102400")
-	warmup.Release()
-
-	// Now subsequent requests will reuse the pooled buffer
 	var totalBytes int64
 	start := time.Now()
 	iterations := 10
@@ -131,8 +122,12 @@ and must not be accessed.`)
 			fmt.Printf("Error on iteration %d: %v\n", i, err)
 			continue
 		}
-		totalBytes += int64(len(resp.Body))
-		resp.Release() // Critical: release for next iteration to reuse buffer
+		body, err := resp.Bytes()
+		if err != nil {
+			fmt.Printf("Error reading body on iteration %d: %v\n", i, err)
+			continue
+		}
+		totalBytes += int64(len(body))
 	}
 
 	elapsed := time.Since(start)
@@ -141,24 +136,21 @@ and must not be accessed.`)
 	fmt.Printf("Time: %v | Speed: %.1f MB/s\n", elapsed, speed)
 
 	// =========================================================================
-	// Example 5: When NOT to use Release()
+	// Example 5: Response Caching Behavior
 	// =========================================================================
-	fmt.Println("\n[5] When NOT to Use Release()")
+	fmt.Println("\n[5] Response Caching Behavior")
 	fmt.Println(strings.Repeat("-", 50))
 	fmt.Println(`
-Don't use Release() when:
-- You need to store resp.Body for later use
-- You're passing resp.Body to another goroutine
-- You need the data after the function returns
+The Bytes(), Text(), and JSON() methods cache the body:
+- First call: reads and caches the body
+- Subsequent calls: return cached data
 
-In these cases, either:
-1. Don't call Release() (GC will clean up)
-2. Copy the data first, then Release()`)
+This allows safe multiple access to response data.`)
 
-	// Example: storing response for later
 	resp, _ = session.Get(ctx, "https://httpbin.org/bytes/1024")
-	storedData := resp.Body // Keep reference - don't release!
-	fmt.Printf("Stored %d bytes for later use (not releasing)\n", len(storedData))
+	bytes1, _ := resp.Bytes()
+	bytes2, _ := resp.Bytes()
+	fmt.Printf("First call: %d bytes, Second call: %d bytes\n", len(bytes1), len(bytes2))
 
 	// =========================================================================
 	// Example 6: Streaming for very large files
@@ -168,13 +160,14 @@ In these cases, either:
 	fmt.Println(`
 For files larger than 100MB, use streaming instead:
 
-    resp, _ := session.GetStream(ctx, url)
-    defer resp.Close()
+    stream, _ := session.GetStream(ctx, url)
+    defer stream.Close()
 
+    buf := make([]byte, 1024*1024) // 1MB buffer
     for {
-        chunk, err := resp.ReadChunk(1024 * 1024)
+        n, err := stream.Read(buf)
+        if n > 0 { processChunk(buf[:n]) }
         if err == io.EOF { break }
-        processChunk(chunk)
     }
 
 Streaming doesn't load the entire file into memory.`)
@@ -186,15 +179,11 @@ Streaming doesn't load the entire file into memory.`)
 	fmt.Println("BEST PRACTICES SUMMARY")
 	fmt.Println(strings.Repeat("=", 70))
 	fmt.Println(`
-1. ALWAYS call resp.Release() in high-throughput scenarios
-2. Process data BEFORE calling Release()
-3. Copy data if you need it after Release()
-4. Warm up the pool with a request of similar size
-5. Use streaming (GetStream) for files > 100MB
-6. Don't call Release() if storing resp.Body for later
-
-Performance comparison (100MB downloads):
-  - Without Release(): ~5000 MB/s
-  - With Release():    ~9000 MB/s (1.8x faster)
+1. Use Bytes()/Text()/JSON() for responses under 100MB
+2. Use GetStream() for large files or when memory is constrained
+3. Body is automatically decompressed (gzip, br, zstd)
+4. Multiple reads from Bytes()/Text() return cached data
+5. Connection pooling reduces latency for repeated requests
+6. Use appropriate preset for your use case (chrome-143, firefox-133, etc.)
 `)
 }

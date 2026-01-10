@@ -30,10 +30,23 @@ type ClientConfig struct {
 	// Default: 30 seconds.
 	Timeout time.Duration
 
-	// Proxy is the URL of the proxy server.
-	// Supports http://, https://, and socks5:// schemes.
+	// Proxy is the URL of the proxy server (used for all protocols).
+	// Supports http://, https://, socks5://, and masque:// schemes.
 	// Example: "http://user:pass@proxy.example.com:8080"
+	// For split proxy configuration, use TCPProxy and UDPProxy instead.
 	Proxy string
+
+	// TCPProxy is the proxy URL for TCP-based protocols (HTTP/1.1 and HTTP/2).
+	// Use this with UDPProxy for split proxy configuration.
+	// Supports http://, https://, and socks5:// schemes.
+	// Example: "http://user:pass@datacenter-proxy:8080"
+	TCPProxy string
+
+	// UDPProxy is the proxy URL for UDP-based protocols (HTTP/3 via MASQUE).
+	// Use this with TCPProxy for split proxy configuration.
+	// Supports masque:// scheme or known MASQUE providers (e.g., Bright Data).
+	// Example: "masque://user:pass@brd.superproxy.io:443"
+	UDPProxy string
 
 	// FollowRedirects controls whether the client follows HTTP redirects (3xx responses).
 	// Default: true.
@@ -168,6 +181,43 @@ func WithTimeout(timeout time.Duration) Option {
 func WithProxy(proxyURL string) Option {
 	return func(c *ClientConfig) {
 		c.Proxy = proxyURL
+	}
+}
+
+// WithTCPProxy sets the proxy URL for TCP-based protocols (HTTP/1.1 and HTTP/2).
+// Use this with WithUDPProxy for split proxy configuration where different
+// proxies handle TCP and UDP traffic.
+//
+// Supported proxy types:
+//   - HTTP/HTTPS proxy: "http://host:port" or "https://host:port"
+//   - SOCKS5 proxy: "socks5://host:port"
+//
+// Example:
+//
+//	client.WithTCPProxy("http://user:pass@datacenter-proxy:8080")
+func WithTCPProxy(proxyURL string) Option {
+	return func(c *ClientConfig) {
+		c.TCPProxy = proxyURL
+	}
+}
+
+// WithUDPProxy sets the proxy URL for UDP-based protocols (HTTP/3 via MASQUE).
+// Use this with WithTCPProxy for split proxy configuration where different
+// proxies handle TCP and UDP traffic.
+//
+// This is useful for providers like Bright Data that only support MASQUE for
+// HTTP/3 traffic but don't support HTTP/1.1 or HTTP/2 through the same endpoint.
+//
+// Supported proxy types:
+//   - MASQUE proxy: "masque://host:port"
+//   - Known MASQUE providers with https://: "https://brd.superproxy.io:port"
+//
+// Example:
+//
+//	client.WithUDPProxy("masque://user:pass@brd.superproxy.io:443")
+func WithUDPProxy(proxyURL string) Option {
+	return func(c *ClientConfig) {
+		c.UDPProxy = proxyURL
 	}
 }
 

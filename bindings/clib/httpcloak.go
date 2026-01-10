@@ -15,6 +15,7 @@ static void invoke_callback(async_callback cb, int64_t callback_id, const char* 
 */
 import "C"
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -91,38 +92,37 @@ type Cookie struct {
 
 // RedirectInfo contains information about a redirect response
 type RedirectInfo struct {
-	StatusCode int               `json:"status_code"`
-	URL        string            `json:"url"`
-	Headers    map[string]string `json:"headers"`
+	StatusCode int                 `json:"status_code"`
+	URL        string              `json:"url"`
+	Headers    map[string][]string `json:"headers"`
 }
 
 // Response for JSON serialization (legacy - includes body as string)
 type ResponseData struct {
-	StatusCode int               `json:"status_code"`
-	Headers    map[string]string `json:"headers"`
-	Body       string            `json:"body"`
-	FinalURL   string            `json:"final_url"`
-	Protocol   string            `json:"protocol"`
-	Cookies    []Cookie          `json:"cookies"`
-	History    []RedirectInfo    `json:"history"`
+	StatusCode int                 `json:"status_code"`
+	Headers    map[string][]string `json:"headers"`
+	Body       string              `json:"body"`
+	FinalURL   string              `json:"final_url"`
+	Protocol   string              `json:"protocol"`
+	Cookies    []Cookie            `json:"cookies"`
+	History    []RedirectInfo      `json:"history"`
 }
 
 // ResponseMetadata for optimized responses - body is passed separately as raw bytes
 type ResponseMetadata struct {
-	StatusCode int               `json:"status_code"`
-	Headers    map[string]string `json:"headers"`
-	BodyLen    int               `json:"body_len"`
-	FinalURL   string            `json:"final_url"`
-	Protocol   string            `json:"protocol"`
-	Cookies    []Cookie          `json:"cookies"`
-	History    []RedirectInfo    `json:"history"`
+	StatusCode int                 `json:"status_code"`
+	Headers    map[string][]string `json:"headers"`
+	BodyLen    int                 `json:"body_len"`
+	FinalURL   string              `json:"final_url"`
+	Protocol   string              `json:"protocol"`
+	Cookies    []Cookie            `json:"cookies"`
+	History    []RedirectInfo      `json:"history"`
 }
 
 // RawResponse holds response data with body as raw bytes (not JSON encoded)
 type RawResponse struct {
-	metadata    []byte         // JSON encoded metadata
-	body        []byte         // Raw body bytes
-	releaseBody func()         // Release function for pooled buffer
+	metadata []byte // JSON encoded metadata
+	body     []byte // Raw body bytes
 }
 
 var (
@@ -165,21 +165,20 @@ func makeErrorJSON(err error) *C.char {
 }
 
 // parseSetCookieHeaders parses Set-Cookie headers into Cookie structs
-func parseSetCookieHeaders(headers map[string]string) []Cookie {
+func parseSetCookieHeaders(headers map[string][]string) []Cookie {
 	var cookies []Cookie
 
 	// Try both cases for Set-Cookie header
-	setCookie, exists := headers["set-cookie"]
+	setCookieHeaders, exists := headers["set-cookie"]
 	if !exists {
-		setCookie, exists = headers["Set-Cookie"]
+		setCookieHeaders, exists = headers["Set-Cookie"]
 	}
-	if !exists || setCookie == "" {
+	if !exists || len(setCookieHeaders) == 0 {
 		return cookies
 	}
 
-	// Set-Cookie headers are joined with newlines (one cookie per line)
-	lines := splitByNewline(setCookie)
-	for _, line := range lines {
+	// Each value in the slice is a separate Set-Cookie header
+	for _, line := range setCookieHeaders {
 		line = trim(line)
 		if line == "" {
 			continue
@@ -243,7 +242,26 @@ func trim(s string) string {
 	return s[start:end]
 }
 
+// convertHeaders converts map[string]string to map[string][]string for the new API
+func convertHeaders(headers map[string]string) map[string][]string {
+	if headers == nil {
+		return nil
+	}
+	result := make(map[string][]string, len(headers))
+	for k, v := range headers {
+		result[k] = []string{v}
+	}
+	return result
+}
+
 func makeResponseJSON(resp *httpcloak.Response) *C.char {
+	// Read body from io.ReadCloser
+	var bodyBytes []byte
+	if resp.Body != nil {
+		bodyBytes, _ = io.ReadAll(resp.Body)
+		resp.Body.Close()
+	}
+
 	// Parse cookies from Set-Cookie header
 	cookies := parseSetCookieHeaders(resp.Headers)
 
@@ -263,7 +281,7 @@ func makeResponseJSON(resp *httpcloak.Response) *C.char {
 	data := ResponseData{
 		StatusCode: resp.StatusCode,
 		Headers:    resp.Headers,
-		Body:       string(resp.Body),
+		Body:       string(bodyBytes),
 		FinalURL:   resp.FinalURL,
 		Protocol:   resp.Protocol,
 		Cookies:    cookies,
@@ -275,6 +293,13 @@ func makeResponseJSON(resp *httpcloak.Response) *C.char {
 
 // makeRawResponse creates an optimized response with body as raw bytes
 func makeRawResponse(resp *httpcloak.Response) int64 {
+	// Read body from io.ReadCloser
+	var bodyBytes []byte
+	if resp.Body != nil {
+		bodyBytes, _ = io.ReadAll(resp.Body)
+		resp.Body.Close()
+	}
+
 	// Parse cookies from Set-Cookie header
 	cookies := parseSetCookieHeaders(resp.Headers)
 
@@ -295,7 +320,7 @@ func makeRawResponse(resp *httpcloak.Response) int64 {
 	meta := ResponseMetadata{
 		StatusCode: resp.StatusCode,
 		Headers:    resp.Headers,
-		BodyLen:    len(resp.Body),
+		BodyLen:    len(bodyBytes),
 		FinalURL:   resp.FinalURL,
 		Protocol:   resp.Protocol,
 		Cookies:    cookies,
@@ -303,14 +328,13 @@ func makeRawResponse(resp *httpcloak.Response) int64 {
 	}
 	metaJSON, _ := json.Marshal(meta)
 
-	// Store the raw response with release function for buffer pooling
+	// Store the raw response
 	rawResponsesMu.Lock()
 	rawResponseID++
 	id := rawResponseID
 	rawResponses[id] = &RawResponse{
-		metadata:    metaJSON,
-		body:        resp.Body,
-		releaseBody: resp.ReleaseBody,
+		metadata: metaJSON,
+		body:     bodyBytes,
 	}
 	rawResponsesMu.Unlock()
 
@@ -403,11 +427,7 @@ func httpcloak_response_copy_body_to(handle C.int64_t, dest unsafe.Pointer, dest
 //export httpcloak_response_free
 func httpcloak_response_free(handle C.int64_t) {
 	rawResponsesMu.Lock()
-	if resp, exists := rawResponses[int64(handle)]; exists {
-		// Release the pooled buffer back to the pool
-		if resp.releaseBody != nil {
-			resp.releaseBody()
-		}
+	if _, exists := rawResponses[int64(handle)]; exists {
 		delete(rawResponses, int64(handle))
 	}
 	rawResponsesMu.Unlock()
@@ -438,10 +458,7 @@ func httpcloak_response_finalize(handle C.int64_t, dest unsafe.Pointer, destLen 
 	// Get metadata (already includes body_len)
 	metadata := resp.metadata
 
-	// Release pooled buffer and clean up
-	if resp.releaseBody != nil {
-		resp.releaseBody()
-	}
+	// Clean up
 	delete(rawResponses, int64(handle))
 	rawResponsesMu.Unlock()
 
@@ -477,7 +494,7 @@ func httpcloak_get_raw(handle C.int64_t, url *C.char, optionsJSON *C.char) C.int
 	req := &httpcloak.Request{
 		Method:  "GET",
 		URL:     urlStr,
-		Headers: options.Headers,
+		Headers: convertHeaders(options.Headers),
 	}
 
 	resp, err := session.Do(ctx, req)
@@ -518,11 +535,16 @@ func httpcloak_post_raw(handle C.int64_t, url *C.char, body *C.char, bodyLen C.i
 	}
 	defer cancel()
 
+	var bodyReader io.Reader
+	if len(bodyBytes) > 0 {
+		bodyReader = bytes.NewReader(bodyBytes)
+	}
+
 	req := &httpcloak.Request{
 		Method:  "POST",
 		URL:     urlStr,
-		Headers: options.Headers,
-		Body:    bodyBytes,
+		Headers: convertHeaders(options.Headers),
+		Body:    bodyReader,
 	}
 
 	resp, err := session.Do(ctx, req)
@@ -567,11 +589,16 @@ func httpcloak_request_raw(handle C.int64_t, requestJSON *C.char, body *C.char, 
 		method = "GET"
 	}
 
+	var bodyReader io.Reader
+	if len(bodyBytes) > 0 {
+		bodyReader = bytes.NewReader(bodyBytes)
+	}
+
 	req := &httpcloak.Request{
 		Method:  method,
 		URL:     config.URL,
-		Headers: config.Headers,
-		Body:    bodyBytes,
+		Headers: convertHeaders(config.Headers),
+		Body:    bodyReader,
 	}
 
 	resp, err := session.Do(ctx, req)
@@ -746,7 +773,7 @@ func httpcloak_get(handle C.int64_t, url *C.char, optionsJSON *C.char) *C.char {
 	req := &httpcloak.Request{
 		Method:  "GET",
 		URL:     urlStr,
-		Headers: options.Headers,
+		Headers: convertHeaders(options.Headers),
 	}
 
 	resp, err := session.Do(ctx, req)
@@ -790,11 +817,16 @@ func httpcloak_post(handle C.int64_t, url *C.char, body *C.char, optionsJSON *C.
 	}
 	defer cancel()
 
+	var bodyReader io.Reader
+	if bodyStr != "" {
+		bodyReader = bytes.NewReader([]byte(bodyStr))
+	}
+
 	req := &httpcloak.Request{
 		Method:  "POST",
 		URL:     urlStr,
-		Headers: options.Headers,
-		Body:    []byte(bodyStr),
+		Headers: convertHeaders(options.Headers),
+		Body:    bodyReader,
 	}
 
 	resp, err := session.Do(ctx, req)
@@ -835,11 +867,16 @@ func httpcloak_request(handle C.int64_t, requestJSON *C.char) *C.char {
 	}
 	defer cancel()
 
+	var bodyReader io.Reader
+	if config.Body != "" {
+		bodyReader = bytes.NewReader([]byte(config.Body))
+	}
+
 	req := &httpcloak.Request{
 		Method:  config.Method,
 		URL:     config.URL,
-		Headers: config.Headers,
-		Body:    []byte(config.Body),
+		Headers: convertHeaders(config.Headers),
+		Body:    bodyReader,
 	}
 
 	resp, err := session.Do(ctx, req)
@@ -928,7 +965,7 @@ func httpcloak_get_async(handle C.int64_t, url *C.char, optionsJSON *C.char, cal
 		req := &httpcloak.Request{
 			Method:  "GET",
 			URL:     urlStr,
-			Headers: options.Headers,
+			Headers: convertHeaders(options.Headers),
 		}
 
 		resp, err := session.Do(ctx, req)
@@ -937,6 +974,13 @@ func httpcloak_get_async(handle C.int64_t, url *C.char, optionsJSON *C.char, cal
 			errJSON, _ := json.Marshal(errResp)
 			invokeCallback(int64(callbackID), "", string(errJSON))
 			return
+		}
+
+		// Read body from io.ReadCloser
+		var bodyBytes []byte
+		if resp.Body != nil {
+			bodyBytes, _ = io.ReadAll(resp.Body)
+			resp.Body.Close()
 		}
 
 		// Parse cookies from Set-Cookie header
@@ -958,7 +1002,7 @@ func httpcloak_get_async(handle C.int64_t, url *C.char, optionsJSON *C.char, cal
 		data := ResponseData{
 			StatusCode: resp.StatusCode,
 			Headers:    resp.Headers,
-			Body:       string(resp.Body),
+			Body:       string(bodyBytes),
 			FinalURL:   resp.FinalURL,
 			Protocol:   resp.Protocol,
 			Cookies:    cookies,
@@ -993,12 +1037,17 @@ func httpcloak_post_async(handle C.int64_t, url *C.char, body *C.char, optionsJS
 			return
 		}
 
+		var bodyReader io.Reader
+		if bodyStr != "" {
+			bodyReader = bytes.NewReader([]byte(bodyStr))
+		}
+
 		ctx := context.Background()
 		req := &httpcloak.Request{
 			Method:  "POST",
 			URL:     urlStr,
-			Headers: options.Headers,
-			Body:    []byte(bodyStr),
+			Headers: convertHeaders(options.Headers),
+			Body:    bodyReader,
 		}
 
 		resp, err := session.Do(ctx, req)
@@ -1007,6 +1056,13 @@ func httpcloak_post_async(handle C.int64_t, url *C.char, body *C.char, optionsJS
 			errJSON, _ := json.Marshal(errResp)
 			invokeCallback(int64(callbackID), "", string(errJSON))
 			return
+		}
+
+		// Read body from io.ReadCloser
+		var bodyBytes []byte
+		if resp.Body != nil {
+			bodyBytes, _ = io.ReadAll(resp.Body)
+			resp.Body.Close()
 		}
 
 		// Parse cookies from Set-Cookie header
@@ -1028,7 +1084,7 @@ func httpcloak_post_async(handle C.int64_t, url *C.char, body *C.char, optionsJS
 		data := ResponseData{
 			StatusCode: resp.StatusCode,
 			Headers:    resp.Headers,
-			Body:       string(resp.Body),
+			Body:       string(bodyBytes),
 			FinalURL:   resp.FinalURL,
 			Protocol:   resp.Protocol,
 			Cookies:    cookies,
@@ -1066,11 +1122,16 @@ func httpcloak_request_async(handle C.int64_t, requestJSON *C.char, callbackID C
 			defer cancel()
 		}
 
+		var bodyReader io.Reader
+		if config.Body != "" {
+			bodyReader = bytes.NewReader([]byte(config.Body))
+		}
+
 		req := &httpcloak.Request{
 			Method:  config.Method,
 			URL:     config.URL,
-			Headers: config.Headers,
-			Body:    []byte(config.Body),
+			Headers: convertHeaders(config.Headers),
+			Body:    bodyReader,
 		}
 
 		resp, err := session.Do(ctx, req)
@@ -1079,6 +1140,13 @@ func httpcloak_request_async(handle C.int64_t, requestJSON *C.char, callbackID C
 			errJSON, _ := json.Marshal(errResp)
 			invokeCallback(int64(callbackID), "", string(errJSON))
 			return
+		}
+
+		// Read body from io.ReadCloser
+		var bodyBytes []byte
+		if resp.Body != nil {
+			bodyBytes, _ = io.ReadAll(resp.Body)
+			resp.Body.Close()
 		}
 
 		// Parse cookies from Set-Cookie header
@@ -1100,7 +1168,7 @@ func httpcloak_request_async(handle C.int64_t, requestJSON *C.char, callbackID C
 		data := ResponseData{
 			StatusCode: resp.StatusCode,
 			Headers:    resp.Headers,
-			Body:       string(resp.Body),
+			Body:       string(bodyBytes),
 			FinalURL:   resp.FinalURL,
 			Protocol:   resp.Protocol,
 			Cookies:    cookies,
@@ -1150,7 +1218,7 @@ func httpcloak_free_string(str *C.char) {
 
 //export httpcloak_version
 func httpcloak_version() *C.char {
-	return C.CString("1.5.2")
+	return C.CString("1.5.3")
 }
 
 //export httpcloak_available_presets
@@ -1179,12 +1247,12 @@ var (
 
 // StreamMetadata contains metadata about a streaming response
 type StreamMetadata struct {
-	StatusCode    int               `json:"status_code"`
-	Headers       map[string]string `json:"headers"`
-	FinalURL      string            `json:"final_url"`
-	Protocol      string            `json:"protocol"`
-	ContentLength int64             `json:"content_length"` // -1 if unknown
-	Cookies       []Cookie          `json:"cookies"`
+	StatusCode    int                 `json:"status_code"`
+	Headers       map[string][]string `json:"headers"`
+	FinalURL      string              `json:"final_url"`
+	Protocol      string              `json:"protocol"`
+	ContentLength int64               `json:"content_length"` // -1 if unknown
+	Cookies       []Cookie            `json:"cookies"`
 }
 
 func getStream(handle int64) *httpcloak.StreamResponse {
@@ -1225,7 +1293,7 @@ func httpcloak_stream_get(sessionHandle C.int64_t, url *C.char, optionsJSON *C.c
 	req := &httpcloak.Request{
 		Method:  "GET",
 		URL:     urlStr,
-		Headers: options.Headers,
+		Headers: convertHeaders(options.Headers),
 	}
 
 	resp, err := session.DoStream(ctx, req)
@@ -1275,11 +1343,16 @@ func httpcloak_stream_post(sessionHandle C.int64_t, url *C.char, body *C.char, o
 		ctx, cancel = context.WithTimeout(ctx, 2*time.Minute)
 	}
 
+	var bodyReader io.Reader
+	if bodyStr != "" {
+		bodyReader = bytes.NewReader([]byte(bodyStr))
+	}
+
 	req := &httpcloak.Request{
 		Method:  "POST",
 		URL:     urlStr,
-		Headers: options.Headers,
-		Body:    []byte(bodyStr),
+		Headers: convertHeaders(options.Headers),
+		Body:    bodyReader,
 	}
 
 	resp, err := session.DoStream(ctx, req)
@@ -1326,11 +1399,16 @@ func httpcloak_stream_request(sessionHandle C.int64_t, requestJSON *C.char) C.in
 		ctx, cancel = context.WithTimeout(ctx, 2*time.Minute)
 	}
 
+	var bodyReader io.Reader
+	if config.Body != "" {
+		bodyReader = bytes.NewReader([]byte(config.Body))
+	}
+
 	req := &httpcloak.Request{
 		Method:  config.Method,
 		URL:     config.URL,
-		Headers: config.Headers,
-		Body:    []byte(config.Body),
+		Headers: convertHeaders(config.Headers),
+		Body:    bodyReader,
 	}
 
 	resp, err := session.DoStream(ctx, req)
@@ -1524,7 +1602,7 @@ func httpcloak_upload_start(sessionHandle C.int64_t, url *C.char, optionsJSON *C
 		req := &httpcloak.Request{
 			Method:  upload.method,
 			URL:     upload.url,
-			Headers: upload.headers,
+			Headers: convertHeaders(upload.headers),
 			Body:    nil, // Will use pipe reader
 		}
 
@@ -1632,12 +1710,20 @@ func httpcloak_upload_finish(uploadHandle C.int64_t) *C.char {
 
 	// Build response JSON
 	resp := result.response
+
+	// Read body from io.ReadCloser
+	var bodyBytes []byte
+	if resp.Body != nil {
+		bodyBytes, _ = io.ReadAll(resp.Body)
+		resp.Body.Close()
+	}
+
 	cookies := parseSetCookieHeaders(resp.Headers)
 
 	responseData := ResponseData{
 		StatusCode: resp.StatusCode,
 		Headers:    resp.Headers,
-		Body:       string(resp.Body),
+		Body:       string(bodyBytes),
 		FinalURL:   resp.FinalURL,
 		Protocol:   resp.Protocol,
 		Cookies:    cookies,

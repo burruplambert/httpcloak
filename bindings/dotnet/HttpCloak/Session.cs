@@ -709,6 +709,145 @@ public sealed class Session : IDisposable
         }
     }
 
+    // =========================================================================
+    // Streaming Methods
+    // =========================================================================
+
+    /// <summary>
+    /// Perform a streaming GET request for downloading large files.
+    /// </summary>
+    /// <param name="url">Request URL</param>
+    /// <param name="headers">Custom headers</param>
+    /// <param name="parameters">Query parameters</param>
+    /// <param name="cookies">Cookies to send with this request</param>
+    /// <param name="auth">Basic auth (username, password). If null, uses session Auth.</param>
+    /// <param name="timeout">Request timeout in milliseconds</param>
+    /// <returns>StreamResponse for chunked reading</returns>
+    /// <example>
+    /// <code>
+    /// using var stream = session.GetStream("https://example.com/large-file.zip");
+    /// foreach (var chunk in stream.ReadChunks())
+    /// {
+    ///     file.Write(chunk);
+    /// }
+    /// </code>
+    /// </example>
+    public StreamResponse GetStream(string url, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
+    {
+        ThrowIfDisposed();
+
+        url = AddParamsToUrl(url, parameters);
+        headers = ApplyAuth(headers, auth);
+        headers = ApplyCookies(headers, cookies);
+
+        var options = new StreamOptions { Headers = headers.Count > 0 ? headers : null, Timeout = timeout };
+        string? optionsJson = JsonSerializer.Serialize(options, JsonContext.Default.StreamOptions);
+
+        long streamHandle = Native.StreamGet(_handle, url, optionsJson);
+        if (streamHandle < 0)
+            throw new HttpCloakException("Failed to start streaming request");
+
+        return CreateStreamResponse(streamHandle);
+    }
+
+    /// <summary>
+    /// Perform a streaming POST request.
+    /// </summary>
+    /// <param name="url">Request URL</param>
+    /// <param name="body">Request body</param>
+    /// <param name="headers">Custom headers</param>
+    /// <param name="parameters">Query parameters</param>
+    /// <param name="cookies">Cookies to send with this request</param>
+    /// <param name="auth">Basic auth (username, password). If null, uses session Auth.</param>
+    /// <param name="timeout">Request timeout in milliseconds</param>
+    /// <returns>StreamResponse for chunked reading</returns>
+    public StreamResponse PostStream(string url, string? body = null, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
+    {
+        ThrowIfDisposed();
+
+        url = AddParamsToUrl(url, parameters);
+        headers = ApplyAuth(headers, auth);
+        headers = ApplyCookies(headers, cookies);
+
+        var options = new StreamOptions { Headers = headers.Count > 0 ? headers : null, Timeout = timeout };
+        string? optionsJson = JsonSerializer.Serialize(options, JsonContext.Default.StreamOptions);
+
+        long streamHandle = Native.StreamPost(_handle, url, body, optionsJson);
+        if (streamHandle < 0)
+            throw new HttpCloakException("Failed to start streaming request");
+
+        return CreateStreamResponse(streamHandle);
+    }
+
+    /// <summary>
+    /// Perform a streaming request with any HTTP method.
+    /// </summary>
+    /// <param name="method">HTTP method</param>
+    /// <param name="url">Request URL</param>
+    /// <param name="body">Request body</param>
+    /// <param name="headers">Custom headers</param>
+    /// <param name="parameters">Query parameters</param>
+    /// <param name="cookies">Cookies to send with this request</param>
+    /// <param name="auth">Basic auth (username, password). If null, uses session Auth.</param>
+    /// <param name="timeout">Request timeout in seconds</param>
+    /// <returns>StreamResponse for chunked reading</returns>
+    public StreamResponse RequestStream(string method, string url, string? body = null, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
+    {
+        ThrowIfDisposed();
+
+        url = AddParamsToUrl(url, parameters);
+        headers = ApplyAuth(headers, auth);
+        headers = ApplyCookies(headers, cookies);
+
+        var request = new RequestConfig
+        {
+            Method = method.ToUpperInvariant(),
+            Url = url,
+            Body = body,
+            Headers = headers.Count > 0 ? headers : null,
+            Timeout = timeout
+        };
+
+        string requestJson = JsonSerializer.Serialize(request, JsonContext.Default.RequestConfig);
+
+        long streamHandle = Native.StreamRequest(_handle, requestJson);
+        if (streamHandle < 0)
+            throw new HttpCloakException("Failed to start streaming request");
+
+        return CreateStreamResponse(streamHandle);
+    }
+
+    private static StreamResponse CreateStreamResponse(long streamHandle)
+    {
+        IntPtr metadataPtr = Native.StreamGetMetadata(streamHandle);
+        string? metadataJson = Native.PtrToStringAndFree(metadataPtr);
+
+        if (string.IsNullOrEmpty(metadataJson))
+        {
+            Native.StreamClose(streamHandle);
+            throw new HttpCloakException("Failed to get stream metadata");
+        }
+
+        if (metadataJson.Contains("\"error\""))
+        {
+            var error = JsonSerializer.Deserialize(metadataJson, JsonContext.Default.ErrorResponse);
+            if (error?.Error != null)
+            {
+                Native.StreamClose(streamHandle);
+                throw new HttpCloakException(error.Error);
+            }
+        }
+
+        var metadata = JsonSerializer.Deserialize(metadataJson, JsonContext.Default.StreamMetadata);
+        if (metadata == null)
+        {
+            Native.StreamClose(streamHandle);
+            throw new HttpCloakException("Failed to parse stream metadata");
+        }
+
+        return new StreamResponse(streamHandle, metadata);
+    }
+
     private static Response ParseResponse(IntPtr resultPtr, TimeSpan elapsed = default)
     {
         string? json = Native.PtrToStringAndFree(resultPtr);
@@ -920,6 +1059,156 @@ public class HttpCloakException : Exception
 }
 
 /// <summary>
+/// Streaming HTTP Response for downloading large files.
+/// Implements IDisposable for proper resource cleanup.
+/// </summary>
+/// <example>
+/// <code>
+/// using var stream = session.GetStream("https://example.com/large-file.zip");
+/// foreach (var chunk in stream.ReadChunks())
+/// {
+///     file.Write(chunk);
+/// }
+/// </code>
+/// </example>
+public sealed class StreamResponse : IDisposable
+{
+    private static readonly Dictionary<int, string> HttpStatusPhrases = new()
+    {
+        { 100, "Continue" }, { 101, "Switching Protocols" }, { 102, "Processing" },
+        { 200, "OK" }, { 201, "Created" }, { 202, "Accepted" },
+        { 204, "No Content" }, { 206, "Partial Content" },
+        { 301, "Moved Permanently" }, { 302, "Found" }, { 304, "Not Modified" },
+        { 400, "Bad Request" }, { 401, "Unauthorized" }, { 403, "Forbidden" },
+        { 404, "Not Found" }, { 405, "Method Not Allowed" }, { 408, "Request Timeout" },
+        { 429, "Too Many Requests" },
+        { 500, "Internal Server Error" }, { 502, "Bad Gateway" },
+        { 503, "Service Unavailable" }, { 504, "Gateway Timeout" },
+    };
+
+    private readonly long _handle;
+    private bool _disposed;
+
+    internal StreamResponse(long handle, StreamMetadata metadata)
+    {
+        _handle = handle;
+        StatusCode = metadata.StatusCode;
+        Headers = metadata.Headers ?? new Dictionary<string, string>();
+        Url = metadata.FinalUrl ?? "";
+        Protocol = metadata.Protocol ?? "";
+        ContentLength = metadata.ContentLength;
+        Cookies = metadata.Cookies?.Select(c => new Cookie(c.Name ?? "", c.Value ?? "")).ToList()
+            ?? new List<Cookie>();
+    }
+
+    /// <summary>HTTP status code.</summary>
+    public int StatusCode { get; }
+
+    /// <summary>Response headers.</summary>
+    public Dictionary<string, string> Headers { get; }
+
+    /// <summary>Final URL after redirects.</summary>
+    public string Url { get; }
+
+    /// <summary>Protocol used (h1, h2, h3).</summary>
+    public string Protocol { get; }
+
+    /// <summary>Expected content length, or -1 if unknown (chunked).</summary>
+    public long ContentLength { get; }
+
+    /// <summary>Cookies set by this response.</summary>
+    public List<Cookie> Cookies { get; }
+
+    /// <summary>True if status code is less than 400.</summary>
+    public bool Ok => StatusCode < 400;
+
+    /// <summary>HTTP status reason phrase.</summary>
+    public string Reason => HttpStatusPhrases.TryGetValue(StatusCode, out var phrase) ? phrase : "Unknown";
+
+    /// <summary>
+    /// Read a chunk of data from the stream.
+    /// </summary>
+    /// <param name="chunkSize">Maximum bytes to read (default: 8192)</param>
+    /// <returns>Chunk of data, or null if EOF</returns>
+    public byte[]? ReadChunk(int chunkSize = 8192)
+    {
+        ThrowIfDisposed();
+
+        IntPtr resultPtr = Native.StreamRead(_handle, chunkSize);
+        string? base64 = Native.PtrToStringAndFree(resultPtr);
+
+        if (string.IsNullOrEmpty(base64))
+            return null; // EOF
+
+        return Convert.FromBase64String(base64);
+    }
+
+    /// <summary>
+    /// Enumerate chunks from the response.
+    /// </summary>
+    /// <param name="chunkSize">Size of each chunk (default: 8192)</param>
+    /// <returns>Enumerable of byte arrays</returns>
+    public IEnumerable<byte[]> ReadChunks(int chunkSize = 8192)
+    {
+        while (true)
+        {
+            var chunk = ReadChunk(chunkSize);
+            if (chunk == null)
+                yield break;
+            yield return chunk;
+        }
+    }
+
+    /// <summary>
+    /// Read the entire response body as bytes.
+    /// Warning: This defeats the purpose of streaming for large files.
+    /// </summary>
+    public byte[] ReadAll()
+    {
+        using var ms = new MemoryStream();
+        foreach (var chunk in ReadChunks())
+        {
+            ms.Write(chunk, 0, chunk.Length);
+        }
+        return ms.ToArray();
+    }
+
+    /// <summary>
+    /// Read the entire response body as a string.
+    /// </summary>
+    public string Text => System.Text.Encoding.UTF8.GetString(ReadAll());
+
+    /// <summary>
+    /// Parse the response body as JSON.
+    /// </summary>
+    public T? Json<T>() => JsonSerializer.Deserialize<T>(Text);
+
+    /// <summary>
+    /// Throw if status code indicates an error.
+    /// </summary>
+    public void RaiseForStatus()
+    {
+        if (!Ok)
+            throw new HttpCloakException($"HTTP {StatusCode}: {Reason}");
+    }
+
+    private void ThrowIfDisposed()
+    {
+        if (_disposed)
+            throw new ObjectDisposedException(nameof(StreamResponse));
+    }
+
+    public void Dispose()
+    {
+        if (!_disposed)
+        {
+            Native.StreamClose(_handle);
+            _disposed = true;
+        }
+    }
+}
+
+/// <summary>
 /// Available browser presets.
 /// </summary>
 public static class Presets
@@ -1082,6 +1371,38 @@ internal class ErrorResponse
     public string? Error { get; set; }
 }
 
+internal class StreamOptions
+{
+    [JsonPropertyName("headers")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Dictionary<string, string>? Headers { get; set; }
+
+    [JsonPropertyName("timeout")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? Timeout { get; set; }
+}
+
+internal class StreamMetadata
+{
+    [JsonPropertyName("status_code")]
+    public int StatusCode { get; set; }
+
+    [JsonPropertyName("headers")]
+    public Dictionary<string, string>? Headers { get; set; }
+
+    [JsonPropertyName("final_url")]
+    public string? FinalUrl { get; set; }
+
+    [JsonPropertyName("protocol")]
+    public string? Protocol { get; set; }
+
+    [JsonPropertyName("content_length")]
+    public long ContentLength { get; set; }
+
+    [JsonPropertyName("cookies")]
+    public List<CookieData>? Cookies { get; set; }
+}
+
 [JsonSerializable(typeof(SessionConfig))]
 [JsonSerializable(typeof(RequestConfig))]
 [JsonSerializable(typeof(ResponseData))]
@@ -1092,4 +1413,6 @@ internal class ErrorResponse
 [JsonSerializable(typeof(List<RedirectInfoData>))]
 [JsonSerializable(typeof(Dictionary<string, string>))]
 [JsonSerializable(typeof(string[]))]
+[JsonSerializable(typeof(StreamOptions))]
+[JsonSerializable(typeof(StreamMetadata))]
 internal partial class JsonContext : JsonSerializerContext { }

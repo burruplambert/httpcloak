@@ -109,9 +109,20 @@ func NewClient(presetName string, opts ...Option) *Client {
 
 	preset := fingerprint.Get(config.Preset)
 
+	// Determine effective proxy URLs for TCP and UDP transports
+	// TCPProxy/UDPProxy take precedence over Proxy for split proxy configuration
+	tcpProxyURL := config.TCPProxy
+	if tcpProxyURL == "" {
+		tcpProxyURL = config.Proxy
+	}
+	udpProxyURL := config.UDPProxy
+	if udpProxyURL == "" {
+		udpProxyURL = config.Proxy
+	}
+
 	var h2Manager *pool.Manager
-	if config.Proxy != "" {
-		h2Manager = pool.NewManagerWithProxy(preset, config.Proxy, config.InsecureSkipVerify)
+	if tcpProxyURL != "" {
+		h2Manager = pool.NewManagerWithProxy(preset, tcpProxyURL, config.InsecureSkipVerify)
 	} else {
 		h2Manager = pool.NewManagerWithTLSConfig(preset, config.InsecureSkipVerify)
 	}
@@ -126,27 +137,27 @@ func NewClient(presetName string, opts ...Option) *Client {
 	var quicManager *pool.QUICManager
 	var masqueTransport *transport.HTTP3Transport
 	if !config.DisableH3 {
-		if config.Proxy != "" && transport.IsMASQUEProxy(config.Proxy) {
+		if udpProxyURL != "" && transport.IsMASQUEProxy(udpProxyURL) {
 			// Use dedicated MASQUE transport for MASQUE proxies
-			proxyConfig := &transport.ProxyConfig{URL: config.Proxy}
+			proxyConfig := &transport.ProxyConfig{URL: udpProxyURL}
 			var err error
 			masqueTransport, err = transport.NewHTTP3TransportWithMASQUE(preset, h2Manager.GetDNSCache(), proxyConfig, nil)
 			if err != nil {
 				// Fall back to non-H3 if MASQUE transport creation fails
 				masqueTransport = nil
 			}
-		} else if config.Proxy == "" || transport.SupportsQUIC(config.Proxy) {
+		} else if udpProxyURL == "" || transport.SupportsQUIC(udpProxyURL) {
 			// Use QUICManager for direct connections or SOCKS5 proxies
 			quicManager = pool.NewQUICManager(preset, h2Manager.GetDNSCache())
 		}
 	}
 
 	// Create HTTP/1.1 transport for fallback or when explicitly requested
-	var proxyConfig *transport.ProxyConfig
-	if config.Proxy != "" {
-		proxyConfig = &transport.ProxyConfig{URL: config.Proxy}
+	var tcpProxyConfig *transport.ProxyConfig
+	if tcpProxyURL != "" {
+		tcpProxyConfig = &transport.ProxyConfig{URL: tcpProxyURL}
 	}
-	h1Transport := transport.NewHTTP1TransportWithProxy(preset, h2Manager.GetDNSCache(), proxyConfig)
+	h1Transport := transport.NewHTTP1TransportWithProxy(preset, h2Manager.GetDNSCache(), tcpProxyConfig)
 	h1Transport.SetInsecureSkipVerify(config.InsecureSkipVerify)
 
 	// Propagate ConnectTo mappings (domain fronting)
@@ -336,8 +347,8 @@ const (
 type Request struct {
 	Method  string
 	URL     string
-	Headers map[string]string
-	Body    []byte
+	Headers map[string][]string // Multi-value headers (matches http.Header)
+	Body    io.Reader           // Streaming body for uploads
 	Timeout time.Duration
 
 	// Customization options
@@ -361,11 +372,35 @@ type Request struct {
 	DisableRetry bool
 }
 
+// SetHeader sets a header value, replacing any existing values.
+func (r *Request) SetHeader(key, value string) {
+	if r.Headers == nil {
+		r.Headers = make(map[string][]string)
+	}
+	r.Headers[key] = []string{value}
+}
+
+// AddHeader adds a header value, preserving existing values.
+func (r *Request) AddHeader(key, value string) {
+	if r.Headers == nil {
+		r.Headers = make(map[string][]string)
+	}
+	r.Headers[key] = append(r.Headers[key], value)
+}
+
+// GetHeader returns the first value for the given header key.
+func (r *Request) GetHeader(key string) string {
+	if values := r.Headers[key]; len(values) > 0 {
+		return values[0]
+	}
+	return ""
+}
+
 // Response represents an HTTP response
 type Response struct {
 	StatusCode int
-	Headers    map[string]string
-	Body       []byte
+	Headers    map[string][]string // Multi-value headers (matches http.Header)
+	Body       io.ReadCloser       // Streaming body - call Close() when done
 	FinalURL   string
 	Timing     *protocol.Timing
 	Protocol   string // "h3" or "h2"
@@ -375,23 +410,76 @@ type Response struct {
 
 	// Redirect history
 	RedirectHistory []*RedirectInfo
+
+	// bodyBytes caches the body after reading
+	bodyBytes []byte
+	bodyRead  bool
+}
+
+// Close closes the response body.
+func (r *Response) Close() error {
+	if r.Body != nil {
+		return r.Body.Close()
+	}
+	return nil
+}
+
+// Bytes reads and returns the entire response body.
+// The body can only be read once unless cached.
+func (r *Response) Bytes() ([]byte, error) {
+	if r.bodyRead {
+		return r.bodyBytes, nil
+	}
+	if r.Body == nil {
+		return nil, nil
+	}
+
+	data, err := io.ReadAll(r.Body)
+	if err != nil {
+		return nil, err
+	}
+	r.Body.Close()
+	r.bodyBytes = data
+	r.bodyRead = true
+	return data, nil
 }
 
 // RedirectInfo stores information about a redirect
 type RedirectInfo struct {
 	StatusCode int
 	URL        string
-	Headers    map[string]string
+	Headers    map[string][]string // Multi-value headers
 }
 
 // JSON decodes the response body as JSON into the given interface
 func (r *Response) JSON(v interface{}) error {
-	return json.Unmarshal(r.Body, v)
+	data, err := r.Bytes()
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, v)
 }
 
 // Text returns the response body as a string
-func (r *Response) Text() string {
-	return string(r.Body)
+func (r *Response) Text() (string, error) {
+	data, err := r.Bytes()
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+// GetHeader returns the first value for the given header key (case-insensitive).
+func (r *Response) GetHeader(key string) string {
+	if values := r.Headers[strings.ToLower(key)]; len(values) > 0 {
+		return values[0]
+	}
+	return ""
+}
+
+// GetHeaders returns all values for the given header key (case-insensitive).
+func (r *Response) GetHeaders(key string) []string {
+	return r.Headers[strings.ToLower(key)]
 }
 
 // IsSuccess returns true if the status code is 2xx
@@ -462,7 +550,7 @@ func (c *Client) doWithRetry(ctx context.Context, req *Request) (*Response, erro
 		// Cookie challenge flow: H2 request gets 403/429 + cookies, H3 retry succeeds
 		isChallengeStatus := resp.StatusCode == 403 || resp.StatusCode == 429
 		if isChallengeStatus && !cookieChallengeRetried && req.ForceProtocol == ProtocolAuto {
-			if setCookie, hasCookies := resp.Headers["set-cookie"]; hasCookies && setCookie != "" {
+			if setCookies := resp.Headers["set-cookie"]; len(setCookies) > 0 {
 				cookieChallengeRetried = true
 				// Cookies are now stored in jar from first response
 				// Next retry will use H3 with these cookies
@@ -557,9 +645,18 @@ func (c *Client) doOnce(ctx context.Context, req *Request, redirectHistory []*Re
 		method = "GET"
 	}
 
+	// Cache body bytes for retry support (io.Reader can only be read once)
+	var bodyBytes []byte
+	if req.Body != nil {
+		bodyBytes, err = io.ReadAll(req.Body)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read request body: %w", err)
+		}
+	}
+
 	var bodyReader io.Reader
-	if len(req.Body) > 0 {
-		bodyReader = bytes.NewReader(req.Body)
+	if len(bodyBytes) > 0 {
+		bodyReader = bytes.NewReader(bodyBytes)
 	} else if method == "POST" || method == "PUT" || method == "PATCH" {
 		// POST/PUT/PATCH with empty body must send Content-Length: 0
 		bodyReader = bytes.NewReader([]byte{})
@@ -571,7 +668,7 @@ func (c *Client) doOnce(ctx context.Context, req *Request, redirectHistory []*Re
 	}
 
 	// Normalize request (Content-Length: 0 for empty POST/PUT/PATCH, Content-Type detection, etc.)
-	normalizeRequestWithBody(httpReq, req.Body)
+	normalizeRequestWithBody(httpReq, bodyBytes)
 
 	// Apply headers based on FetchMode - this sets EVERYTHING correctly
 	// The library is smart: pick a mode, get coherent headers automatically
@@ -664,11 +761,11 @@ func (c *Client) doOnce(ctx context.Context, req *Request, redirectHistory []*Re
 			if err != nil {
 				c.markH3Failed(hostKey)
 				// HTTP/3 failed, try HTTP/2
-				resetRequestBody(httpReq, req.Body)
+				resetRequestBody(httpReq, bodyBytes)
 				resp, usedProtocol, err = c.doHTTP2(ctx, host, port, httpReq, timing, startTime)
 				if err != nil {
 					// Both failed, try HTTP/1.1
-					resetRequestBody(httpReq, req.Body)
+					resetRequestBody(httpReq, bodyBytes)
 					resp, usedProtocol, err = c.doHTTP1(ctx, host, port, httpReq, timing, startTime)
 					if err != nil {
 						return nil, err
@@ -681,12 +778,12 @@ func (c *Client) doOnce(ctx context.Context, req *Request, redirectHistory []*Re
 			if err != nil {
 				// HTTP/2 failed, try HTTP/3 if available
 				if useH3 {
-					resetRequestBody(httpReq, req.Body)
+					resetRequestBody(httpReq, bodyBytes)
 					resp, usedProtocol, err = c.doHTTP3(ctx, host, port, httpReq, timing, startTime)
 					if err != nil {
 						c.markH3Failed(hostKey)
 						// Both H2 and H3 failed, try HTTP/1.1
-						resetRequestBody(httpReq, req.Body)
+						resetRequestBody(httpReq, bodyBytes)
 						resp, usedProtocol, err = c.doHTTP1(ctx, host, port, httpReq, timing, startTime)
 						if err != nil {
 							return nil, err
@@ -695,7 +792,7 @@ func (c *Client) doOnce(ctx context.Context, req *Request, redirectHistory []*Re
 				} else {
 					// No H3 available, try HTTP/1.1
 					c.markH2Failed(hostKey)
-					resetRequestBody(httpReq, req.Body)
+					resetRequestBody(httpReq, bodyBytes)
 					resp, usedProtocol, err = c.doHTTP1(ctx, host, port, httpReq, timing, startTime)
 					if err != nil {
 						return nil, err
@@ -715,10 +812,13 @@ func (c *Client) doOnce(ctx context.Context, req *Request, redirectHistory []*Re
 
 	defer resp.Body.Close()
 
-	// Build response headers map
-	headers := make(map[string]string)
+	// Build response headers map (multi-value support)
+	headers := make(map[string][]string)
 	for key, values := range resp.Header {
-		headers[strings.ToLower(key)] = strings.Join(values, ", ")
+		lowerKey := strings.ToLower(key)
+		headerValues := make([]string, len(values))
+		copy(headerValues, values)
+		headers[lowerKey] = headerValues
 	}
 
 	// Store cookies from response
@@ -790,9 +890,11 @@ func (c *Client) doOnce(ctx context.Context, req *Request, redirectHistory []*Re
 				DisableRetry:    true, // Don't retry redirects
 			}
 
-			// 307/308 preserve body
+			// 307/308 preserve body (use cached bytes since original reader was consumed)
 			if resp.StatusCode == 307 || resp.StatusCode == 308 {
-				newReq.Body = req.Body
+				if len(bodyBytes) > 0 {
+					newReq.Body = bytes.NewReader(bodyBytes)
+				}
 			}
 
 			// Follow redirect
@@ -808,7 +910,7 @@ func (c *Client) doOnce(ctx context.Context, req *Request, redirectHistory []*Re
 		}
 		if shouldRetry {
 			// Reset request body for retry
-			resetRequestBody(httpReq, req.Body)
+			resetRequestBody(httpReq, bodyBytes)
 			// Apply auth again with challenge info
 			if err := auth.Apply(httpReq); err != nil {
 				return nil, fmt.Errorf("failed to apply authentication after challenge: %w", err)
@@ -819,14 +921,14 @@ func (c *Client) doOnce(ctx context.Context, req *Request, redirectHistory []*Re
 	}
 
 	// Read response body
-	body, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
 	// Decompress if needed
 	contentEncoding := resp.Header.Get("Content-Encoding")
-	body, err = decompress(body, contentEncoding)
+	respBody, err = decompress(respBody, contentEncoding)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decompress response: %w", err)
 	}
@@ -836,12 +938,14 @@ func (c *Client) doOnce(ctx context.Context, req *Request, redirectHistory []*Re
 	response := &Response{
 		StatusCode:      resp.StatusCode,
 		Headers:         headers,
-		Body:            body,
+		Body:            io.NopCloser(bytes.NewReader(respBody)),
 		FinalURL:        reqURL,
 		Timing:          timing,
 		Protocol:        usedProtocol,
 		Request:         req,
 		RedirectHistory: redirectHistory,
+		bodyBytes:       respBody,
+		bodyRead:        true,
 	}
 
 	// Run post-response hooks
@@ -994,7 +1098,7 @@ func (c *Client) shouldUseH1(hostKey string) bool {
 }
 
 // Get performs a GET request
-func (c *Client) Get(ctx context.Context, url string, headers map[string]string) (*Response, error) {
+func (c *Client) Get(ctx context.Context, url string, headers map[string][]string) (*Response, error) {
 	return c.Do(ctx, &Request{
 		Method:  "GET",
 		URL:     url,
@@ -1003,7 +1107,7 @@ func (c *Client) Get(ctx context.Context, url string, headers map[string]string)
 }
 
 // Post performs a POST request
-func (c *Client) Post(ctx context.Context, url string, body []byte, headers map[string]string) (*Response, error) {
+func (c *Client) Post(ctx context.Context, url string, body io.Reader, headers map[string][]string) (*Response, error) {
 	return c.Do(ctx, &Request{
 		Method:  "POST",
 		URL:     url,
@@ -1058,8 +1162,8 @@ func applyModeHeaders(httpReq *http.Request, preset *fingerprint.Preset, req *Re
 	// This prevents the "I want JSON but I'm navigating a document" incoherence
 	effectiveMode := req.FetchMode
 	if effectiveMode == FetchModeNavigate {
-		if accept, ok := req.Headers["Accept"]; ok {
-			if isAPIAcceptHeader(accept) {
+		if acceptValues, ok := req.Headers["Accept"]; ok && len(acceptValues) > 0 {
+			if isAPIAcceptHeader(acceptValues[0]) {
 				effectiveMode = FetchModeCORS
 			}
 		}
@@ -1079,13 +1183,19 @@ func applyModeHeaders(httpReq *http.Request, preset *fingerprint.Preset, req *Re
 	}
 
 	// Apply user custom headers, but BLOCK any that would break coherence
-	for key, value := range req.Headers {
+	for key, values := range req.Headers {
 		lowerKey := strings.ToLower(key)
 		// Skip headers that would break mode coherence
 		if isModeCriticalHeader(lowerKey) {
 			continue
 		}
-		httpReq.Header.Set(key, value)
+		for i, value := range values {
+			if i == 0 {
+				httpReq.Header.Set(key, value)
+			} else {
+				httpReq.Header.Add(key, value)
+			}
+		}
 	}
 
 	// Set header order for HTTP/2 and HTTP/3 fingerprinting
@@ -1173,8 +1283,8 @@ func applyCORSModeHeaders(httpReq *http.Request, preset *fingerprint.Preset, req
 
 	// CORS headers - THE coherent set for "JavaScript fetch() call"
 	// Use user's Accept if they set one (it's valid for CORS), otherwise default to */*
-	if accept, ok := req.Headers["Accept"]; ok && accept != "" {
-		httpReq.Header.Set("Accept", accept)
+	if acceptValues, ok := req.Headers["Accept"]; ok && len(acceptValues) > 0 && acceptValues[0] != "" {
+		httpReq.Header.Set("Accept", acceptValues[0])
 	} else {
 		httpReq.Header.Set("Accept", "*/*")
 	}

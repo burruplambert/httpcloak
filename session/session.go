@@ -78,9 +78,11 @@ func NewSession(id string, config *protocol.SessionConfig) *Session {
 	// Create transport with optional proxy and config
 	var t *transport.Transport
 	var proxy *transport.ProxyConfig
-	if config.Proxy != "" {
+	if config.Proxy != "" || config.TCPProxy != "" || config.UDPProxy != "" {
 		proxy = &transport.ProxyConfig{
-			URL: config.Proxy,
+			URL:      config.Proxy,
+			TCPProxy: config.TCPProxy,
+			UDPProxy: config.UDPProxy,
 		}
 	}
 	t = transport.NewTransportWithConfig(presetName, proxy, transportConfig)
@@ -128,17 +130,17 @@ func (s *Session) requestWithRedirects(ctx context.Context, req *transport.Reque
 	s.RequestCount++
 
 	if req.Headers == nil {
-		req.Headers = make(map[string]string)
+		req.Headers = make(map[string][]string)
 	}
 
 	// Add cache validation headers (If-None-Match, If-Modified-Since)
 	// This makes requests look like a real browser that caches resources
 	if cached, exists := s.cacheEntries[req.URL]; exists {
 		if cached.etag != "" {
-			req.Headers["If-None-Match"] = cached.etag
+			req.Headers["If-None-Match"] = []string{cached.etag}
 		}
 		if cached.lastModified != "" {
-			req.Headers["If-Modified-Since"] = cached.lastModified
+			req.Headers["If-Modified-Since"] = []string{cached.lastModified}
 		}
 	}
 	s.mu.Unlock()
@@ -181,11 +183,11 @@ func (s *Session) requestWithRedirects(ctx context.Context, req *transport.Reque
 				sessionCookies += name + "=" + value
 			}
 			// Merge with existing cookies (per-request cookies take precedence for same name)
-			existing := req.Headers["Cookie"]
-			if existing != "" {
-				req.Headers["Cookie"] = existing + "; " + sessionCookies
+			existingCookies := req.Headers["Cookie"]
+			if len(existingCookies) > 0 && existingCookies[0] != "" {
+				req.Headers["Cookie"] = []string{existingCookies[0] + "; " + sessionCookies}
 			} else {
-				req.Headers["Cookie"] = sessionCookies
+				req.Headers["Cookie"] = []string{sessionCookies}
 			}
 		}
 		s.mu.RUnlock()
@@ -267,10 +269,15 @@ func (s *Session) requestWithRedirects(ctx context.Context, req *transport.Reque
 				return nil, errors.New("too many redirects")
 			}
 
-			// Get Location header
-			location := resp.Headers["Location"]
+			// Get Location header (first value from slice)
+			location := ""
+			if locs := resp.Headers["Location"]; len(locs) > 0 {
+				location = locs[0]
+			}
 			if location == "" {
-				location = resp.Headers["location"]
+				if locs := resp.Headers["location"]; len(locs) > 0 {
+					location = locs[0]
+				}
 			}
 			if location == "" {
 				// No Location header, set history and return as-is
@@ -299,7 +306,7 @@ func (s *Session) requestWithRedirects(ctx context.Context, req *transport.Reque
 			newReq := &transport.Request{
 				Method:  newMethod,
 				URL:     redirectURL,
-				Headers: make(map[string]string),
+				Headers: make(map[string][]string),
 			}
 
 			// Copy safe headers
@@ -343,7 +350,7 @@ func randInt64(n int64) int64 {
 }
 
 // Get performs a GET request
-func (s *Session) Get(ctx context.Context, url string, headers map[string]string) (*transport.Response, error) {
+func (s *Session) Get(ctx context.Context, url string, headers map[string][]string) (*transport.Response, error) {
 	return s.Request(ctx, &transport.Request{
 		Method:  "GET",
 		URL:     url,
@@ -352,7 +359,7 @@ func (s *Session) Get(ctx context.Context, url string, headers map[string]string
 }
 
 // Post performs a POST request
-func (s *Session) Post(ctx context.Context, url string, body []byte, headers map[string]string) (*transport.Response, error) {
+func (s *Session) Post(ctx context.Context, url string, body []byte, headers map[string][]string) (*transport.Response, error) {
 	return s.Request(ctx, &transport.Request{
 		Method:  "POST",
 		URL:     url,
@@ -362,22 +369,21 @@ func (s *Session) Post(ctx context.Context, url string, body []byte, headers map
 }
 
 // extractCookies extracts cookies from response headers
-func (s *Session) extractCookies(headers map[string]string) {
+func (s *Session) extractCookies(headers map[string][]string) {
 	// Try both cases - some responses might have different casing
-	setCookie, exists := headers["set-cookie"]
+	setCookies, exists := headers["set-cookie"]
 	if !exists {
-		setCookie, exists = headers["Set-Cookie"]
+		setCookies, exists = headers["Set-Cookie"]
 	}
-	if !exists {
+	if !exists || len(setCookies) == 0 {
 		return
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Set-Cookie headers are joined with newlines (one cookie per line)
-	cookies := splitByNewline(setCookie)
-	for _, cookie := range cookies {
+	// Each Set-Cookie header is now a separate element in the slice
+	for _, cookie := range setCookies {
 		cookie = trim(cookie)
 		if cookie == "" {
 			continue
@@ -402,17 +408,25 @@ func (s *Session) extractCookies(headers map[string]string) {
 
 // storeCacheHeaders extracts and stores cache validation headers from response
 // These headers will be sent on subsequent requests to the same URL
-func (s *Session) storeCacheHeaders(url string, headers map[string]string) {
+func (s *Session) storeCacheHeaders(url string, headers map[string][]string) {
+	// Helper to get first value from header (case-insensitive)
+	getHeader := func(key string) string {
+		if values := headers[key]; len(values) > 0 {
+			return values[0]
+		}
+		return ""
+	}
+
 	// Look for ETag header (case-insensitive)
-	etag := headers["etag"]
+	etag := getHeader("etag")
 	if etag == "" {
-		etag = headers["ETag"]
+		etag = getHeader("ETag")
 	}
 
 	// Look for Last-Modified header (case-insensitive)
-	lastModified := headers["last-modified"]
+	lastModified := getHeader("last-modified")
 	if lastModified == "" {
-		lastModified = headers["Last-Modified"]
+		lastModified = getHeader("Last-Modified")
 	}
 
 	// Only store if we have at least one cache header
@@ -624,6 +638,74 @@ func isDigit(c byte) bool {
 // isRedirectStatus returns true for 3xx redirect status codes
 func isRedirectStatus(code int) bool {
 	return code == 301 || code == 302 || code == 303 || code == 307 || code == 308
+}
+
+// StreamResponse wraps transport.StreamResponse for session-level streaming
+type StreamResponse = transport.StreamResponse
+
+// RequestStream executes an HTTP request and returns a streaming response
+// The caller is responsible for closing the response when done
+// Note: Streaming does NOT support redirects - use Request() for redirect handling
+func (s *Session) RequestStream(ctx context.Context, req *transport.Request) (*StreamResponse, error) {
+	s.mu.Lock()
+	if !s.active {
+		s.mu.Unlock()
+		return nil, ErrSessionClosed
+	}
+	s.LastUsed = time.Now()
+	s.RequestCount++
+
+	if req.Headers == nil {
+		req.Headers = make(map[string][]string)
+	}
+
+	// Add session cookies to request headers
+	if len(s.cookies) > 0 {
+		sessionCookies := ""
+		for name, value := range s.cookies {
+			if sessionCookies != "" {
+				sessionCookies += "; "
+			}
+			sessionCookies += name + "=" + value
+		}
+		existingCookies := req.Headers["Cookie"]
+		if len(existingCookies) > 0 && existingCookies[0] != "" {
+			req.Headers["Cookie"] = []string{existingCookies[0] + "; " + sessionCookies}
+		} else {
+			req.Headers["Cookie"] = []string{sessionCookies}
+		}
+	}
+	s.mu.Unlock()
+
+	// Execute streaming request (no retry or redirect support for streams)
+	resp, err := s.transport.DoStream(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	// Extract cookies from response
+	s.extractCookies(resp.Headers)
+
+	return resp, nil
+}
+
+// GetStream performs a streaming GET request
+func (s *Session) GetStream(ctx context.Context, url string, headers map[string][]string) (*StreamResponse, error) {
+	return s.RequestStream(ctx, &transport.Request{
+		Method:  "GET",
+		URL:     url,
+		Headers: headers,
+	})
+}
+
+// PostStream performs a streaming POST request
+func (s *Session) PostStream(ctx context.Context, url string, body []byte, headers map[string][]string) (*StreamResponse, error) {
+	return s.RequestStream(ctx, &transport.Request{
+		Method:  "POST",
+		URL:     url,
+		Body:    body,
+		Headers: headers,
+	})
 }
 
 // resolveURL resolves a possibly relative URL against a base URL

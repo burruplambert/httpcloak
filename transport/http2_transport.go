@@ -286,14 +286,34 @@ func (t *HTTP2Transport) createConn(ctx context.Context, host, port string) (*pe
 		specToUse = t.cachedSpec
 	}
 
+	// Fetch ECH config if needed
+	var echConfigList []byte
+	if t.config != nil {
+		if len(t.config.ECHConfig) > 0 {
+			echConfigList = t.config.ECHConfig
+		} else if t.config.ECHConfigDomain != "" {
+			// Fetch ECH config from DNS
+			echConfigList, _ = dns.FetchECHConfigs(ctx, t.config.ECHConfigDomain)
+			// ECH fetch failed - continue without ECH (SNI will be visible)
+		}
+	}
+
+	// Determine MinVersion based on ECH usage
+	// ECH requires TLS 1.3, so set MinVersion accordingly
+	minVersion := uint16(tls.VersionTLS12)
+	if len(echConfigList) > 0 {
+		minVersion = tls.VersionTLS13
+	}
+
 	// Wrap with uTLS for fingerprinting
 	tlsConfig := &utls.Config{
 		ServerName:                         host,
 		InsecureSkipVerify:                 false,
-		MinVersion:                         tls.VersionTLS12,
+		MinVersion:                         minVersion,
 		MaxVersion:                         tls.VersionTLS13,
 		ClientSessionCache:                 t.sessionCache,
-		PreferSkipResumptionOnNilExtension: true, // Skip resumption if spec has no PSK extension instead of panicking
+		PreferSkipResumptionOnNilExtension: true,          // Skip resumption if spec has no PSK extension instead of panicking
+		EncryptedClientHelloConfigList:     echConfigList, // ECH configuration (if available)
 	}
 
 	// Create UClient with HelloCustom and apply our cached spec
@@ -654,6 +674,28 @@ func (t *HTTP2Transport) SetConnectTo(requestHost, connectHost string) {
 		t.config.ConnectTo = make(map[string]string)
 	}
 	t.config.ConnectTo[requestHost] = connectHost
+}
+
+// SetECHConfigDomain sets a domain to fetch ECH config from
+func (t *HTTP2Transport) SetECHConfigDomain(domain string) {
+	t.connsMu.Lock()
+	defer t.connsMu.Unlock()
+
+	if t.config == nil {
+		t.config = &TransportConfig{}
+	}
+	t.config.ECHConfigDomain = domain
+}
+
+// SetECHConfig sets a custom ECH configuration
+func (t *HTTP2Transport) SetECHConfig(echConfig []byte) {
+	t.connsMu.Lock()
+	defer t.connsMu.Unlock()
+
+	if t.config == nil {
+		t.config = &TransportConfig{}
+	}
+	t.config.ECHConfig = echConfig
 }
 
 // getConnectHost returns the connection host for DNS resolution

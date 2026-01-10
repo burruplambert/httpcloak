@@ -16,6 +16,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"strings"
@@ -44,8 +45,9 @@ func main() {
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
 	} else {
+		body, _ := resp.Bytes()
 		fmt.Printf("Status: %d | Protocol: %s | Size: %d bytes\n",
-			resp.StatusCode, resp.Protocol, len(resp.Body))
+			resp.StatusCode, resp.Protocol, len(body))
 	}
 
 	// =========================================================================
@@ -54,9 +56,9 @@ func main() {
 	fmt.Println("\n[2] GET with Custom Headers")
 	fmt.Println(strings.Repeat("-", 50))
 
-	resp, err = c.Get(ctx, "https://httpbin.org/headers", map[string]string{
-		"X-Custom-Header": "my-value",
-		"X-Request-ID":    "12345",
+	resp, err = c.Get(ctx, "https://httpbin.org/headers", map[string][]string{
+		"X-Custom-Header": {"my-value"},
+		"X-Request-ID":    {"12345"},
 	})
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
@@ -72,8 +74,8 @@ func main() {
 	fmt.Println(strings.Repeat("-", 50))
 
 	jsonBody := []byte(`{"name": "httpcloak", "version": "1.0"}`)
-	resp, err = c.Post(ctx, "https://httpbin.org/post", jsonBody, map[string]string{
-		"Content-Type": "application/json",
+	resp, err = c.Post(ctx, "https://httpbin.org/post", bytes.NewReader(jsonBody), map[string][]string{
+		"Content-Type": {"application/json"},
 	})
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
@@ -115,7 +117,7 @@ func main() {
 		fmt.Printf("Error: %v\n", err)
 	} else {
 		fmt.Printf("Status: %d (redirect not followed)\n", resp.StatusCode)
-		fmt.Printf("Location: %s\n", resp.Headers["location"])
+		fmt.Printf("Location: %s\n", resp.GetHeader("location"))
 	}
 
 	// =========================================================================
@@ -201,8 +203,8 @@ func main() {
 		URL:       "https://httpbin.org/get",
 		FetchMode: client.FetchModeCORS, // Sec-Fetch-Mode: cors
 		Referer:   "https://example.com/app",
-		Headers: map[string]string{
-			"Accept": "application/json",
+		Headers: map[string][]string{
+			"Accept": {"application/json"},
 		},
 	})
 	if err != nil {
@@ -285,7 +287,7 @@ func main() {
 			fmt.Printf("%s: Error - %v\n", preset, err)
 		} else {
 			// Extract just the browser name from response
-			ua := resp.Text()
+			ua, _ := resp.Text()
 			if len(ua) > 60 {
 				ua = ua[:60] + "..."
 			}
