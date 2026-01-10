@@ -54,6 +54,14 @@ type ProxyConfig struct {
 	URL      string // Proxy URL (e.g., "http://proxy:8080" or "http://user:pass@proxy:8080")
 	Username string // Proxy username (optional, can also be in URL)
 	Password string // Proxy password (optional, can also be in URL)
+
+	// TCPProxy is the proxy URL for TCP-based protocols (HTTP/1.1 and HTTP/2)
+	// When set, overrides URL for TCP transports
+	TCPProxy string
+
+	// UDPProxy is the proxy URL for UDP-based protocols (HTTP/3 via MASQUE)
+	// When set, overrides URL for UDP transports
+	UDPProxy string
 }
 
 // TransportConfig contains advanced transport configuration
@@ -141,15 +149,36 @@ func NewTransportWithConfig(presetName string, proxy *ProxyConfig, config *Trans
 		config:          config,
 	}
 
-	// Create HTTP/1.1 and HTTP/2 transports with config
-	t.h1Transport = NewHTTP1TransportWithConfig(preset, dnsCache, proxy, config)
-	t.h2Transport = NewHTTP2TransportWithConfig(preset, dnsCache, proxy, config)
+	// Determine effective TCP and UDP proxy URLs
+	// TCPProxy/UDPProxy take precedence over URL for split proxy configuration
+	var tcpProxyURL, udpProxyURL string
+	if proxy != nil {
+		tcpProxyURL = proxy.TCPProxy
+		if tcpProxyURL == "" {
+			tcpProxyURL = proxy.URL
+		}
+		udpProxyURL = proxy.UDPProxy
+		if udpProxyURL == "" {
+			udpProxyURL = proxy.URL
+		}
+	}
 
-	// Create HTTP/3 transport - with proxy support if applicable
-	if proxy != nil && proxy.URL != "" {
-		if isSOCKS5Proxy(proxy.URL) {
+	// Create TCP proxy config for H1/H2 transports
+	var tcpProxy *ProxyConfig
+	if tcpProxyURL != "" {
+		tcpProxy = &ProxyConfig{URL: tcpProxyURL}
+	}
+
+	// Create HTTP/1.1 and HTTP/2 transports with TCP proxy
+	t.h1Transport = NewHTTP1TransportWithConfig(preset, dnsCache, tcpProxy, config)
+	t.h2Transport = NewHTTP2TransportWithConfig(preset, dnsCache, tcpProxy, config)
+
+	// Create HTTP/3 transport - with UDP proxy support if applicable
+	if udpProxyURL != "" {
+		udpProxy := &ProxyConfig{URL: udpProxyURL}
+		if isSOCKS5Proxy(udpProxyURL) {
 			// SOCKS5 supports UDP relay for HTTP/3
-			h3Transport, err := NewHTTP3TransportWithConfig(preset, dnsCache, proxy, config)
+			h3Transport, err := NewHTTP3TransportWithConfig(preset, dnsCache, udpProxy, config)
 			if err != nil {
 				// Log error but continue without HTTP/3 proxy support
 				// HTTP/3 will work for direct connections, just not through proxy
@@ -157,9 +186,9 @@ func NewTransportWithConfig(presetName string, proxy *ProxyConfig, config *Trans
 			} else {
 				t.h3Transport = h3Transport
 			}
-		} else if isMASQUEProxy(proxy.URL) {
+		} else if isMASQUEProxy(udpProxyURL) {
 			// MASQUE supports HTTP/3 through HTTP/3 proxy
-			h3Transport, err := NewHTTP3TransportWithMASQUE(preset, dnsCache, proxy, config)
+			h3Transport, err := NewHTTP3TransportWithMASQUE(preset, dnsCache, udpProxy, config)
 			if err != nil {
 				// Fall back to non-proxied HTTP/3
 				t.h3Transport = NewHTTP3TransportWithTransportConfig(preset, dnsCache, config)
@@ -429,8 +458,17 @@ func (t *Transport) Do(ctx context.Context, req *Request) (*Response, error) {
 	}
 
 	// When proxy is configured, select protocol based on proxy capabilities
-	if t.proxy != nil && t.proxy.URL != "" {
-		if SupportsQUIC(t.proxy.URL) {
+	// Check for any proxy (URL, TCPProxy, or UDPProxy)
+	if t.proxy != nil && (t.proxy.URL != "" || t.proxy.TCPProxy != "" || t.proxy.UDPProxy != "") {
+		// Get effective proxy URL for protocol detection
+		effectiveProxyURL := t.proxy.URL
+		if effectiveProxyURL == "" {
+			effectiveProxyURL = t.proxy.TCPProxy
+		}
+		if effectiveProxyURL == "" {
+			effectiveProxyURL = t.proxy.UDPProxy
+		}
+		if SupportsQUIC(effectiveProxyURL) {
 			// SOCKS5 or MASQUE proxy - prefer HTTP/3 for best fingerprinting
 			resp, err := t.doHTTP3(ctx, req)
 			if err == nil {
