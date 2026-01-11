@@ -79,7 +79,7 @@ That's it. Full browser fingerprint. Every layer.
 
 ---
 
-## Proof
+## Results
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
