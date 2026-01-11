@@ -3,10 +3,6 @@
 </p>
 
 <p align="center">
-<b>A browser, without the browser.</b>
-</p>
-
-<p align="center">
   <a href="https://pkg.go.dev/github.com/sardanioss/httpcloak"><img src="https://pkg.go.dev/badge/github.com/sardanioss/httpcloak.svg" alt="Go Reference"></a>
   <a href="https://pypi.org/project/httpcloak/"><img src="https://img.shields.io/pypi/v/httpcloak" alt="PyPI"></a>
   <a href="https://www.npmjs.com/package/httpcloak"><img src="https://img.shields.io/npm/v/httpcloak" alt="npm"></a>
@@ -14,11 +10,7 @@
 </p>
 
 <p align="center">
-<img src="image.png" alt="features">
-</p>
-
-<p align="center">
-<i>Every layer. Every frame. Every byte. Indistinguishable from Chrome.</i>
+<i>Every Byte of your Request Indistinguishable from Chrome.</i>
 </p>
 
 <br>
@@ -47,57 +39,101 @@ That's it. Full browser fingerprint. Every layer.
 
 ## What Gets Emulated
 
+<table>
+<tr>
+<td width="33%" valign="top">
+
 ### 🔐 TLS Layer
-JA3 / JA4 fingerprints, GREASE randomization, Post-quantum X25519MLKEM768, ECH (Encrypted Client Hello), Session tickets & 0-RTT
+
+- JA3 / JA4 fingerprints
+- GREASE randomization
+- Post-quantum X25519MLKEM768
+- ECH (Encrypted Client Hello)
+- Session tickets & 0-RTT
+
+</td>
+<td width="33%" valign="top">
 
 ### 🚀 Transport Layer
-HTTP/2 SETTINGS frames, WINDOW_UPDATE values, Stream priorities (HPACK), QUIC transport parameters, HTTP/3 GREASE frames
+
+- HTTP/2 SETTINGS frames
+- WINDOW_UPDATE values
+- Stream priorities (HPACK)
+- QUIC transport parameters
+- HTTP/3 GREASE frames
+
+</td>
+<td width="33%" valign="top">
 
 ### 🧠 Header Layer
-Sec-Fetch-* coherence, Client Hints (Sec-Ch-UA), Accept / Accept-Language, Header ordering, Cookie persistence
+
+- Sec-Fetch-* coherence
+- Client Hints (Sec-Ch-UA)
+- Accept / Accept-Language
+- Header ordering
+- Cookie persistence
+
+</td>
+</tr>
+</table>
 
 ---
 
 ## Proof
 
-**Session resumption changes everything:**
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                                                                         │
+│   WITHOUT SESSION TICKET          WITH SESSION TICKET                   │
+│                                                                         │
+│   Bot Score: 43                   Bot Score: 99                         │
+│   ██████░░░░░░░░░░░░░░            ██████████████████████████████████    │
+│   ↑ New TLS handshake             ↑ 0-RTT resumption                    │
+│   ↑ Looks like a bot              ↑ Looks like returning Chrome         │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
 
-| | Without Session Ticket | With Session Ticket |
-|--|:--:|:--:|
-| **Bot Score** | 43 | **99** |
-| **TLS Handshake** | 2-RTT (new) | 0-RTT (resumed) |
-| **Detection** | Looks like a bot | Looks like returning Chrome |
+```
+┌─────────────────────────────────┐
+│  ECH (Encrypted Client Hello)   │
+├─────────────────────────────────┤
+│  WITHOUT:  sni=plaintext        │
+│  WITH:     sni=encrypted  ✓     │
+└─────────────────────────────────┘
+```
 
-**ECH hides your target:**
-
-| | SNI |
-|--|--|
-| Without ECH | `sni=plaintext` |
-| With ECH | `sni=encrypted` ✓ |
-
-**HTTP/3 fingerprint matches Chrome:**
-
-| Check | Status |
-|-------|:------:|
-| Protocol | h3 ✓ |
-| QUIC Version | 1 ✓ |
-| Transport Params | Match ✓ |
-| GREASE Frames | Match ✓ |
+```
+┌─────────────────────────────────┐
+│  HTTP/3 Fingerprint Match       │
+├─────────────────────────────────┤
+│  Protocol:        h3        ✓   │
+│  QUIC Version:    1         ✓   │
+│  Transport Params:          ✓   │
+│  GREASE Frames:             ✓   │
+└─────────────────────────────────┘
+```
 
 ---
 
 ## vs curl_cffi
 
-| Both Libraries | httpcloak Only |
-|----------------|----------------|
-| ✓ TLS fingerprint (JA3/JA4) | ✓ HTTP/3 fingerprinting (free) |
-| ✓ HTTP/2 fingerprint | ✓ ECH (encrypted SNI) |
-| ✓ Post-quantum TLS | ✓ Session persistence |
-| ✓ Bot score: 99 | ✓ 0-RTT resumption |
-| | ✓ MASQUE proxy |
-| | ✓ Domain fronting |
-| | ✓ Certificate pinning |
-| | ✓ Go, Python, Node.js, C# |
+```
+┌────────────────────────────────┬────────────────────────────────┐
+│        BOTH LIBRARIES          │       HTTPCLOAK ONLY           │
+├────────────────────────────────┼────────────────────────────────┤
+│                                │                                │
+│  ✓ TLS fingerprint (JA3/JA4)   │  ✓ HTTP/3 fingerprinting       │
+│  ✓ HTTP/2 fingerprint          │  ✓ ECH (encrypted SNI)         │
+│  ✓ Post-quantum TLS            │  ✓ Session persistence         │
+│  ✓ Bot score: 99               │  ✓ 0-RTT resumption            │
+│                                │  ✓ MASQUE proxy                │
+│                                │  ✓ Domain fronting             │
+│                                │  ✓ Certificate pinning         │
+│                                │  ✓ Go, Python, Node.js, C#     │
+│                                │                                │
+└────────────────────────────────┴────────────────────────────────┘
+```
 
 ---
 
