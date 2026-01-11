@@ -564,6 +564,34 @@ func (s *Session) Close() {
 	s.inner.Close()
 }
 
+// Save exports session state (cookies, TLS sessions) to a file
+func (s *Session) Save(path string) error {
+	return s.inner.Save(path)
+}
+
+// Marshal exports session state to JSON bytes
+func (s *Session) Marshal() ([]byte, error) {
+	return s.inner.Marshal()
+}
+
+// LoadSession loads a session from a file
+func LoadSession(path string) (*Session, error) {
+	inner, err := session.LoadSession(path)
+	if err != nil {
+		return nil, err
+	}
+	return &Session{inner: inner}, nil
+}
+
+// UnmarshalSession loads a session from JSON bytes
+func UnmarshalSession(data []byte) (*Session, error) {
+	inner, err := session.UnmarshalSession(data)
+	if err != nil {
+		return nil, err
+	}
+	return &Session{inner: inner}, nil
+}
+
 // StreamResponse represents a streaming HTTP response where the body
 // is read incrementally. Use this for large file downloads.
 type StreamResponse struct {

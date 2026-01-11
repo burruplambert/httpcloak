@@ -808,6 +808,130 @@ public sealed class Session : IDisposable
     }
 
     // =========================================================================
+    // Session Persistence
+    // =========================================================================
+
+    /// <summary>
+    /// Save session state (cookies, TLS sessions) to a file.
+    /// This allows you to persist session state across program runs.
+    /// </summary>
+    /// <param name="path">Path to save the session file</param>
+    /// <example>
+    /// <code>
+    /// using var session = new Session(preset: "chrome-143");
+    /// var r = session.Get("https://example.com");  // Acquire cookies
+    /// session.Save("session.json");
+    ///
+    /// // Later, restore the session
+    /// using var session2 = Session.Load("session.json");
+    /// </code>
+    /// </example>
+    public void Save(string path)
+    {
+        ThrowIfDisposed();
+
+        IntPtr resultPtr = Native.SessionSave(_handle, path);
+        string? result = Native.PtrToStringAndFree(resultPtr);
+
+        if (!string.IsNullOrEmpty(result))
+        {
+            if (result.Contains("\"error\""))
+            {
+                var error = JsonSerializer.Deserialize(result, JsonContext.Default.ErrorResponse);
+                if (error?.Error != null)
+                    throw new HttpCloakException(error.Error);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Export session state to JSON string.
+    /// </summary>
+    /// <returns>JSON string containing session state</returns>
+    /// <example>
+    /// <code>
+    /// string sessionData = session.Marshal();
+    /// // Store sessionData in database, cache, etc.
+    ///
+    /// // Later, restore the session
+    /// var session = Session.Unmarshal(sessionData);
+    /// </code>
+    /// </example>
+    public string Marshal()
+    {
+        ThrowIfDisposed();
+
+        IntPtr resultPtr = Native.SessionMarshal(_handle);
+        string? result = Native.PtrToStringAndFree(resultPtr);
+
+        if (string.IsNullOrEmpty(result))
+            throw new HttpCloakException("Failed to marshal session");
+
+        // Check for error
+        if (result.Contains("\"error\""))
+        {
+            var error = JsonSerializer.Deserialize(result, JsonContext.Default.ErrorResponse);
+            if (error?.Error != null)
+                throw new HttpCloakException(error.Error);
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Load a session from a file.
+    /// This restores session state including cookies and TLS session tickets.
+    /// </summary>
+    /// <param name="path">Path to the session file</param>
+    /// <returns>Restored Session object</returns>
+    /// <example>
+    /// <code>
+    /// using var session = Session.Load("session.json");
+    /// var r = session.Get("https://example.com");  // Uses restored cookies
+    /// </code>
+    /// </example>
+    public static Session Load(string path)
+    {
+        long handle = Native.SessionLoad(path);
+
+        if (handle < 0 || handle == 0)
+            throw new HttpCloakException($"Failed to load session from {path}");
+
+        return new Session(handle);
+    }
+
+    /// <summary>
+    /// Load a session from JSON string.
+    /// </summary>
+    /// <param name="data">JSON string containing session state</param>
+    /// <returns>Restored Session object</returns>
+    /// <example>
+    /// <code>
+    /// // Retrieve sessionData from database, cache, etc.
+    /// var session = Session.Unmarshal(sessionData);
+    /// </code>
+    /// </example>
+    public static Session Unmarshal(string data)
+    {
+        long handle = Native.SessionUnmarshal(data);
+
+        if (handle < 0 || handle == 0)
+            throw new HttpCloakException("Failed to unmarshal session");
+
+        return new Session(handle);
+    }
+
+    /// <summary>
+    /// Private constructor for creating a Session from an existing handle.
+    /// Used by Load and Unmarshal static methods.
+    /// </summary>
+    private Session(long handle)
+    {
+        _handle = handle;
+        Auth = null;
+    }
+
+    // =========================================================================
     // Streaming Methods
     // =========================================================================
 

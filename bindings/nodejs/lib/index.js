@@ -731,6 +731,11 @@ function getLib() {
       httpcloak_response_free: nativeLibHandle.func("httpcloak_response_free", "void", ["int64"]),
       // Combined finalize function (copy + metadata + free in one call)
       httpcloak_response_finalize: nativeLibHandle.func("httpcloak_response_finalize", "str", ["int64", "void*", "int"]),
+      // Session persistence functions
+      httpcloak_session_save: nativeLibHandle.func("httpcloak_session_save", "str", ["int64", "str"]),
+      httpcloak_session_load: nativeLibHandle.func("httpcloak_session_load", "int64", ["str"]),
+      httpcloak_session_marshal: nativeLibHandle.func("httpcloak_session_marshal", "str", ["int64"]),
+      httpcloak_session_unmarshal: nativeLibHandle.func("httpcloak_session_unmarshal", "int64", ["str"]),
     };
   }
   return lib;
@@ -1610,6 +1615,127 @@ class Session {
    */
   get cookies() {
     return this.getCookies();
+  }
+
+  // ===========================================================================
+  // Session Persistence
+  // ===========================================================================
+
+  /**
+   * Save session state (cookies, TLS sessions) to a file.
+   *
+   * This allows you to persist session state across program runs,
+   * including cookies and TLS session tickets for faster resumption.
+   *
+   * @param {string} path - Path to save the session file
+   *
+   * Example:
+   *   const session = new httpcloak.Session({ preset: "chrome-143" });
+   *   await session.get("https://example.com");  // Acquire cookies
+   *   session.save("session.json");
+   *
+   *   // Later, restore the session
+   *   const session = httpcloak.Session.load("session.json");
+   */
+  save(path) {
+    const result = this._lib.httpcloak_session_save(this._handle, path);
+    if (result) {
+      const data = JSON.parse(result);
+      if (data.error) {
+        throw new HTTPCloakError(data.error);
+      }
+    }
+  }
+
+  /**
+   * Export session state to JSON string.
+   *
+   * @returns {string} JSON string containing session state
+   *
+   * Example:
+   *   const sessionData = session.marshal();
+   *   // Store sessionData in database, cache, etc.
+   *
+   *   // Later, restore the session
+   *   const session = httpcloak.Session.unmarshal(sessionData);
+   */
+  marshal() {
+    const result = this._lib.httpcloak_session_marshal(this._handle);
+    if (!result) {
+      throw new HTTPCloakError("Failed to marshal session");
+    }
+
+    // Check for error
+    try {
+      const data = JSON.parse(result);
+      if (data && typeof data === "object" && data.error) {
+        throw new HTTPCloakError(data.error);
+      }
+    } catch (e) {
+      if (e instanceof HTTPCloakError) throw e;
+      // Not an error response, just JSON parse failed - return as is
+    }
+
+    return result;
+  }
+
+  /**
+   * Load a session from a file.
+   *
+   * This restores session state including cookies and TLS session tickets.
+   * The session uses the same preset that was used when it was saved.
+   *
+   * @param {string} path - Path to the session file
+   * @returns {Session} Restored Session object
+   *
+   * Example:
+   *   const session = httpcloak.Session.load("session.json");
+   *   const r = await session.get("https://example.com");  // Uses restored cookies
+   */
+  static load(path) {
+    const lib = getLib();
+    const handle = lib.httpcloak_session_load(path);
+
+    if (handle < 0 || handle === 0n) {
+      throw new HTTPCloakError(`Failed to load session from ${path}`);
+    }
+
+    // Create a new Session instance without calling constructor
+    const session = Object.create(Session.prototype);
+    session._lib = lib;
+    session._handle = handle;
+    session.headers = {};
+    session.auth = null;
+
+    return session;
+  }
+
+  /**
+   * Load a session from JSON string.
+   *
+   * @param {string} data - JSON string containing session state
+   * @returns {Session} Restored Session object
+   *
+   * Example:
+   *   // Retrieve sessionData from database, cache, etc.
+   *   const session = httpcloak.Session.unmarshal(sessionData);
+   */
+  static unmarshal(data) {
+    const lib = getLib();
+    const handle = lib.httpcloak_session_unmarshal(data);
+
+    if (handle < 0 || handle === 0n) {
+      throw new HTTPCloakError("Failed to unmarshal session");
+    }
+
+    // Create a new Session instance without calling constructor
+    const session = Object.create(Session.prototype);
+    session._lib = lib;
+    session._handle = handle;
+    session.headers = {};
+    session.auth = null;
+
+    return session;
   }
 
   // ===========================================================================

@@ -5,6 +5,7 @@ import (
 	"compress/flate"
 	"compress/gzip"
 	"context"
+	"fmt"
 	"io"
 	http "github.com/sardanioss/http"
 	"net/url"
@@ -225,6 +226,10 @@ type Transport struct {
 
 	// Configuration
 	insecureSkipVerify bool
+
+	// H3 proxy initialization error - if set, H3 requests will fail with this error
+	// instead of silently bypassing the proxy
+	h3ProxyError error
 }
 
 // NewTransport creates a new unified transport
@@ -283,8 +288,11 @@ func NewTransportWithConfig(presetName string, proxy *ProxyConfig, config *Trans
 			// SOCKS5 supports UDP relay for HTTP/3
 			h3Transport, err := NewHTTP3TransportWithConfig(preset, dnsCache, udpProxy, config)
 			if err != nil {
-				// Log error but continue without HTTP/3 proxy support
-				// HTTP/3 will work for direct connections, just not through proxy
+				// Store the error - don't silently fallback to direct connection!
+				// H3 requests will fail with explicit error instead of bypassing proxy
+				t.h3ProxyError = fmt.Errorf("SOCKS5 UDP proxy initialization failed: %w", err)
+				// Still create a basic H3 transport for non-proxied use cases
+				// but h3ProxyError will prevent it from being used when proxy is expected
 				t.h3Transport = NewHTTP3TransportWithTransportConfig(preset, dnsCache, config)
 			} else {
 				t.h3Transport = h3Transport
@@ -293,13 +301,16 @@ func NewTransportWithConfig(presetName string, proxy *ProxyConfig, config *Trans
 			// MASQUE supports HTTP/3 through HTTP/3 proxy
 			h3Transport, err := NewHTTP3TransportWithMASQUE(preset, dnsCache, udpProxy, config)
 			if err != nil {
-				// Fall back to non-proxied HTTP/3
+				// Store the error - don't silently fallback to direct connection!
+				t.h3ProxyError = fmt.Errorf("MASQUE proxy initialization failed: %w", err)
 				t.h3Transport = NewHTTP3TransportWithTransportConfig(preset, dnsCache, config)
 			} else {
 				t.h3Transport = h3Transport
 			}
 		} else {
-			// HTTP proxy - HTTP/3 only works without proxy
+			// HTTP proxy - HTTP/3 doesn't work through HTTP proxies
+			// Store error so H3 requests fail explicitly
+			t.h3ProxyError = fmt.Errorf("HTTP proxy does not support HTTP/3 (QUIC requires UDP)")
 			t.h3Transport = NewHTTP3TransportWithTransportConfig(preset, dnsCache, config)
 		}
 	} else {
@@ -579,6 +590,18 @@ func (t *Transport) Do(ctx context.Context, req *Request) (*Response, error) {
 		if effectiveProxyURL == "" {
 			effectiveProxyURL = t.proxy.UDPProxy
 		}
+
+		// If H3 proxy initialization failed, skip H3 entirely
+		// This prevents silent bypass - user gets clear error if they force H3
+		if t.h3ProxyError != nil {
+			// H3 proxy failed during init - use H2/H1 only
+			resp, err := t.doHTTP2(ctx, req)
+			if err == nil {
+				return resp, nil
+			}
+			return t.doHTTP1(ctx, req)
+		}
+
 		if SupportsQUIC(effectiveProxyURL) {
 			// SOCKS5 or MASQUE proxy - prefer HTTP/3 for best fingerprinting
 			resp, err := t.doHTTP3(ctx, req)
@@ -1161,6 +1184,21 @@ func (t *Transport) ClearProtocolCache() {
 	t.protocolSupportMu.Lock()
 	t.protocolSupport = make(map[string]Protocol)
 	t.protocolSupportMu.Unlock()
+}
+
+// GetHTTP1Transport returns the HTTP/1.1 transport for TLS session cache access
+func (t *Transport) GetHTTP1Transport() *HTTP1Transport {
+	return t.h1Transport
+}
+
+// GetHTTP2Transport returns the HTTP/2 transport for TLS session cache access
+func (t *Transport) GetHTTP2Transport() *HTTP2Transport {
+	return t.h2Transport
+}
+
+// GetHTTP3Transport returns the HTTP/3 transport for TLS session cache access
+func (t *Transport) GetHTTP3Transport() *HTTP3Transport {
+	return t.h3Transport
 }
 
 // Helper functions

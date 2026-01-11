@@ -142,6 +142,19 @@ internal static class Native
     [DllImport(LibraryName, EntryPoint = "httpcloak_stream_close", CallingConvention = CallingConvention.Cdecl)]
     public static extern void StreamClose(long streamHandle);
 
+    // Session persistence functions
+    [DllImport(LibraryName, EntryPoint = "httpcloak_session_save", CallingConvention = CallingConvention.Cdecl)]
+    public static extern IntPtr SessionSave(long handle, [MarshalAs(UnmanagedType.LPUTF8Str)] string path);
+
+    [DllImport(LibraryName, EntryPoint = "httpcloak_session_load", CallingConvention = CallingConvention.Cdecl)]
+    public static extern long SessionLoad([MarshalAs(UnmanagedType.LPUTF8Str)] string path);
+
+    [DllImport(LibraryName, EntryPoint = "httpcloak_session_marshal", CallingConvention = CallingConvention.Cdecl)]
+    public static extern IntPtr SessionMarshal(long handle);
+
+    [DllImport(LibraryName, EntryPoint = "httpcloak_session_unmarshal", CallingConvention = CallingConvention.Cdecl)]
+    public static extern long SessionUnmarshal([MarshalAs(UnmanagedType.LPUTF8Str)] string data);
+
     /// <summary>
     /// Convert a native string pointer to a managed string and free the native memory.
     /// </summary>

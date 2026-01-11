@@ -864,6 +864,16 @@ def _setup_lib(lib):
     lib.httpcloak_upload_cancel.argtypes = [c_int64]
     lib.httpcloak_upload_cancel.restype = None
 
+    # Session persistence functions
+    lib.httpcloak_session_save.argtypes = [c_int64, c_char_p]
+    lib.httpcloak_session_save.restype = c_void_p
+    lib.httpcloak_session_load.argtypes = [c_char_p]
+    lib.httpcloak_session_load.restype = c_int64
+    lib.httpcloak_session_marshal.argtypes = [c_int64]
+    lib.httpcloak_session_marshal.restype = c_void_p
+    lib.httpcloak_session_unmarshal.argtypes = [c_char_p]
+    lib.httpcloak_session_unmarshal.restype = c_int64
+
     # Optimized raw response functions (body passed separately from JSON)
     lib.httpcloak_get_raw.argtypes = [c_int64, c_char_p, c_char_p]
     lib.httpcloak_get_raw.restype = c_int64
@@ -1808,6 +1818,134 @@ class Session:
     def cookies(self) -> Dict[str, str]:
         """Get cookies as a property."""
         return self.get_cookies()
+
+    # =========================================================================
+    # Session Persistence
+    # =========================================================================
+
+    def save(self, path: str) -> None:
+        """
+        Save session state (cookies, TLS sessions) to a file.
+
+        This allows you to persist session state across program runs,
+        including cookies and TLS session tickets for faster resumption.
+
+        Args:
+            path: Path to save the session file
+
+        Example:
+            session = httpcloak.Session(preset="chrome-143")
+            session.get("https://example.com")  # Acquire cookies
+            session.save("session.json")
+
+            # Later, restore the session
+            session = httpcloak.Session.load("session.json")
+        """
+        result_ptr = self._lib.httpcloak_session_save(
+            self._handle,
+            path.encode("utf-8"),
+        )
+        result = _ptr_to_string(result_ptr)
+        if result is None:
+            raise HTTPCloakError("Failed to save session")
+
+        data = json.loads(result)
+        if "error" in data:
+            raise HTTPCloakError(data["error"])
+
+    def marshal(self) -> str:
+        """
+        Export session state to JSON string.
+
+        Returns:
+            JSON string containing session state
+
+        Example:
+            session_data = session.marshal()
+            # Store session_data in database, cache, etc.
+
+            # Later, restore the session
+            session = httpcloak.Session.unmarshal(session_data)
+        """
+        result_ptr = self._lib.httpcloak_session_marshal(self._handle)
+        result = _ptr_to_string(result_ptr)
+        if result is None:
+            raise HTTPCloakError("Failed to marshal session")
+
+        # Check for error
+        try:
+            data = json.loads(result)
+            if isinstance(data, dict) and "error" in data:
+                raise HTTPCloakError(data["error"])
+        except json.JSONDecodeError:
+            pass  # Not an error response
+
+        return result
+
+    @classmethod
+    def load(cls, path: str) -> "Session":
+        """
+        Load a session from a file.
+
+        This restores session state including cookies and TLS session tickets.
+        The session uses the same preset that was used when it was saved.
+
+        Args:
+            path: Path to the session file
+
+        Returns:
+            Restored Session object
+
+        Example:
+            session = httpcloak.Session.load("session.json")
+            r = session.get("https://example.com")  # Uses restored cookies
+        """
+        lib = _get_lib()
+        handle = lib.httpcloak_session_load(path.encode("utf-8"))
+
+        if handle < 0:
+            raise HTTPCloakError(f"Failed to load session from {path}")
+
+        # Create a new Session instance with the loaded handle
+        session = object.__new__(cls)
+        session._lib = lib
+        session._handle = handle
+        session._default_timeout = 30
+        session.headers = {}
+        session.auth = None
+
+        return session
+
+    @classmethod
+    def unmarshal(cls, data: str) -> "Session":
+        """
+        Load a session from JSON string.
+
+        Args:
+            data: JSON string containing session state
+
+        Returns:
+            Restored Session object
+
+        Example:
+            # Retrieve session_data from database, cache, etc.
+            session = httpcloak.Session.unmarshal(session_data)
+        """
+        lib = _get_lib()
+        handle = lib.httpcloak_session_unmarshal(data.encode("utf-8"))
+
+        if handle < 0:
+            raise HTTPCloakError("Failed to unmarshal session")
+
+        # Create a new Session instance with the loaded handle
+        session = object.__new__(cls)
+        session._lib = lib
+        session._handle = handle
+        session._default_timeout = 30
+        session.headers = {}
+        session.auth = None
+
+        return session
 
     # =========================================================================
     # Streaming Methods

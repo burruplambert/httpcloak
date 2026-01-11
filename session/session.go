@@ -4,7 +4,10 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -758,4 +761,255 @@ func resolveURL(base, ref string) string {
 	}
 
 	return scheme + "://" + host + "/" + ref
+}
+
+// ==================== Session Persistence ====================
+
+// exportCookies exports all cookies as a slice of CookieState
+func (s *Session) exportCookies() []CookieState {
+	cookies := make([]CookieState, 0, len(s.cookies))
+	for name, value := range s.cookies {
+		cookies = append(cookies, CookieState{
+			Name:  name,
+			Value: value,
+			Path:  "/", // Default path
+		})
+	}
+	return cookies
+}
+
+// importCookies imports cookies from a slice of CookieState
+func (s *Session) importCookies(cookies []CookieState) {
+	for _, cookie := range cookies {
+		s.cookies[cookie.Name] = cookie.Value
+	}
+}
+
+// exportTLSSessions exports TLS sessions from all transport caches
+func (s *Session) exportTLSSessions() (map[string]transport.TLSSessionState, error) {
+	allSessions := make(map[string]transport.TLSSessionState)
+
+	// Export from HTTP/1.1 transport session cache
+	if h1 := s.transport.GetHTTP1Transport(); h1 != nil {
+		if cache, ok := h1.GetSessionCache().(*transport.PersistableSessionCache); ok {
+			sessions, err := cache.Export()
+			if err == nil {
+				for k, v := range sessions {
+					allSessions["h1:"+k] = v
+				}
+			}
+		}
+	}
+
+	// Export from HTTP/2 transport session cache
+	if h2 := s.transport.GetHTTP2Transport(); h2 != nil {
+		if cache, ok := h2.GetSessionCache().(*transport.PersistableSessionCache); ok {
+			sessions, err := cache.Export()
+			if err == nil {
+				for k, v := range sessions {
+					allSessions["h2:"+k] = v
+				}
+			}
+		}
+	}
+
+	// Export from HTTP/3 transport session cache
+	if h3 := s.transport.GetHTTP3Transport(); h3 != nil {
+		if cache, ok := h3.GetSessionCache().(*transport.PersistableSessionCache); ok {
+			sessions, err := cache.Export()
+			if err == nil {
+				for k, v := range sessions {
+					allSessions["h3:"+k] = v
+				}
+			}
+		}
+	}
+
+	return allSessions, nil
+}
+
+// importTLSSessions imports TLS sessions into transport caches
+func (s *Session) importTLSSessions(sessions map[string]transport.TLSSessionState) error {
+	// Group sessions by protocol
+	h1Sessions := make(map[string]transport.TLSSessionState)
+	h2Sessions := make(map[string]transport.TLSSessionState)
+	h3Sessions := make(map[string]transport.TLSSessionState)
+
+	// fmt.Fprintf(os.Stderr, "[DEBUG import] Total sessions to import: %d\n", len(sessions))
+	for key, session := range sessions {
+		// fmt.Fprintf(os.Stderr, "[DEBUG import] Processing key: %s (len=%d)\n", key, len(key))
+		if len(key) > 3 && key[2] == ':' {
+			prefix := key[:2]
+			actualKey := key[3:]
+			// fmt.Fprintf(os.Stderr, "[DEBUG import] Parsed prefix=%s, actualKey=%s\n", prefix, actualKey)
+			switch prefix {
+			case "h1":
+				h1Sessions[actualKey] = session
+			case "h2":
+				h2Sessions[actualKey] = session
+			case "h3":
+				h3Sessions[actualKey] = session
+				// fmt.Fprintf(os.Stderr, "[DEBUG import] Added h3 session for key: %s\n", actualKey)
+			}
+		}
+	}
+
+	// Import to HTTP/1.1 transport
+	if h1 := s.transport.GetHTTP1Transport(); h1 != nil && len(h1Sessions) > 0 {
+		if cache, ok := h1.GetSessionCache().(*transport.PersistableSessionCache); ok {
+			cache.Import(h1Sessions)
+		}
+	}
+
+	// Import to HTTP/2 transport
+	if h2 := s.transport.GetHTTP2Transport(); h2 != nil && len(h2Sessions) > 0 {
+		if cache, ok := h2.GetSessionCache().(*transport.PersistableSessionCache); ok {
+			cache.Import(h2Sessions)
+		}
+	}
+
+	// Import to HTTP/3 transport
+	// fmt.Fprintf(os.Stderr, "[DEBUG import] h3Sessions count: %d\n", len(h3Sessions))
+	h3 := s.transport.GetHTTP3Transport()
+	// fmt.Fprintf(os.Stderr, "[DEBUG import] h3 transport nil: %v\n", h3 == nil)
+	if h3 != nil && len(h3Sessions) > 0 {
+		cache := h3.GetSessionCache()
+		// fmt.Fprintf(os.Stderr, "[DEBUG import] h3 session cache nil: %v, type: %T\n", cache == nil, cache)
+		if pCache, ok := cache.(*transport.PersistableSessionCache); ok {
+			// fmt.Fprintf(os.Stderr, "[DEBUG import] Type assertion succeeded, importing sessions\n")
+			pCache.Import(h3Sessions)
+			// fmt.Fprintf(os.Stderr, "[DEBUG import] Import complete, cache count: %d\n", pCache.Count())
+		} else {
+			// fmt.Fprintf(os.Stderr, "[DEBUG import] Type assertion FAILED\n")
+		}
+	}
+
+	return nil
+}
+
+// Marshal exports session state to JSON bytes
+func (s *Session) Marshal() ([]byte, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	// Get preset name
+	presetName := "chrome-131" // Default
+	if s.Config != nil && s.Config.Preset != "" {
+		presetName = s.Config.Preset
+	}
+
+	// Export TLS sessions
+	tlsSessions, err := s.exportTLSSessions()
+	if err != nil {
+		// Continue without TLS sessions - cookies are more important
+		tlsSessions = make(map[string]transport.TLSSessionState)
+	}
+
+	// Export cookies
+	cookies := s.exportCookies()
+
+	// Check if HTTP/3 is forced
+	forceHTTP3 := false
+	echConfigDomain := ""
+	if s.Config != nil {
+		forceHTTP3 = s.Config.ForceHTTP3
+		echConfigDomain = s.Config.ECHConfigDomain
+	}
+
+	state := &SessionState{
+		Version:         SessionStateVersion,
+		Preset:          presetName,
+		ForceHTTP3:      forceHTTP3,
+		ECHConfigDomain: echConfigDomain,
+		CreatedAt:       s.CreatedAt,
+		UpdatedAt:       time.Now(),
+		Cookies:         cookies,
+		TLSSessions:     tlsSessions,
+	}
+
+	return json.MarshalIndent(state, "", "  ")
+}
+
+// Save exports session state to a file
+func (s *Session) Save(path string) error {
+	data, err := s.Marshal()
+	if err != nil {
+		return fmt.Errorf("failed to marshal session: %w", err)
+	}
+
+	// Write with restrictive permissions (owner read/write only)
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		return fmt.Errorf("failed to write session file: %w", err)
+	}
+
+	return nil
+}
+
+// LoadSession loads a session from a file
+func LoadSession(path string) (*Session, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read session file: %w", err)
+	}
+
+	return UnmarshalSession(data)
+}
+
+// UnmarshalSession loads a session from JSON bytes
+func UnmarshalSession(data []byte) (*Session, error) {
+	var state SessionState
+	if err := json.Unmarshal(data, &state); err != nil {
+		return nil, fmt.Errorf("failed to parse session data: %w", err)
+	}
+
+	// Version check
+	if state.Version > SessionStateVersion {
+		return nil, fmt.Errorf("session file version %d is newer than supported version %d",
+			state.Version, SessionStateVersion)
+	}
+
+	// Create session with preset, HTTP version preference, and ECH config
+	config := &protocol.SessionConfig{
+		Preset:          state.Preset,
+		ForceHTTP3:      state.ForceHTTP3,
+		ECHConfigDomain: state.ECHConfigDomain,
+	}
+	session := NewSession("", config)
+	session.CreatedAt = state.CreatedAt
+
+	// Import cookies
+	session.mu.Lock()
+	session.importCookies(state.Cookies)
+	session.mu.Unlock()
+
+	// Import TLS sessions
+	if err := session.importTLSSessions(state.TLSSessions); err != nil {
+		// Log but don't fail - cookies are the main thing
+	}
+
+	return session, nil
+}
+
+// ValidateSessionFile validates a session file without loading it
+func ValidateSessionFile(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("failed to read session file: %w", err)
+	}
+
+	var state SessionState
+	if err := json.Unmarshal(data, &state); err != nil {
+		return fmt.Errorf("invalid JSON: %w", err)
+	}
+
+	if state.Version > SessionStateVersion {
+		return fmt.Errorf("session file version %d is newer than supported version %d",
+			state.Version, SessionStateVersion)
+	}
+
+	if state.Preset == "" {
+		return fmt.Errorf("missing preset in session file")
+	}
+
+	return nil
 }

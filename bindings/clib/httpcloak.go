@@ -20,13 +20,30 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"os"
 	"sync"
 	"time"
 	"unsafe"
 
 	"github.com/sardanioss/httpcloak"
 )
+
+func init() {
+	// Initialize library
+}
+
+// logDebug writes debug messages to a file
+func logDebug(format string, args ...interface{}) {
+	msg := fmt.Sprintf("[DEBUG] "+format+"\n", args...)
+	f, err := os.OpenFile("/tmp/httpcloak_debug.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return
+	}
+	f.WriteString(msg)
+	f.Close()
+}
 
 // decodeRequestBody decodes the request body based on encoding type
 func decodeRequestBody(body, encoding string) ([]byte, error) {
@@ -666,6 +683,7 @@ func httpcloak_session_new(configJSON *C.char) C.int64_t {
 	case "h2", "http2", "2":
 		opts = append(opts, httpcloak.WithForceHTTP2())
 	case "h3", "http3", "3":
+		logDebug("clib Adding WithForceHTTP3")
 		opts = append(opts, httpcloak.WithForceHTTP3())
 	// "auto" or empty = default behavior
 	}
@@ -1241,6 +1259,74 @@ func httpcloak_set_cookie(handle C.int64_t, name *C.char, value *C.char) {
 }
 
 // ============================================================================
+// Session Persistence
+// ============================================================================
+
+//export httpcloak_session_save
+func httpcloak_session_save(handle C.int64_t, path *C.char) *C.char {
+	session := getSession(handle)
+	if session == nil {
+		return makeErrorJSON(ErrInvalidSession)
+	}
+
+	pathStr := C.GoString(path)
+	if err := session.Save(pathStr); err != nil {
+		return makeErrorJSON(err)
+	}
+
+	return C.CString(`{"success":true}`)
+}
+
+//export httpcloak_session_load
+func httpcloak_session_load(path *C.char) C.int64_t {
+	pathStr := C.GoString(path)
+	session, err := httpcloak.LoadSession(pathStr)
+	if err != nil {
+		return -1
+	}
+
+	sessionMu.Lock()
+	sessionCounter++
+	handle := sessionCounter
+	sessions[handle] = session
+	sessionMu.Unlock()
+
+	return C.int64_t(handle)
+}
+
+//export httpcloak_session_marshal
+func httpcloak_session_marshal(handle C.int64_t) *C.char {
+	session := getSession(handle)
+	if session == nil {
+		return makeErrorJSON(ErrInvalidSession)
+	}
+
+	data, err := session.Marshal()
+	if err != nil {
+		return makeErrorJSON(err)
+	}
+
+	return C.CString(string(data))
+}
+
+//export httpcloak_session_unmarshal
+func httpcloak_session_unmarshal(data *C.char) C.int64_t {
+	dataStr := C.GoString(data)
+	session, err := httpcloak.UnmarshalSession([]byte(dataStr))
+	if err != nil {
+		return -1
+	}
+
+	sessionMu.Lock()
+	sessionCounter++
+	handle := sessionCounter
+	sessions[handle] = session
+	sessionMu.Unlock()
+
+	return C.int64_t(handle)
+}
+
+// ============================================================================
 // Utility Functions
 // ============================================================================
 
@@ -1253,7 +1339,7 @@ func httpcloak_free_string(str *C.char) {
 
 //export httpcloak_version
 func httpcloak_version() *C.char {
-	return C.CString("1.5.3")
+	return C.CString("1.5.3-debug-test-12345")
 }
 
 //export httpcloak_available_presets

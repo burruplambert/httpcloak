@@ -14,6 +14,7 @@ import (
 
 	"github.com/sardanioss/httpcloak/dns"
 	"github.com/sardanioss/httpcloak/fingerprint"
+	"github.com/sardanioss/httpcloak/proxy"
 	"github.com/sardanioss/net/http2"
 	"github.com/sardanioss/net/http2/hpack"
 	utls "github.com/sardanioss/utls"
@@ -81,7 +82,7 @@ func NewHTTP2TransportWithConfig(preset *fingerprint.Preset, dnsCache *dns.Cache
 		proxy:          proxy,
 		config:         config,
 		conns:          make(map[string]*persistentConn),
-		sessionCache:   utls.NewLRUClientSessionCache(64), // Cache up to 64 sessions for resumption
+		sessionCache:   NewPersistableSessionCache(), // Persistable cache for session resumption
 		maxIdleTime:    90 * time.Second,
 		maxConnAge:     5 * time.Minute,
 		connectTimeout: 30 * time.Second,
@@ -415,8 +416,36 @@ func (t *HTTP2Transport) createConn(ctx context.Context, host, port string) (*pe
 	}, nil
 }
 
-// dialThroughProxy establishes a connection through an HTTP proxy using CONNECT
+// dialThroughProxy establishes a connection through a proxy using CONNECT
+// Supports both HTTP proxies (HTTP CONNECT) and SOCKS5 proxies (SOCKS5 CONNECT)
 func (t *HTTP2Transport) dialThroughProxy(ctx context.Context, targetHost, targetPort string) (net.Conn, error) {
+	// Check if it's a SOCKS5 proxy
+	if proxy.IsSOCKS5URL(t.proxy.URL) {
+		return t.dialThroughSOCKS5(ctx, targetHost, targetPort)
+	}
+
+	// HTTP proxy - use HTTP CONNECT
+	return t.dialThroughHTTPProxy(ctx, targetHost, targetPort)
+}
+
+// dialThroughSOCKS5 establishes a connection through a SOCKS5 proxy
+func (t *HTTP2Transport) dialThroughSOCKS5(ctx context.Context, targetHost, targetPort string) (net.Conn, error) {
+	socks5Dialer, err := proxy.NewSOCKS5Dialer(t.proxy.URL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create SOCKS5 dialer: %w", err)
+	}
+
+	targetAddr := net.JoinHostPort(targetHost, targetPort)
+	conn, err := socks5Dialer.DialContext(ctx, "tcp", targetAddr)
+	if err != nil {
+		return nil, fmt.Errorf("SOCKS5 CONNECT failed: %w", err)
+	}
+
+	return conn, nil
+}
+
+// dialThroughHTTPProxy establishes a connection through an HTTP proxy using CONNECT
+func (t *HTTP2Transport) dialThroughHTTPProxy(ctx context.Context, targetHost, targetPort string) (net.Conn, error) {
 	// Parse proxy URL
 	proxyURL, err := url.Parse(t.proxy.URL)
 	if err != nil {
@@ -585,6 +614,16 @@ func (t *HTTP2Transport) Close() {
 		go conn.close()
 	}
 	t.conns = nil
+}
+
+// GetSessionCache returns the TLS session cache
+func (t *HTTP2Transport) GetSessionCache() utls.ClientSessionCache {
+	return t.sessionCache
+}
+
+// SetSessionCache sets the TLS session cache
+func (t *HTTP2Transport) SetSessionCache(cache utls.ClientSessionCache) {
+	t.sessionCache = cache
 }
 
 // Stats returns transport statistics

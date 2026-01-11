@@ -407,7 +407,7 @@ func (p *QUICHostPool) createConn(ctx context.Context) (*QUICConn, error) {
 					continue
 				}
 
-				conn, err := quic.Dial(ctx, udpConn, udpAddr, tlsCfg, cfg)
+				conn, err := quic.DialEarly(ctx, udpConn, udpAddr, tlsCfg, cfg)
 				if err != nil {
 					udpConn.Close()
 					lastErr = err
