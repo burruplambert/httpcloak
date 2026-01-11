@@ -37,29 +37,31 @@ Modern bot detection systems fingerprint your **TLS handshake**, **HTTP/2 frames
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│                        GO STDLIB vs HTTPCLOAK vs CHROME                      │
+│                       curl_cffi vs HTTPCLOAK vs CHROME                       │
 ├──────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  CAPABILITIES                                                                │
+│  ─────────────────────────────────────────────────────────────────────────── │
+│  HTTP/3 (QUIC)           │  ❌ No          │  ✅ Yes          │  ✅ Yes        │
+│  Session Resumption      │  ❌ No          │  ✅ Yes (0-RTT)  │  ✅ Yes        │
+│  Post-Quantum TLS        │  ❌ No          │  ✅ X25519MLKEM  │  ✅ Yes        │
+│  ECH Support             │  ❌ No          │  ✅ Yes          │  ✅ Yes        │
+│  Multi-Language          │  Python only   │  Go/Py/JS/C#    │  -             │
 │                                                                              │
 │  TLS FINGERPRINT                                                             │
 │  ─────────────────────────────────────────────────────────────────────────── │
-│  Cipher Suites           │  13            │  16             │  16            │
-│  TLS Extensions          │  12            │  18             │  18            │
-│  GREASE Values           │  None          │  Random         │  Random        │
-│  Post-Quantum (MLKEM)    │  No            │  Yes            │  Yes           │
-│  ECH Support             │  No            │  Yes            │  Yes           │
+│  JA3/JA4 Match           │  ✅ Yes         │  ✅ Yes          │  ✅ Yes        │
+│  GREASE Values           │  ✅ Yes         │  ✅ Yes          │  ✅ Yes        │
 │                                                                              │
 │  HTTP/2 FINGERPRINT                                                          │
 │  ─────────────────────────────────────────────────────────────────────────── │
-│  HEADER_TABLE_SIZE       │  4,096         │  65,536         │  65,536        │
-│  ENABLE_PUSH             │  1             │  0              │  0             │
-│  INITIAL_WINDOW_SIZE     │  64 KB         │  6 MB           │  6 MB          │
-│  MAX_HEADER_LIST_SIZE    │  10 MB         │  256 KB         │  256 KB        │
+│  SETTINGS Match          │  ✅ Yes         │  ✅ Yes          │  ✅ Yes        │
+│  Akamai FP Match         │  ✅ Yes         │  ✅ Yes          │  ✅ Yes        │
 │                                                                              │
-│  RESULT                                                                      │
+│  BOT DETECTION SCORE                                                         │
 │  ─────────────────────────────────────────────────────────────────────────── │
-│  JA4 Hash                │  Different     │  ✓ MATCH        │  ✓ MATCH       │
-│  Akamai Fingerprint      │  Different     │  ✓ MATCH        │  ✓ MATCH       │
-│  Cloudflare Bot Score    │  ~10           │  ~99            │  ~99           │
+│  Fresh Connection        │  ~90            │  ~90             │  ~99           │
+│  With Session Resumption │  ❌ N/A         │  ~99             │  ~99           │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -227,6 +229,13 @@ MIT
 
 ---
 
-## 🔍 Keywords
+## 🧪 Fingerprint Testing Tools
 
-`http client` `tls fingerprint` `ja3` `ja4` `akamai fingerprint` `bot detection bypass` `cloudflare bypass` `http2 fingerprint` `http3` `quic` `browser fingerprint` `anti-bot` `web scraping` `golang http` `python requests alternative` `utls` `session resumption` `0-rtt` `post-quantum tls`
+These tools were invaluable for testing and verifying fingerprints:
+
+| Tool | What it tests |
+|------|---------------|
+| [tls.peet.ws](https://tls.peet.ws/api/all) | TLS fingerprint (JA3, JA4), HTTP/2 Akamai fingerprint |
+| [quic.browserleaks.com](https://quic.browserleaks.com/) | HTTP/3 QUIC fingerprint analysis |
+| [cf.erisa.uk](https://cf.erisa.uk/) | Cloudflare bot score and JA4 detection |
+| [cloudflare.com/cdn-cgi/trace](https://www.cloudflare.com/cdn-cgi/trace) | Connection info, TLS version, key exchange |
