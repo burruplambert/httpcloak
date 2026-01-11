@@ -99,7 +99,7 @@ That's it. Full browser fingerprint. Every layer.
 │  ECH (Encrypted Client Hello)   │
 ├─────────────────────────────────┤
 │  WITHOUT:  sni=plaintext        │
-│  WITH:     sni=encrypted  ✓     │
+│  WITH:     sni=encrypted   +    │
 └─────────────────────────────────┘
 ```
 
@@ -107,10 +107,10 @@ That's it. Full browser fingerprint. Every layer.
 ┌─────────────────────────────────┐
 │  HTTP/3 Fingerprint Match       │
 ├─────────────────────────────────┤
-│  Protocol:        h3        ✓   │
-│  QUIC Version:    1         ✓   │
-│  Transport Params:          ✓   │
-│  GREASE Frames:             ✓   │
+│  Protocol:        h3       +    │
+│  QUIC Version:    1        +    │
+│  Transport Params:         +    │
+│  GREASE Frames:            +    │
 └─────────────────────────────────┘
 ```
 
@@ -123,14 +123,14 @@ That's it. Full browser fingerprint. Every layer.
 │        BOTH LIBRARIES          │       HTTPCLOAK ONLY           │
 ├────────────────────────────────┼────────────────────────────────┤
 │                                │                                │
-│  ✓ TLS fingerprint (JA3/JA4)   │  ✓ HTTP/3 fingerprinting       │
-│  ✓ HTTP/2 fingerprint          │  ✓ ECH (encrypted SNI)         │
-│  ✓ Post-quantum TLS            │  ✓ Session persistence         │
-│  ✓ Bot score: 99               │  ✓ 0-RTT resumption            │
-│                                │  ✓ MASQUE proxy                │
-│                                │  ✓ Domain fronting             │
-│                                │  ✓ Certificate pinning         │
-│                                │  ✓ Go, Python, Node.js, C#     │
+│  + TLS fingerprint (JA3/JA4)   │  + HTTP/3 fingerprinting       │
+│  + HTTP/2 fingerprint          │  + ECH (encrypted SNI)         │
+│  + Post-quantum TLS            │  + Session persistence         │
+│  + Bot score: 99               │  + 0-RTT resumption            │
+│                                │  + MASQUE proxy                │
+│                                │  + Domain fronting             │
+│                                │  + Certificate pinning         │
+│                                │  + Go, Python, Node.js, C#     │
 │                                │                                │
 └────────────────────────────────┴────────────────────────────────┘
 ```
