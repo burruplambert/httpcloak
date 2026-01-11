@@ -24,9 +24,3 @@ require (
 
 // Use local httpcloak package
 replace github.com/sardanioss/httpcloak => ../..
-
-// Use local utls with StoreSession fix
-replace github.com/sardanioss/utls => /home/saksham/own_tools/utls
-
-// Use local quic-go with StoreSession and ClientSessionCache fixes
-replace github.com/sardanioss/quic-go => /home/saksham/own_tools/quic-go
