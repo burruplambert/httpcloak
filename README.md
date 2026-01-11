@@ -1,4 +1,6 @@
-<h1 align="center">httpcloak</h1>
+<p align="center">
+<img src="httpcloak.png" alt="httpcloak" width="600">
+</p>
 
 <p align="center">
 <b>A browser, without the browser.</b>
@@ -11,26 +13,9 @@
   <a href="https://www.nuget.org/packages/HttpCloak"><img src="https://img.shields.io/nuget/v/HttpCloak" alt="NuGet"></a>
 </p>
 
-<br>
-
 <p align="center">
-  <img src="https://img.shields.io/badge/Bot_Score-99-brightgreen?style=for-the-badge" alt="Bot Score 99">
-  <img src="https://img.shields.io/badge/HTTP%2F3-Free-blue?style=for-the-badge" alt="HTTP/3 Free">
-  <img src="https://img.shields.io/badge/ECH-Encrypted_SNI-purple?style=for-the-badge" alt="ECH">
-  <img src="https://img.shields.io/badge/0--RTT-Session_Tickets-orange?style=for-the-badge" alt="0-RTT">
+<img src="image.png" alt="features">
 </p>
-
-<br>
-<br>
-
-```
-██╗  ██╗████████╗████████╗██████╗  ██████╗██╗      ██████╗  █████╗ ██╗  ██╗
-██║  ██║╚══██╔══╝╚══██╔══╝██╔══██╗██╔════╝██║     ██╔═══██╗██╔══██╗██║ ██╔╝
-███████║   ██║      ██║   ██████╔╝██║     ██║     ██║   ██║███████║█████╔╝
-██╔══██║   ██║      ██║   ██╔═══╝ ██║     ██║     ██║   ██║██╔══██║██╔═██╗
-██║  ██║   ██║      ██║   ██║     ╚██████╗███████╗╚██████╔╝██║  ██║██║  ██╗
-╚═╝  ╚═╝   ╚═╝      ╚═╝   ╚═╝      ╚═════╝╚══════╝ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝
-```
 
 <p align="center">
 <i>Every layer. Every frame. Every byte. Indistinguishable from Chrome.</i>
@@ -40,8 +25,6 @@
 
 ---
 
-<br>
-
 ## The Problem
 
 Bot detection doesn't just check your User-Agent anymore.
@@ -49,8 +32,6 @@ Bot detection doesn't just check your User-Agent anymore.
 It fingerprints your **TLS handshake**. Your **HTTP/2 frames**. Your **QUIC parameters**. The order of your headers. Whether you have a session ticket. Whether your SNI is encrypted.
 
 One mismatch = blocked.
-
-<br>
 
 ## The Solution
 
@@ -62,131 +43,63 @@ r = httpcloak.get("https://target.com", preset="chrome-143")
 
 That's it. Full browser fingerprint. Every layer.
 
-<br>
-
 ---
-
-<br>
 
 ## What Gets Emulated
 
-<br>
-
-<table>
-<tr>
-<td width="33%" valign="top">
-
 ### 🔐 TLS Layer
-
-- JA3 / JA4 fingerprints
-- GREASE randomization
-- Post-quantum X25519MLKEM768
-- ECH (Encrypted Client Hello)
-- Session tickets & 0-RTT
-
-</td>
-<td width="33%" valign="top">
+JA3 / JA4 fingerprints, GREASE randomization, Post-quantum X25519MLKEM768, ECH (Encrypted Client Hello), Session tickets & 0-RTT
 
 ### 🚀 Transport Layer
-
-- HTTP/2 SETTINGS frames
-- WINDOW_UPDATE values
-- Stream priorities (HPACK)
-- QUIC transport parameters
-- HTTP/3 GREASE frames
-
-</td>
-<td width="33%" valign="top">
+HTTP/2 SETTINGS frames, WINDOW_UPDATE values, Stream priorities (HPACK), QUIC transport parameters, HTTP/3 GREASE frames
 
 ### 🧠 Header Layer
-
-- Sec-Fetch-* coherence
-- Client Hints (Sec-Ch-UA)
-- Accept / Accept-Language
-- Header ordering
-- Cookie persistence
-
-</td>
-</tr>
-</table>
-
-<br>
+Sec-Fetch-* coherence, Client Hints (Sec-Ch-UA), Accept / Accept-Language, Header ordering, Cookie persistence
 
 ---
-
-<br>
 
 ## Proof
 
-<br>
+**Session resumption changes everything:**
 
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                                                                         │
-│   WITHOUT SESSION TICKET          WITH SESSION TICKET                   │
-│                                                                         │
-│   Bot Score: 43                   Bot Score: 99                         │
-│   ██████░░░░░░░░░░░░░░            ██████████████████████████████████    │
-│   ↑ New TLS handshake             ↑ 0-RTT resumption                    │
-│   ↑ Looks like a bot              ↑ Looks like returning Chrome         │
-│                                                                         │
-└─────────────────────────────────────────────────────────────────────────┘
-```
+| | Without Session Ticket | With Session Ticket |
+|--|:--:|:--:|
+| **Bot Score** | 43 | **99** |
+| **TLS Handshake** | 2-RTT (new) | 0-RTT (resumed) |
+| **Detection** | Looks like a bot | Looks like returning Chrome |
 
-<br>
+**ECH hides your target:**
 
-```
-┌─────────────────────────────────┐
-│  ECH (Encrypted Client Hello)   │
-├─────────────────────────────────┤
-│  WITHOUT:  sni=plaintext        │
-│  WITH:     sni=encrypted  ✓     │
-└─────────────────────────────────┘
-```
+| | SNI |
+|--|--|
+| Without ECH | `sni=plaintext` |
+| With ECH | `sni=encrypted` ✓ |
 
-<br>
+**HTTP/3 fingerprint matches Chrome:**
 
-```
-┌─────────────────────────────────┐
-│  HTTP/3 Fingerprint Match       │
-├─────────────────────────────────┤
-│  Protocol:        h3        ✓   │
-│  QUIC Version:    1         ✓   │
-│  Transport Params:          ✓   │
-│  GREASE Frames:             ✓   │
-└─────────────────────────────────┘
-```
-
-<br>
+| Check | Status |
+|-------|:------:|
+| Protocol | h3 ✓ |
+| QUIC Version | 1 ✓ |
+| Transport Params | Match ✓ |
+| GREASE Frames | Match ✓ |
 
 ---
-
-<br>
 
 ## vs curl_cffi
 
-```
-┌────────────────────────────────┬────────────────────────────────┐
-│        BOTH LIBRARIES          │       HTTPCLOAK ONLY           │
-├────────────────────────────────┼────────────────────────────────┤
-│                                │                                │
-│  ✓ TLS fingerprint (JA3/JA4)   │  ✓ HTTP/3 fingerprinting       │
-│  ✓ HTTP/2 fingerprint          │  ✓ ECH (encrypted SNI)         │
-│  ✓ Post-quantum TLS            │  ✓ Session persistence         │
-│  ✓ Bot score: 99               │  ✓ 0-RTT resumption            │
-│                                │  ✓ MASQUE proxy                │
-│                                │  ✓ Domain fronting             │
-│                                │  ✓ Certificate pinning         │
-│                                │  ✓ Go, Python, Node.js, C#     │
-│                                │                                │
-└────────────────────────────────┴────────────────────────────────┘
-```
-
-<br>
+| Both Libraries | httpcloak Only |
+|----------------|----------------|
+| ✓ TLS fingerprint (JA3/JA4) | ✓ HTTP/3 fingerprinting (free) |
+| ✓ HTTP/2 fingerprint | ✓ ECH (encrypted SNI) |
+| ✓ Post-quantum TLS | ✓ Session persistence |
+| ✓ Bot score: 99 | ✓ 0-RTT resumption |
+| | ✓ MASQUE proxy |
+| | ✓ Domain fronting |
+| | ✓ Certificate pinning |
+| | ✓ Go, Python, Node.js, C# |
 
 ---
-
-<br>
 
 ## Install
 
@@ -197,16 +110,11 @@ go get github.com/sardanioss/httpcloak   # Go
 dotnet add package HttpCloak # C#
 ```
 
-<br>
-
 ---
-
-<br>
 
 ## Quick Start
 
-<details>
-<summary><b>Python</b></summary>
+### Python
 
 ```python
 import httpcloak
@@ -225,10 +133,7 @@ session = httpcloak.Session.load("session.json")
 r = session.get("https://target.com/")  # Bot score: 99
 ```
 
-</details>
-
-<details>
-<summary><b>Go</b></summary>
+### Go
 
 ```go
 c := client.NewClient("chrome-143")
@@ -239,10 +144,7 @@ text, _ := resp.Text()
 fmt.Println(text, resp.Protocol)
 ```
 
-</details>
-
-<details>
-<summary><b>Node.js</b></summary>
+### Node.js
 
 ```javascript
 import httpcloak from "httpcloak";
@@ -253,10 +155,7 @@ console.log(r.text, r.protocol);
 session.close();
 ```
 
-</details>
-
-<details>
-<summary><b>C#</b></summary>
+### C#
 
 ```csharp
 using var session = new Session(Presets.Chrome143);
@@ -264,20 +163,11 @@ var r = session.Get("https://example.com");
 Console.WriteLine($"{r.Text} {r.Protocol}");
 ```
 
-</details>
-
-<br>
-
 ---
-
-<br>
 
 ## Features
 
-<details>
-<summary><b>🔐 ECH (Encrypted Client Hello)</b></summary>
-
-<br>
+### 🔐 ECH (Encrypted Client Hello)
 
 Hides which domain you're connecting to from network observers.
 
@@ -290,12 +180,7 @@ session = httpcloak.Session(
 
 Cloudflare trace shows `sni=encrypted` instead of `sni=plaintext`.
 
-</details>
-
-<details>
-<summary><b>⚡ Session Resumption (0-RTT)</b></summary>
-
-<br>
+### ⚡ Session Resumption (0-RTT)
 
 TLS session tickets make you look like a returning visitor.
 
@@ -311,12 +196,7 @@ r = session.get("https://target.com/")  # Bot score: 99
 
 Cross-domain warming works because Cloudflare sites share TLS infrastructure.
 
-</details>
-
-<details>
-<summary><b>🌐 HTTP/3 Through Proxies</b></summary>
-
-<br>
+### 🌐 HTTP/3 Through Proxies
 
 Two methods for QUIC through proxies:
 
@@ -335,12 +215,7 @@ session = httpcloak.Session(proxy="masque://proxy:443")
 
 Known MASQUE providers (auto-detected): Bright Data, Oxylabs, Smartproxy, SOAX.
 
-</details>
-
-<details>
-<summary><b>🎭 Domain Fronting</b></summary>
-
-<br>
+### 🎭 Domain Fronting
 
 Connect to a different host than what appears in TLS SNI.
 
@@ -350,24 +225,14 @@ client := httpcloak.NewClient("chrome-143",
 )
 ```
 
-</details>
-
-<details>
-<summary><b>📌 Certificate Pinning</b></summary>
-
-<br>
+### 📌 Certificate Pinning
 
 ```go
 client.PinCertificate("sha256/AAAA...",
     httpcloak.PinOptions{IncludeSubdomains: true})
 ```
 
-</details>
-
-<details>
-<summary><b>🪝 Request Hooks</b></summary>
-
-<br>
+### 🪝 Request Hooks
 
 ```go
 client.OnPreRequest(func(req *http.Request) error {
@@ -380,12 +245,7 @@ client.OnPostResponse(func(resp *httpcloak.Response) {
 })
 ```
 
-</details>
-
-<details>
-<summary><b>⏱️ Request Timing</b></summary>
-
-<br>
+### ⏱️ Request Timing
 
 ```go
 fmt.Printf("DNS: %dms, TCP: %dms, TLS: %dms, Total: %dms\n",
@@ -395,12 +255,7 @@ fmt.Printf("DNS: %dms, TCP: %dms, TLS: %dms, Total: %dms\n",
     resp.Timing.Total)
 ```
 
-</details>
-
-<details>
-<summary><b>🔄 Protocol Selection</b></summary>
-
-<br>
+### 🔄 Protocol Selection
 
 ```python
 session = httpcloak.Session(preset="chrome-143", http_version="h3")  # Force HTTP/3
@@ -410,12 +265,7 @@ session = httpcloak.Session(preset="chrome-143", http_version="h1")  # Force HTT
 
 Auto mode tries HTTP/3 first, falls back gracefully.
 
-</details>
-
-<details>
-<summary><b>📤 Streaming & Uploads</b></summary>
-
-<br>
+### 📤 Streaming & Uploads
 
 ```python
 # Stream large downloads
@@ -429,13 +279,7 @@ r = session.post(url, files={
 })
 ```
 
-</details>
-
-<br>
-
 ---
-
-<br>
 
 ## Browser Presets
 
@@ -451,11 +295,7 @@ r = session.post(url, files={
 
 **PQ** = Post-Quantum (X25519MLKEM768) · **H3** = HTTP/3
 
-<br>
-
 ---
-
-<br>
 
 ## Testing Tools
 
@@ -466,11 +306,7 @@ r = session.post(url, files={
 | [cf.erisa.uk](https://cf.erisa.uk/) | Cloudflare bot score |
 | [cloudflare.com/cdn-cgi/trace](https://www.cloudflare.com/cdn-cgi/trace) | ECH status, TLS version |
 
-<br>
-
 ---
-
-<br>
 
 ## Dependencies
 
@@ -479,8 +315,6 @@ Custom forks for browser-accurate fingerprinting:
 - [sardanioss/utls](https://github.com/sardanioss/utls) — TLS fingerprinting
 - [sardanioss/quic-go](https://github.com/sardanioss/quic-go) — HTTP/3 fingerprinting
 - [sardanioss/net](https://github.com/sardanioss/net) — HTTP/2 frame fingerprinting
-
-<br>
 
 ---
 
