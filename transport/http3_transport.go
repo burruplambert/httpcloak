@@ -114,15 +114,8 @@ type HTTP3Transport struct {
 	// Chrome shuffles TLS extensions once per session, not per connection
 	cachedClientHelloSpec *utls.ClientHelloSpec
 
-	// Cached PSK ClientHelloSpec for session resumption with 0-RTT
-	// Used when there's a cached session (includes early_data and pre_shared_key extensions)
-	cachedQUICPSKSpec *utls.ClientHelloSpec
-
 	// Separate cached spec for inner MASQUE connections (not shared with outer)
 	cachedClientHelloSpecInner *utls.ClientHelloSpec
-
-	// Separate PSK spec for inner MASQUE connections (session resumption)
-	cachedClientHelloSpecInnerPSK *utls.ClientHelloSpec
 
 	// Shuffle seed for TLS and transport parameter ordering (consistent per session)
 	shuffleSeed int64
@@ -146,6 +139,12 @@ type HTTP3Transport struct {
 
 	// Advanced configuration (ConnectTo, ECH override)
 	config *TransportConfig
+
+	// ECH config cache - stores ECH configs per host for session resumption
+	// When resuming a session, we must use the same ECH config that was used
+	// to create the original session ticket, not a fresh one from DNS
+	echConfigCache   map[string][]byte
+	echConfigCacheMu sync.RWMutex
 }
 
 // NewHTTP3Transport creates a new HTTP/3 transport
@@ -161,11 +160,12 @@ func NewHTTP3TransportWithTransportConfig(preset *fingerprint.Preset, dnsCache *
 	shuffleSeed := int64(binary.LittleEndian.Uint64(seedBytes[:]))
 
 	t := &HTTP3Transport{
-		preset:       preset,
-		dnsCache:     dnsCache,
-		sessionCache: NewPersistableSessionCache(), // Cache for 0-RTT resumption
-		shuffleSeed:  shuffleSeed,
-		config:       config,
+		preset:         preset,
+		dnsCache:       dnsCache,
+		sessionCache:   NewPersistableSessionCache(), // Cache for 0-RTT resumption
+		shuffleSeed:    shuffleSeed,
+		config:         config,
+		echConfigCache: make(map[string][]byte), // Cache for ECH configs (for session resumption)
 	}
 
 	// Create TLS config for QUIC with session cache for 0-RTT
@@ -194,15 +194,6 @@ func NewHTTP3TransportWithTransportConfig(preset *fingerprint.Preset, dnsCache *
 		spec, err := utls.UTLSIdToSpecWithSeed(*clientHelloID, shuffleSeed)
 		if err == nil {
 			t.cachedClientHelloSpec = &spec
-		}
-	}
-
-	// Cache PSK ClientHelloSpec for session resumption (includes early_data + pre_shared_key)
-	// Used when there's a cached session for the host - matches real Chrome resumed connections
-	if preset.QUICPSKClientHelloID.Client != "" {
-		spec, err := utls.UTLSIdToSpecWithSeed(preset.QUICPSKClientHelloID, shuffleSeed)
-		if err == nil {
-			t.cachedQUICPSKSpec = &spec
 		}
 	}
 
@@ -452,19 +443,6 @@ func NewHTTP3TransportWithMASQUE(preset *fingerprint.Preset, dnsCache *dns.Cache
 		}
 	}
 
-	// Cache PSK spec for outer connections
-	if preset.QUICPSKClientHelloID.Client != "" {
-		spec, err := utls.UTLSIdToSpecWithSeed(preset.QUICPSKClientHelloID, shuffleSeed)
-		if err == nil {
-			t.cachedQUICPSKSpec = &spec
-		}
-		// Create separate PSK spec for inner connections
-		innerPSKSpec, err := utls.UTLSIdToSpecWithSeed(preset.QUICPSKClientHelloID, shuffleSeed)
-		if err == nil {
-			t.cachedClientHelloSpecInnerPSK = &innerPSKSpec
-		}
-	}
-
 	// Create QUIC config with MASQUE-specific settings
 	t.quicConfig = &quic.Config{
 		MaxIdleTimeout:                30 * time.Second,
@@ -587,13 +565,11 @@ func (t *HTTP3Transport) dialQUICWithMASQUE(ctx context.Context, addr string, tl
 	// - ClientHelloID: WORKS - uTLS generates Chrome-like ClientHello
 	// - TransportParameterOrder: WORKS - Chrome transport param ordering
 
-	// Choose spec based on session cache - use PSK spec for resumed connections
+	// NOTE: We do NOT switch to a different PSK spec for resumed connections.
+	// Using the same cachedClientHelloSpecInner ensures extension order consistency,
+	// which is required for ECH accept confirmation to work correctly.
+	// utls handles PSK extension addition automatically when there's a cached session.
 	innerSpec := t.cachedClientHelloSpecInner
-	if t.cachedClientHelloSpecInnerPSK != nil && t.sessionCache != nil {
-		if session, ok := t.sessionCache.Get(host); ok && session != nil {
-			innerSpec = t.cachedClientHelloSpecInnerPSK
-		}
-	}
 
 	cfgCopy := &quic.Config{
 		MaxIdleTimeout:                  30 * time.Second,
@@ -671,12 +647,10 @@ func (t *HTTP3Transport) dialQUICWithProxy(ctx context.Context, addr string, tls
 	// Clone our QUIC config (with proper fingerprinting settings)
 	cfgCopy := t.quicConfig.Clone()
 
-	// Switch to PSK ClientHelloSpec for resumed connections
-	if t.cachedQUICPSKSpec != nil && t.sessionCache != nil {
-		if session, ok := t.sessionCache.Get(host); ok && session != nil {
-			cfgCopy.CachedClientHelloSpec = t.cachedQUICPSKSpec
-		}
-	}
+	// NOTE: We do NOT switch to a different PSK spec for resumed connections.
+	// Using the same cachedClientHelloSpec ensures extension order consistency,
+	// which is required for ECH accept confirmation to work correctly.
+	// utls handles PSK extension addition automatically when there's a cached session.
 
 	// Race IPv6 and IPv4 connections (Happy Eyeballs style)
 	// Try IPv6 first, then IPv4 after short timeout
@@ -820,22 +794,16 @@ func (t *HTTP3Transport) dialQUIC(ctx context.Context, addr string, tlsCfg *tls.
 	// If there's a cached session, use PSK spec (includes early_data + pre_shared_key)
 	// This matches real Chrome's behavior for 0-RTT resumption
 	logDebug("dialQUICWithDNS: checking PSK spec and session cache for host: %s", host)
-	logDebug("  cachedQUICPSKSpec nil: %v", t.cachedQUICPSKSpec == nil)
 	logDebug("  sessionCache nil: %v", t.sessionCache == nil)
 	if t.sessionCache != nil {
 		if psc, ok := t.sessionCache.(*PersistableSessionCache); ok {
 			logDebug("  sessionCache is PersistableSessionCache with %d sessions", psc.Count())
 		}
 	}
-	// Switch to PSK ClientHelloSpec for resumed connections with 0-RTT
-	if t.cachedQUICPSKSpec != nil && t.sessionCache != nil {
-		if session, ok := t.sessionCache.Get(host); ok && session != nil {
-			cfgCopy.CachedClientHelloSpec = t.cachedQUICPSKSpec
-			logDebug("Using PSK spec for cached session host: %s", host)
-		} else {
-			logDebug("No cached session for host: %s", host)
-		}
-	}
+	// NOTE: We do NOT switch to a different PSK spec for resumed connections.
+	// Using the same cachedClientHelloSpec ensures extension order consistency,
+	// which is required for ECH accept confirmation to work correctly.
+	// utls handles PSK extension addition automatically when there's a cached session.
 
 	// Race IPv6 and IPv4 connections (Happy Eyeballs style)
 	// Try IPv6 first, then IPv4 after short timeout
@@ -960,6 +928,33 @@ func (t *HTTP3Transport) SetSessionCache(cache tls.ClientSessionCache) {
 	// Update the tlsConfig as well since it holds a reference
 	if t.tlsConfig != nil {
 		t.tlsConfig.ClientSessionCache = cache
+	}
+}
+
+// GetECHConfigCache returns all cached ECH configs
+// This is used for session persistence - ECH configs must be saved alongside
+// TLS session tickets to ensure proper session resumption
+func (t *HTTP3Transport) GetECHConfigCache() map[string][]byte {
+	t.echConfigCacheMu.RLock()
+	defer t.echConfigCacheMu.RUnlock()
+
+	// Return a copy to avoid race conditions
+	result := make(map[string][]byte, len(t.echConfigCache))
+	for k, v := range t.echConfigCache {
+		result[k] = v
+	}
+	return result
+}
+
+// SetECHConfigCache imports ECH configs from session persistence
+// This should be called before importing TLS sessions to ensure the
+// correct ECH config is used when resuming connections
+func (t *HTTP3Transport) SetECHConfigCache(configs map[string][]byte) {
+	t.echConfigCacheMu.Lock()
+	defer t.echConfigCacheMu.Unlock()
+
+	for k, v := range configs {
+		t.echConfigCache[k] = v
 	}
 }
 
@@ -1093,9 +1088,30 @@ func (t *HTTP3Transport) getConnectHost(requestHost string) string {
 
 // getECHConfig returns the ECH config for a host
 func (t *HTTP3Transport) getECHConfig(ctx context.Context, targetHost string) []byte {
-	if t.config == nil {
-		echConfig, _ := dns.FetchECHConfigs(ctx, targetHost)
-		return echConfig
+	// First, check if we have a cached ECH config for this host
+	// This is critical for session resumption - we must use the same ECH config
+	// that was used when creating the original session ticket
+	t.echConfigCacheMu.RLock()
+	if cachedConfig, ok := t.echConfigCache[targetHost]; ok {
+		t.echConfigCacheMu.RUnlock()
+		return cachedConfig
 	}
-	return t.config.GetECHConfig(ctx, targetHost)
+	t.echConfigCacheMu.RUnlock()
+
+	// No cached config - fetch from DNS or config
+	var echConfig []byte
+	if t.config == nil {
+		echConfig, _ = dns.FetchECHConfigs(ctx, targetHost)
+	} else {
+		echConfig = t.config.GetECHConfig(ctx, targetHost)
+	}
+
+	// Cache the ECH config for future use (session resumption)
+	if echConfig != nil {
+		t.echConfigCacheMu.Lock()
+		t.echConfigCache[targetHost] = echConfig
+		t.echConfigCacheMu.Unlock()
+	}
+
+	return echConfig
 }

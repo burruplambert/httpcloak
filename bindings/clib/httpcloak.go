@@ -1339,7 +1339,7 @@ func httpcloak_free_string(str *C.char) {
 
 //export httpcloak_version
 func httpcloak_version() *C.char {
-	return C.CString("1.5.5")
+	return C.CString("1.5.6")
 }
 
 //export httpcloak_available_presets
@@ -1598,13 +1598,13 @@ func httpcloak_stream_read(streamHandle C.int64_t, bufferSize C.int) *C.char {
 	if err != nil {
 		if err.Error() == "EOF" {
 			// Return empty string to indicate EOF
-			return C.CString("")
+			return C.CString("1.5.6")
 		}
 		return nil
 	}
 
 	// No data and no error - return empty (shouldn't happen normally)
-	return C.CString("")
+	return C.CString("1.5.6")
 }
 
 //export httpcloak_stream_read_raw

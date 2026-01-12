@@ -6,7 +6,7 @@ import (
 	"github.com/sardanioss/httpcloak/transport"
 )
 
-const SessionStateVersion = 1
+const SessionStateVersion = 2
 
 // SessionState represents the complete saveable session state
 type SessionState struct {
@@ -18,6 +18,10 @@ type SessionState struct {
 	UpdatedAt       time.Time                            `json:"updated_at"`
 	Cookies         []CookieState                        `json:"cookies"`
 	TLSSessions     map[string]transport.TLSSessionState `json:"tls_sessions"`
+	// ECHConfigs stores ECH configurations per domain (base64 encoded)
+	// This is essential for session resumption - the same ECH config must be used
+	// when resuming as was used when creating the session ticket
+	ECHConfigs map[string]string `json:"ech_configs,omitempty"`
 }
 
 // CookieState represents a serializable cookie

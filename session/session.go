@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -887,6 +888,50 @@ func (s *Session) importTLSSessions(sessions map[string]transport.TLSSessionStat
 	return nil
 }
 
+// exportECHConfigs exports ECH configs from HTTP/3 transport
+// These are essential for session resumption - the same ECH config must be used
+func (s *Session) exportECHConfigs() map[string]string {
+	h3 := s.transport.GetHTTP3Transport()
+	if h3 == nil {
+		return nil
+	}
+
+	rawConfigs := h3.GetECHConfigCache()
+	if len(rawConfigs) == 0 {
+		return nil
+	}
+
+	// Base64 encode the configs for JSON storage
+	result := make(map[string]string, len(rawConfigs))
+	for host, config := range rawConfigs {
+		result[host] = base64.StdEncoding.EncodeToString(config)
+	}
+	return result
+}
+
+// importECHConfigs imports ECH configs into HTTP/3 transport
+// This must be called BEFORE importing TLS sessions
+func (s *Session) importECHConfigs(configs map[string]string) {
+	if len(configs) == 0 {
+		return
+	}
+
+	h3 := s.transport.GetHTTP3Transport()
+	if h3 == nil {
+		return
+	}
+
+	// Decode base64 configs
+	rawConfigs := make(map[string][]byte, len(configs))
+	for host, b64Config := range configs {
+		if decoded, err := base64.StdEncoding.DecodeString(b64Config); err == nil {
+			rawConfigs[host] = decoded
+		}
+	}
+
+	h3.SetECHConfigCache(rawConfigs)
+}
+
 // Marshal exports session state to JSON bytes
 func (s *Session) Marshal() ([]byte, error) {
 	s.mu.RLock()
@@ -916,6 +961,11 @@ func (s *Session) Marshal() ([]byte, error) {
 		echConfigDomain = s.Config.ECHConfigDomain
 	}
 
+	// Export ECH configs from HTTP/3 transport
+	// This is critical for session resumption - we must save the ECH configs
+	// that were used when creating the TLS session tickets
+	echConfigs := s.exportECHConfigs()
+
 	state := &SessionState{
 		Version:         SessionStateVersion,
 		Preset:          presetName,
@@ -925,6 +975,7 @@ func (s *Session) Marshal() ([]byte, error) {
 		UpdatedAt:       time.Now(),
 		Cookies:         cookies,
 		TLSSessions:     tlsSessions,
+		ECHConfigs:      echConfigs,
 	}
 
 	return json.MarshalIndent(state, "", "  ")
@@ -981,6 +1032,10 @@ func UnmarshalSession(data []byte) (*Session, error) {
 	session.mu.Lock()
 	session.importCookies(state.Cookies)
 	session.mu.Unlock()
+
+	// Import ECH configs FIRST - this must be done before TLS sessions
+	// because the TLS session tickets need the correct ECH config for resumption
+	session.importECHConfigs(state.ECHConfigs)
 
 	// Import TLS sessions
 	if err := session.importTLSSessions(state.TLSSessions); err != nil {
