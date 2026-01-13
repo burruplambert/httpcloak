@@ -198,8 +198,15 @@ type QUICHostPool struct {
 	// Chrome shuffles TLS extensions once per session, not per connection
 	cachedClientHelloSpec *utls.ClientHelloSpec
 
+	// Cached PSK ClientHelloSpec for session resumption
+	// Used when a valid session exists in the cache (includes PSK extension)
+	cachedPSKSpec *utls.ClientHelloSpec
+
 	// Shuffle seed for transport parameter ordering (consistent per session)
 	shuffleSeed int64
+
+	// Session cache for TLS session resumption (0-RTT)
+	sessionCache tls.ClientSessionCache
 
 	// Configuration
 	maxConns       int
@@ -212,6 +219,7 @@ type QUICHostPool struct {
 func NewQUICHostPool(host, port string, preset *fingerprint.Preset, dnsCache *dns.Cache) *QUICHostPool {
 	// Generate spec and seed for standalone usage (backward compatibility)
 	var cachedSpec *utls.ClientHelloSpec
+	var cachedPSKSpec *utls.ClientHelloSpec
 	var seedBytes [8]byte
 	crand.Read(seedBytes[:])
 	shuffleSeed := int64(binary.LittleEndian.Uint64(seedBytes[:]))
@@ -221,12 +229,19 @@ func NewQUICHostPool(host, port string, preset *fingerprint.Preset, dnsCache *dn
 			cachedSpec = &spec
 		}
 	}
-	return NewQUICHostPoolWithCachedSpec(host, port, preset, dnsCache, cachedSpec, shuffleSeed)
+	// Also generate PSK spec for session resumption
+	if preset != nil && preset.QUICPSKClientHelloID.Client != "" {
+		if spec, err := utls.UTLSIdToSpecWithSeed(preset.QUICPSKClientHelloID, shuffleSeed); err == nil {
+			cachedPSKSpec = &spec
+		}
+	}
+	return NewQUICHostPoolWithCachedSpec(host, port, preset, dnsCache, cachedSpec, cachedPSKSpec, shuffleSeed)
 }
 
 // NewQUICHostPoolWithCachedSpec creates a QUIC pool with a pre-cached ClientHelloSpec and shuffle seed
 // This ensures consistent TLS extension order and transport parameter order across all hosts in a session
-func NewQUICHostPoolWithCachedSpec(host, port string, preset *fingerprint.Preset, dnsCache *dns.Cache, cachedSpec *utls.ClientHelloSpec, shuffleSeed int64) *QUICHostPool {
+// cachedSpec is used for initial connections, cachedPSKSpec is used when resuming sessions
+func NewQUICHostPoolWithCachedSpec(host, port string, preset *fingerprint.Preset, dnsCache *dns.Cache, cachedSpec *utls.ClientHelloSpec, cachedPSKSpec *utls.ClientHelloSpec, shuffleSeed int64) *QUICHostPool {
 	pool := &QUICHostPool{
 		host:                  host,
 		port:                  port,
@@ -237,8 +252,10 @@ func NewQUICHostPoolWithCachedSpec(host, port string, preset *fingerprint.Preset
 		maxIdleTime:           90 * time.Second,
 		maxConnAge:            5 * time.Minute,
 		connectTimeout:        30 * time.Second,
-		cachedClientHelloSpec: cachedSpec,     // Use manager's cached spec for consistent TLS shuffle
-		shuffleSeed:           shuffleSeed,    // Use manager's seed for consistent transport param shuffle
+		cachedClientHelloSpec: cachedSpec,                       // Use manager's cached spec for consistent TLS shuffle
+		cachedPSKSpec:         cachedPSKSpec,                    // PSK spec for session resumption
+		shuffleSeed:           shuffleSeed,                      // Use manager's seed for consistent transport param shuffle
+		sessionCache:          tls.NewLRUClientSessionCache(32), // Session cache for 0-RTT resumption
 	}
 
 	return pool
@@ -308,11 +325,36 @@ func (p *QUICHostPool) createConn(ctx context.Context) (*QUICConn, error) {
 		InsecureSkipVerify: false,
 		NextProtos:         []string{http3.NextProtoH3}, // HTTP/3 ALPN
 		MinVersion:         tls.VersionTLS13,
+		ClientSessionCache: p.sessionCache, // Enable 0-RTT session resumption
 	}
 
-	// Get ClientHelloID from preset for TLS fingerprinting
+	// Check if we have a cached session for this host - if so, use PSK spec for resumption
+	// Chrome uses different ClientHello extensions when resuming vs new connection
+	hasSession := false
+	if p.sessionCache != nil {
+		if cs, ok := p.sessionCache.Get(p.host); ok && cs != nil {
+			hasSession = true
+			fmt.Printf("[DEBUG QUIC Pool] Session found for host=%q\n", p.host)
+		} else {
+			fmt.Printf("[DEBUG QUIC Pool] No session for host=%q (ok=%v, cs=%v)\n", p.host, ok, cs)
+		}
+	}
+
+	// Select the appropriate ClientHelloSpec based on session availability
+	// PSK spec includes pre_shared_key extension needed for session resumption
+	selectedSpec := p.cachedClientHelloSpec
+	if hasSession && p.cachedPSKSpec != nil {
+		selectedSpec = p.cachedPSKSpec
+		fmt.Printf("[DEBUG QUIC Pool] Using PSK spec (hasSession=%v, cachedPSKSpec=%v)\n", hasSession, p.cachedPSKSpec != nil)
+	} else {
+		fmt.Printf("[DEBUG QUIC Pool] Using regular spec (hasSession=%v, cachedPSKSpec=%v)\n", hasSession, p.cachedPSKSpec != nil)
+	}
+
+	// Get ClientHelloID from preset for TLS fingerprinting (fallback)
 	var clientHelloID *utls.ClientHelloID
-	if p.preset != nil && p.preset.QUICClientHelloID.Client != "" {
+	if hasSession && p.preset != nil && p.preset.QUICPSKClientHelloID.Client != "" {
+		clientHelloID = &p.preset.QUICPSKClientHelloID
+	} else if p.preset != nil && p.preset.QUICClientHelloID.Client != "" {
 		clientHelloID = &p.preset.QUICClientHelloID
 	}
 
@@ -334,9 +376,9 @@ func (p *QUICHostPool) createConn(ctx context.Context) (*QUICConn, error) {
 		InitialPacketSize:            1250,  // Chrome uses ~1250
 		DisableClientHelloScrambling: true,  // Chrome doesn't scramble SNI, sends fewer packets
 		ChromeStyleInitialPackets:    true,  // Chrome-like frame patterns in Initial packets
-		ClientHelloID:                 clientHelloID,            // Fallback if cached spec fails
-		CachedClientHelloSpec:         p.cachedClientHelloSpec,  // Cached spec for consistent fingerprint
-		ECHConfigList:                 echConfigList,            // ECH from DNS HTTPS records
+		ClientHelloID:                 clientHelloID,   // Fallback if cached spec fails
+		CachedClientHelloSpec:         selectedSpec,    // Selected spec (regular or PSK) for fingerprint
+		ECHConfigList:                 echConfigList,   // ECH from DNS HTTPS records
 		TransportParameterOrder:       quic.TransportParameterOrderChrome, // Chrome transport param ordering
 		TransportParameterShuffleSeed: p.shuffleSeed, // Consistent transport param shuffle per session
 	}
@@ -462,6 +504,18 @@ func (p *QUICHostPool) Close() {
 		go conn.Close()
 	}
 	p.connections = nil
+}
+
+// CloseConnections closes all connections but keeps the pool usable
+// This allows testing session resumption by forcing new connections
+func (p *QUICHostPool) CloseConnections() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	for _, conn := range p.connections {
+		go conn.Close()
+	}
+	p.connections = make([]*QUICConn, 0)
 }
 
 // Stats returns pool statistics
@@ -606,7 +660,7 @@ func (m *QUICManager) GetPool(host, port string) (*QUICHostPool, error) {
 		return pool, nil
 	}
 
-	pool = NewQUICHostPoolWithCachedSpec(host, port, m.preset, m.dnsCache, m.cachedSpec, m.shuffleSeed)
+	pool = NewQUICHostPoolWithCachedSpec(host, port, m.preset, m.dnsCache, m.cachedSpec, m.cachedPSKSpec, m.shuffleSeed)
 	if m.maxConnsPerHost > 0 {
 		pool.SetMaxConns(m.maxConnsPerHost)
 	}
@@ -668,6 +722,18 @@ func (m *QUICManager) Close() {
 		pool.Close()
 	}
 	m.pools = nil
+}
+
+// CloseAllConnections closes all QUIC connections across all pools
+// but keeps the pools usable with their session caches intact
+// This is useful for testing session resumption
+func (m *QUICManager) CloseAllConnections() {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	for _, pool := range m.pools {
+		pool.CloseConnections()
+	}
 }
 
 // Stats returns overall manager statistics
