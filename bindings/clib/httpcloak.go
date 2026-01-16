@@ -20,9 +20,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
-	"os"
 	"sync"
 	"time"
 	"unsafe"
@@ -672,7 +670,6 @@ func httpcloak_session_new(configJSON *C.char) C.int64_t {
 	case "h2", "http2", "2":
 		opts = append(opts, httpcloak.WithForceHTTP2())
 	case "h3", "http3", "3":
-		logDebug("clib Adding WithForceHTTP3")
 		opts = append(opts, httpcloak.WithForceHTTP3())
 	// "auto" or empty = default behavior
 	}
