@@ -209,10 +209,12 @@ type QUICHostPool struct {
 	sessionCache tls.ClientSessionCache
 
 	// Configuration
-	maxConns       int
-	maxIdleTime    time.Duration
-	maxConnAge     time.Duration
-	connectTimeout time.Duration
+	maxConns        int
+	maxIdleTime     time.Duration
+	maxConnAge      time.Duration
+	connectTimeout  time.Duration
+	echConfig       []byte // Custom ECH configuration
+	echConfigDomain string // Domain to fetch ECH config from
 }
 
 // NewQUICHostPool creates a new QUIC pool for a specific host
@@ -358,11 +360,23 @@ func (p *QUICHostPool) createConn(ctx context.Context) (*QUICConn, error) {
 		clientHelloID = &p.preset.QUICClientHelloID
 	}
 
-	// Fetch ECH configs from DNS HTTPS records for real ECH negotiation
-	// This is non-blocking - if it fails, we proceed without ECH
+	// Get ECH configuration - use custom config if set, otherwise fetch from DNS
 	var echConfigList []byte
-	if clientHelloID != nil {
+	if len(p.echConfig) > 0 {
+		// Use custom ECH config if set
+		echConfigList = p.echConfig
+		fmt.Printf("[DEBUG QUIC ECH] Using custom ECH config: %d bytes\n", len(echConfigList))
+	} else if p.echConfigDomain != "" {
+		// Fetch ECH from specified domain
+		echConfigList, _ = dns.FetchECHConfigs(ctx, p.echConfigDomain)
+		fmt.Printf("[DEBUG QUIC ECH] Fetched ECH from domain %s: %d bytes\n", p.echConfigDomain, len(echConfigList))
+	} else if clientHelloID != nil {
+		// Fetch ECH configs from DNS HTTPS records for real ECH negotiation
+		// This is non-blocking - if it fails, we proceed without ECH
 		echConfigList, _ = dns.FetchECHConfigs(ctx, p.host)
+		fmt.Printf("[DEBUG QUIC ECH] Fetched ECH from host DNS %s: %d bytes\n", p.host, len(echConfigList))
+	} else {
+		fmt.Printf("[DEBUG QUIC ECH] No ECH config available\n")
 	}
 
 	// QUIC config with Chrome-like settings
@@ -663,6 +677,13 @@ func (m *QUICManager) GetPool(host, port string) (*QUICHostPool, error) {
 	pool = NewQUICHostPoolWithCachedSpec(host, port, m.preset, m.dnsCache, m.cachedSpec, m.cachedPSKSpec, m.shuffleSeed)
 	if m.maxConnsPerHost > 0 {
 		pool.SetMaxConns(m.maxConnsPerHost)
+	}
+	// Pass ECH configuration to the pool
+	if len(m.echConfig) > 0 {
+		pool.echConfig = m.echConfig
+	}
+	if m.echConfigDomain != "" {
+		pool.echConfigDomain = m.echConfigDomain
 	}
 	m.pools[key] = pool
 	return pool, nil
