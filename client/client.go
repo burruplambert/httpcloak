@@ -1130,6 +1130,14 @@ func (c *Client) Close() {
 	}
 }
 
+// CloseQUICConnections closes all QUIC connections but keeps session caches intact
+// This forces new connections on subsequent requests, allowing session resumption testing
+func (c *Client) CloseQUICConnections() {
+	if c.quicManager != nil {
+		c.quicManager.CloseAllConnections()
+	}
+}
+
 // Stats returns connection pool statistics
 func (c *Client) Stats() map[string]struct {
 	Total    int

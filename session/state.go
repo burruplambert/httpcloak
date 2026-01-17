@@ -3,21 +3,25 @@ package session
 import (
 	"time"
 
+	"github.com/sardanioss/httpcloak/protocol"
 	"github.com/sardanioss/httpcloak/transport"
 )
 
-const SessionStateVersion = 2
+const SessionStateVersion = 4
 
 // SessionState represents the complete saveable session state
 type SessionState struct {
-	Version         int                                  `json:"version"`
-	Preset          string                               `json:"preset"`
-	ForceHTTP3      bool                                 `json:"force_http3"`
-	ECHConfigDomain string                               `json:"ech_config_domain,omitempty"`
-	CreatedAt       time.Time                            `json:"created_at"`
-	UpdatedAt       time.Time                            `json:"updated_at"`
-	Cookies         []CookieState                        `json:"cookies"`
-	TLSSessions     map[string]transport.TLSSessionState `json:"tls_sessions"`
+	Version   int       `json:"version"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+
+	// Full session configuration - saves everything
+	Config *protocol.SessionConfig `json:"config"`
+
+	// Session data
+	Cookies     []CookieState                        `json:"cookies"`
+	TLSSessions map[string]transport.TLSSessionState `json:"tls_sessions"`
+
 	// ECHConfigs stores ECH configurations per domain (base64 encoded)
 	// This is essential for session resumption - the same ECH config must be used
 	// when resuming as was used when creating the session ticket

@@ -20,9 +20,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
-	"os"
 	"sync"
 	"time"
 	"unsafe"
@@ -32,17 +30,6 @@ import (
 
 func init() {
 	// Initialize library
-}
-
-// logDebug writes debug messages to a file
-func logDebug(format string, args ...interface{}) {
-	msg := fmt.Sprintf("[DEBUG] "+format+"\n", args...)
-	f, err := os.OpenFile("/tmp/httpcloak_debug.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return
-	}
-	f.WriteString(msg)
-	f.Close()
 }
 
 // decodeRequestBody decodes the request body based on encoding type
@@ -683,7 +670,6 @@ func httpcloak_session_new(configJSON *C.char) C.int64_t {
 	case "h2", "http2", "2":
 		opts = append(opts, httpcloak.WithForceHTTP2())
 	case "h3", "http3", "3":
-		logDebug("clib Adding WithForceHTTP3")
 		opts = append(opts, httpcloak.WithForceHTTP3())
 	// "auto" or empty = default behavior
 	}
