@@ -924,12 +924,6 @@ func (s *Session) Marshal() ([]byte, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	// Get preset name
-	presetName := "chrome-131" // Default
-	if s.Config != nil && s.Config.Preset != "" {
-		presetName = s.Config.Preset
-	}
-
 	// Export TLS sessions
 	tlsSessions, err := s.exportTLSSessions()
 	if err != nil {
@@ -940,29 +934,27 @@ func (s *Session) Marshal() ([]byte, error) {
 	// Export cookies
 	cookies := s.exportCookies()
 
-	// Check if HTTP/3 is forced
-	forceHTTP3 := false
-	echConfigDomain := ""
-	if s.Config != nil {
-		forceHTTP3 = s.Config.ForceHTTP3
-		echConfigDomain = s.Config.ECHConfigDomain
-	}
-
 	// Export ECH configs from HTTP/3 transport
 	// This is critical for session resumption - we must save the ECH configs
 	// that were used when creating the TLS session tickets
 	echConfigs := s.exportECHConfigs()
 
+	// Save the full config
+	config := s.Config
+	if config == nil {
+		config = &protocol.SessionConfig{
+			Preset: "chrome-131",
+		}
+	}
+
 	state := &SessionState{
-		Version:         SessionStateVersion,
-		Preset:          presetName,
-		ForceHTTP3:      forceHTTP3,
-		ECHConfigDomain: echConfigDomain,
-		CreatedAt:       s.CreatedAt,
-		UpdatedAt:       time.Now(),
-		Cookies:         cookies,
-		TLSSessions:     tlsSessions,
-		ECHConfigs:      echConfigs,
+		Version:     SessionStateVersion,
+		CreatedAt:   s.CreatedAt,
+		UpdatedAt:   time.Now(),
+		Config:      config,
+		Cookies:     cookies,
+		TLSSessions: tlsSessions,
+		ECHConfigs:  echConfigs,
 	}
 
 	return json.MarshalIndent(state, "", "  ")
@@ -993,25 +985,56 @@ func LoadSession(path string) (*Session, error) {
 	return UnmarshalSession(data)
 }
 
+// sessionStateV3 represents the old v3 session format for backwards compatibility
+type sessionStateV3 struct {
+	Version         int                                  `json:"version"`
+	Preset          string                               `json:"preset"`
+	ForceHTTP3      bool                                 `json:"force_http3"`
+	ECHConfigDomain string                               `json:"ech_config_domain,omitempty"`
+	CreatedAt       time.Time                            `json:"created_at"`
+	UpdatedAt       time.Time                            `json:"updated_at"`
+	Cookies         []CookieState                        `json:"cookies"`
+	TLSSessions     map[string]transport.TLSSessionState `json:"tls_sessions"`
+	ECHConfigs      map[string]string                    `json:"ech_configs,omitempty"`
+	Proxy           string                               `json:"proxy,omitempty"`
+	TCPProxy        string                               `json:"tcp_proxy,omitempty"`
+	UDPProxy        string                               `json:"udp_proxy,omitempty"`
+}
+
 // UnmarshalSession loads a session from JSON bytes
 func UnmarshalSession(data []byte) (*Session, error) {
+	// First, check the version
+	var versionCheck struct {
+		Version int `json:"version"`
+	}
+	if err := json.Unmarshal(data, &versionCheck); err != nil {
+		return nil, fmt.Errorf("failed to parse session data: %w", err)
+	}
+
+	if versionCheck.Version > SessionStateVersion {
+		return nil, fmt.Errorf("session file version %d is newer than supported version %d",
+			versionCheck.Version, SessionStateVersion)
+	}
+
+	// Handle v3 format (backwards compatibility)
+	if versionCheck.Version <= 3 {
+		return unmarshalSessionV3(data)
+	}
+
+	// Handle v4+ format (full config)
 	var state SessionState
 	if err := json.Unmarshal(data, &state); err != nil {
 		return nil, fmt.Errorf("failed to parse session data: %w", err)
 	}
 
-	// Version check
-	if state.Version > SessionStateVersion {
-		return nil, fmt.Errorf("session file version %d is newer than supported version %d",
-			state.Version, SessionStateVersion)
+	// Use the full config from the saved state
+	config := state.Config
+	if config == nil {
+		config = &protocol.SessionConfig{
+			Preset: "chrome-131",
+		}
 	}
 
-	// Create session with preset, HTTP version preference, and ECH config
-	config := &protocol.SessionConfig{
-		Preset:          state.Preset,
-		ForceHTTP3:      state.ForceHTTP3,
-		ECHConfigDomain: state.ECHConfigDomain,
-	}
 	session := NewSession("", config)
 	session.CreatedAt = state.CreatedAt
 
@@ -1032,6 +1055,42 @@ func UnmarshalSession(data []byte) (*Session, error) {
 	return session, nil
 }
 
+// unmarshalSessionV3 handles loading old v3 format sessions
+func unmarshalSessionV3(data []byte) (*Session, error) {
+	var state sessionStateV3
+	if err := json.Unmarshal(data, &state); err != nil {
+		return nil, fmt.Errorf("failed to parse v3 session data: %w", err)
+	}
+
+	// Convert v3 fields to full config
+	config := &protocol.SessionConfig{
+		Preset:          state.Preset,
+		ForceHTTP3:      state.ForceHTTP3,
+		ECHConfigDomain: state.ECHConfigDomain,
+		Proxy:           state.Proxy,
+		TCPProxy:        state.TCPProxy,
+		UDPProxy:        state.UDPProxy,
+	}
+
+	session := NewSession("", config)
+	session.CreatedAt = state.CreatedAt
+
+	// Import cookies
+	session.mu.Lock()
+	session.importCookies(state.Cookies)
+	session.mu.Unlock()
+
+	// Import ECH configs
+	session.importECHConfigs(state.ECHConfigs)
+
+	// Import TLS sessions
+	if err := session.importTLSSessions(state.TLSSessions); err != nil {
+		// Log but don't fail
+	}
+
+	return session, nil
+}
+
 // ValidateSessionFile validates a session file without loading it
 func ValidateSessionFile(path string) error {
 	data, err := os.ReadFile(path)
@@ -1039,18 +1098,36 @@ func ValidateSessionFile(path string) error {
 		return fmt.Errorf("failed to read session file: %w", err)
 	}
 
-	var state SessionState
-	if err := json.Unmarshal(data, &state); err != nil {
+	// Check version first
+	var versionCheck struct {
+		Version int `json:"version"`
+	}
+	if err := json.Unmarshal(data, &versionCheck); err != nil {
 		return fmt.Errorf("invalid JSON: %w", err)
 	}
 
-	if state.Version > SessionStateVersion {
+	if versionCheck.Version > SessionStateVersion {
 		return fmt.Errorf("session file version %d is newer than supported version %d",
-			state.Version, SessionStateVersion)
+			versionCheck.Version, SessionStateVersion)
 	}
 
-	if state.Preset == "" {
-		return fmt.Errorf("missing preset in session file")
+	// Validate based on version
+	if versionCheck.Version <= 3 {
+		var state sessionStateV3
+		if err := json.Unmarshal(data, &state); err != nil {
+			return fmt.Errorf("invalid JSON: %w", err)
+		}
+		if state.Preset == "" {
+			return fmt.Errorf("missing preset in session file")
+		}
+	} else {
+		var state SessionState
+		if err := json.Unmarshal(data, &state); err != nil {
+			return fmt.Errorf("invalid JSON: %w", err)
+		}
+		if state.Config == nil || state.Config.Preset == "" {
+			return fmt.Errorf("missing preset in session file")
+		}
 	}
 
 	return nil

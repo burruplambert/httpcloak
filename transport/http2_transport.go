@@ -313,6 +313,7 @@ func (t *HTTP2Transport) createConn(ctx context.Context, host, port string) (*pe
 		MinVersion:                         minVersion,
 		MaxVersion:                         tls.VersionTLS13,
 		ClientSessionCache:                 t.sessionCache,
+		OmitEmptyPsk:                       true,          // Chrome doesn't send empty PSK on first connection
 		PreferSkipResumptionOnNilExtension: true,          // Skip resumption if spec has no PSK extension instead of panicking
 		EncryptedClientHelloConfigList:     echConfigList, // ECH configuration (if available)
 	}
