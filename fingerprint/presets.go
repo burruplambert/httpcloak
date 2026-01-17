@@ -75,7 +75,7 @@ type HTTP2Settings struct {
 	MaxHeaderListSize    uint32
 	// Window update and stream settings
 	ConnectionWindowUpdate uint32
-	StreamWeight           uint16 // Chrome uses 256
+	StreamWeight           uint16 // Chrome sends 219 on wire (set to 220, code does -1)
 	StreamExclusive        bool
 }
 
@@ -114,7 +114,7 @@ func Chrome131() *Preset {
 			MaxFrameSize:           16384,
 			MaxHeaderListSize:      262144,
 			ConnectionWindowUpdate: 15663105,
-			StreamWeight:           256, // Chrome uses 256, not 255
+			StreamWeight:           220, // Chrome uses 219 (verified via dissecticon)
 			StreamExclusive:        true,
 		},
 		SupportHTTP3: true,
@@ -154,7 +154,7 @@ func Chrome133() *Preset {
 			MaxFrameSize:           16384,
 			MaxHeaderListSize:      262144,
 			ConnectionWindowUpdate: 15663105,
-			StreamWeight:           256,
+			StreamWeight:           220,
 			StreamExclusive:        true,
 		},
 		SupportHTTP3: true,
@@ -194,7 +194,7 @@ func Chrome141() *Preset {
 			MaxFrameSize:           16384,
 			MaxHeaderListSize:      262144,
 			ConnectionWindowUpdate: 15663105,
-			StreamWeight:           256,
+			StreamWeight:           220,
 			StreamExclusive:        true,
 		},
 		SupportHTTP3: true,
@@ -295,7 +295,7 @@ func Chrome143() *Preset {
 			MaxFrameSize:           16384,
 			MaxHeaderListSize:      262144,
 			ConnectionWindowUpdate: 15663105,
-			StreamWeight:           256,
+			StreamWeight:           220,
 			StreamExclusive:        true,
 		},
 		SupportHTTP3: true,
@@ -336,7 +336,7 @@ func Chrome143Windows() *Preset {
 			MaxFrameSize:           16384,
 			MaxHeaderListSize:      262144,
 			ConnectionWindowUpdate: 15663105,
-			StreamWeight:           256,
+			StreamWeight:           220,
 			StreamExclusive:        true,
 		},
 		SupportHTTP3: true,
@@ -377,7 +377,7 @@ func Chrome143Linux() *Preset {
 			MaxFrameSize:           16384,
 			MaxHeaderListSize:      262144,
 			ConnectionWindowUpdate: 15663105,
-			StreamWeight:           256,
+			StreamWeight:           220,
 			StreamExclusive:        true,
 		},
 		SupportHTTP3: true,
@@ -418,7 +418,7 @@ func Chrome143macOS() *Preset {
 			MaxFrameSize:           16384,
 			MaxHeaderListSize:      262144,
 			ConnectionWindowUpdate: 15663105,
-			StreamWeight:           256,
+			StreamWeight:           220,
 			StreamExclusive:        true,
 		},
 		SupportHTTP3: true,
@@ -556,7 +556,7 @@ func AndroidChrome143() *Preset {
 			MaxFrameSize:           16384,
 			MaxHeaderListSize:      262144,
 			ConnectionWindowUpdate: 15663105,
-			StreamWeight:           256,
+			StreamWeight:           220,
 			StreamExclusive:        true,
 		},
 		SupportHTTP3: true,
