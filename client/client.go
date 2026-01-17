@@ -1207,13 +1207,14 @@ func applyModeHeaders(httpReq *http.Request, preset *fingerprint.Preset, req *Re
 	}
 
 	// Set header order for HTTP/2 and HTTP/3 fingerprinting
-	// This ensures headers are sent in the same order as Chrome
+	// This ensures headers are sent in the same order as Chrome 143
+	// Order verified via dissecticon fingerprint server
 	httpReq.Header[http.HeaderOrderKey] = []string{
-		"sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform",
-		"upgrade-insecure-requests", "user-agent", "accept",
+		"content-length", "sec-ch-ua-platform", "user-agent", "sec-ch-ua",
+		"content-type", "sec-ch-ua-mobile", "accept", "origin",
 		"sec-fetch-site", "sec-fetch-mode", "sec-fetch-user", "sec-fetch-dest",
-		"accept-encoding", "accept-language",
-		"cookie", "priority", "origin", "referer",
+		"referer", "accept-encoding", "accept-language", "priority",
+		"upgrade-insecure-requests", "cookie",
 	}
 
 	// Set pseudo-header order (Chrome uses :method, :authority, :scheme, :path)
@@ -1312,6 +1313,10 @@ func applyCORSModeHeaders(httpReq *http.Request, preset *fingerprint.Preset, req
 	} else {
 		httpReq.Header.Set("Origin", parsedURL.Scheme+"://"+parsedURL.Host)
 	}
+
+	// Priority header for CORS mode (Chrome 143+)
+	// CORS uses "u=1, i" (urgency 1, incremental) vs navigation's "u=0, i"
+	httpReq.Header.Set("Priority", "u=1, i")
 }
 
 // detectSecFetchSiteForMode determines the Sec-Fetch-Site header value
