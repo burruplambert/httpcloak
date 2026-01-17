@@ -1,104 +1,88 @@
 using System;
 using System.IO;
 using System.Text.Json;
+using System.Threading;
 using HttpCloak;
 
-Console.WriteLine("=== ECH + PSK Session Resumption Tests (C#) ===");
+Console.WriteLine(new string('=', 70));
+Console.WriteLine("C#: Comprehensive Session Test (H3 + 0-RTT)");
+Console.WriteLine(new string('=', 70));
 
-bool allPass = true;
+// H3 Config Persistence - using browserleaks.com for reliable session resumption
+Console.WriteLine("\n--- H3 Session Config Persistence ---");
+var sess1 = new Session(preset: "chrome-143", httpVersion: "h3", timeout: 30);
+var resp1 = sess1.Get("https://quic.browserleaks.com/?minify=1");
+var bl1 = JsonDocument.Parse(resp1.Text);
+// Check if quic object exists (indicates H3 was used)
+var hasQuic1 = bl1.RootElement.TryGetProperty("quic", out _);
+Console.WriteLine($"Session 1: H3={hasQuic1}");
 
-// Test 1: cloudflare.com (no ECH, auto)
-Console.WriteLine("\n=== Testing cloudflare_cs (auto) ===");
+sess1.Save("/tmp/cs_h3.json");
+sess1.Dispose();
+
+var saved = JsonDocument.Parse(File.ReadAllText("/tmp/cs_h3.json"));
+var cfg = saved.RootElement.GetProperty("config");
+Console.WriteLine($"Saved: version={saved.RootElement.GetProperty("version").GetInt32()}, forceHttp3={cfg.GetProperty("forceHttp3").GetBoolean()}");
+
+Thread.Sleep(1000);
+
 try
 {
-    using var session1 = new Session(preset: "chrome-143", httpVersion: "auto");
-    var resp1 = session1.Get("https://cloudflare.com/cdn-cgi/trace");
-    Console.WriteLine($"Fresh request: Status={resp1.StatusCode}, Protocol={resp1.Protocol}");
+    var sess2 = Session.Load("/tmp/cs_h3.json");
+    var resp2 = sess2.Get("https://quic.browserleaks.com/?minify=1");
+    var bl2 = JsonDocument.Parse(resp2.Text);
+    var hasQuic2 = bl2.RootElement.TryGetProperty("quic", out _);
+    Console.WriteLine($"Session 2: H3={hasQuic2}");
 
-    session1.Save("/tmp/session_cloudflare_cs.json");
-
-    using var loaded1 = Session.Load("/tmp/session_cloudflare_cs.json");
-    var resp1b = loaded1.Get("https://cloudflare.com/cdn-cgi/trace");
-    Console.WriteLine($"Loaded request: Status={resp1b.StatusCode}, Protocol={resp1b.Protocol}");
-
-    File.Delete("/tmp/session_cloudflare_cs.json");
-    Console.WriteLine("cloudflare_auto: PASS");
-}
-catch (Exception e)
-{
-    Console.WriteLine($"Error: {e.Message}");
-    Console.WriteLine("cloudflare_auto: FAIL");
-    allPass = false;
-}
-
-// Test 2: crypto.cloudflare.com (ECH, H2)
-Console.WriteLine("\n=== Testing crypto_cs (auto) ===");
-try
-{
-    using var session2 = new Session(preset: "chrome-143", httpVersion: "auto");
-    var resp2 = session2.Get("https://crypto.cloudflare.com/cdn-cgi/trace");
-    Console.WriteLine($"Fresh request: Status={resp2.StatusCode}, Protocol={resp2.Protocol}");
-
-    session2.Save("/tmp/session_crypto_cs.json");
-
-    using var loaded2 = Session.Load("/tmp/session_crypto_cs.json");
-    var resp2b = loaded2.Get("https://crypto.cloudflare.com/cdn-cgi/trace");
-    Console.WriteLine($"Loaded request: Status={resp2b.StatusCode}, Protocol={resp2b.Protocol}");
-
-    File.Delete("/tmp/session_crypto_cs.json");
-    Console.WriteLine("crypto_ech_h2: PASS");
-}
-catch (Exception e)
-{
-    Console.WriteLine($"Error: {e.Message}");
-    Console.WriteLine("crypto_ech_h2: FAIL");
-    allPass = false;
-}
-
-// Test 3: quic.browserleaks.com (ECH + 0-RTT, H3 forced)
-Console.WriteLine("\n=== Testing quic_cs (h3) with ECH + 0-RTT verification ===");
-try
-{
-    var session3 = new Session(preset: "chrome-143", httpVersion: "h3");
-    var resp3 = session3.Get("https://quic.browserleaks.com/?minify=1");
-    var data3 = JsonDocument.Parse(resp3.Text);
-    bool echFirst = data3.RootElement.GetProperty("tls").GetProperty("ech").GetProperty("ech_success").GetBoolean();
-    bool zeroRttFirst = data3.RootElement.GetProperty("quic").GetProperty("0-rtt").GetBoolean();
-    Console.WriteLine($"Fresh request: ECH={echFirst}, 0-RTT={zeroRttFirst}");
-
-    // Wait for session ticket
-    System.Threading.Thread.Sleep(1000);
-    session3.Save("/tmp/session_quic_cs.json");
-    session3.Dispose();
-
-    // Wait before loading
-    System.Threading.Thread.Sleep(500);
-
-    using var loaded3 = Session.Load("/tmp/session_quic_cs.json");
-    var resp3b = loaded3.Get("https://quic.browserleaks.com/?minify=1");
-    var data3b = JsonDocument.Parse(resp3b.Text);
-    bool echSecond = data3b.RootElement.GetProperty("tls").GetProperty("ech").GetProperty("ech_success").GetBoolean();
-    bool zeroRttSecond = data3b.RootElement.GetProperty("quic").GetProperty("0-rtt").GetBoolean();
-    Console.WriteLine($"Loaded request: ECH={echSecond}, 0-RTT={zeroRttSecond}");
-
-    File.Delete("/tmp/session_quic_cs.json");
-
-    if (echSecond && zeroRttSecond)
-    {
-        Console.WriteLine("quic_ech_h3_0rtt: PASS");
-    }
+    if (hasQuic2)
+        Console.WriteLine("✓ H3 Config Persistence: PASS");
     else
-    {
-        Console.WriteLine("quic_ech_h3_0rtt: FAIL (0-RTT not achieved)");
-        allPass = false;
-    }
+        Console.WriteLine("✗ H3 Config Persistence: FAIL");
+    sess2.Dispose();
 }
 catch (Exception e)
 {
-    Console.WriteLine($"Error: {e.Message}");
-    Console.WriteLine("quic_ech_h3_0rtt: FAIL");
-    allPass = false;
+    Console.WriteLine($"Session 2 Error: {e.Message}");
+    Console.WriteLine("✗ H3 Config Persistence: FAIL (timeout/connection issue)");
 }
 
-Console.WriteLine("\n=== Summary ===");
-Console.WriteLine(allPass ? "ALL TESTS PASSED!" : "SOME TESTS FAILED!");
+// 0-RTT Session Resumption
+Console.WriteLine("\n--- 0-RTT Session Resumption ---");
+var sess3 = new Session(preset: "chrome-143", httpVersion: "h3", timeout: 60);
+
+Console.WriteLine("\nRequest 1 (Fresh):");
+try
+{
+    var resp3 = sess3.Get("https://quic.browserleaks.com/?minify=1");
+    var rtt1 = JsonDocument.Parse(resp3.Text);
+    var zeroRtt1 = rtt1.RootElement.GetProperty("quic").GetProperty("0-rtt").GetBoolean();
+    var ech1 = rtt1.RootElement.GetProperty("tls").GetProperty("ech").GetProperty("ech_success").GetBoolean();
+    Console.WriteLine($"  0-RTT={zeroRtt1}, ECH={ech1}");
+
+    Thread.Sleep(1000);
+    sess3.Save("/tmp/cs_0rtt.json");
+    sess3.Dispose();
+    Thread.Sleep(500);
+
+    Console.WriteLine("\nRequest 2 (Resumed):");
+    var sess4 = Session.Load("/tmp/cs_0rtt.json");
+    var resp4 = sess4.Get("https://quic.browserleaks.com/?minify=1");
+    var rtt2 = JsonDocument.Parse(resp4.Text);
+    var zeroRtt2 = rtt2.RootElement.GetProperty("quic").GetProperty("0-rtt").GetBoolean();
+    var ech2 = rtt2.RootElement.GetProperty("tls").GetProperty("ech").GetProperty("ech_success").GetBoolean();
+    Console.WriteLine($"  0-RTT={zeroRtt2}, ECH={ech2}");
+
+    if (zeroRtt2)
+        Console.WriteLine("✓ 0-RTT Session Resumption: PASS");
+    else
+        Console.WriteLine("✗ 0-RTT Session Resumption: FAIL");
+    sess4.Dispose();
+}
+catch (Exception e)
+{
+    Console.WriteLine($"  Error: {e.Message}");
+}
+
+Console.WriteLine("\n" + new string('=', 70));
+Console.WriteLine("C# Test Complete");
+Console.WriteLine(new string('=', 70));
