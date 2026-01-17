@@ -21,8 +21,9 @@ sess1.Save("/tmp/cs_h3.json");
 sess1.Dispose();
 
 var saved = JsonDocument.Parse(File.ReadAllText("/tmp/cs_h3.json"));
-var cfg = saved.RootElement.GetProperty("config");
-Console.WriteLine($"Saved: version={saved.RootElement.GetProperty("version").GetInt32()}, forceHttp3={cfg.GetProperty("forceHttp3").GetBoolean()}");
+var version = saved.RootElement.GetProperty("version").GetInt32();
+var forceHttp3 = saved.RootElement.GetProperty("force_http3").GetBoolean();
+Console.WriteLine($"Saved: version={version}, forceHttp3={forceHttp3}");
 
 Thread.Sleep(1000);
 
