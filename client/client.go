@@ -160,6 +160,14 @@ func NewClient(presetName string, opts ...Option) *Client {
 	h1Transport := transport.NewHTTP1TransportWithProxy(preset, h2Manager.GetDNSCache(), tcpProxyConfig)
 	h1Transport.SetInsecureSkipVerify(config.InsecureSkipVerify)
 
+	// Propagate InsecureSkipVerify to QUIC manager and MASQUE transport
+	if quicManager != nil {
+		quicManager.SetInsecureSkipVerify(config.InsecureSkipVerify)
+	}
+	if masqueTransport != nil {
+		masqueTransport.SetInsecureSkipVerify(config.InsecureSkipVerify)
+	}
+
 	// Propagate ConnectTo mappings (domain fronting)
 	for requestHost, connectHost := range config.ConnectTo {
 		h2Manager.SetConnectTo(requestHost, connectHost)

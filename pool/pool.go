@@ -112,10 +112,14 @@ type HostPool struct {
 	// Chrome reuses sessions - this makes subsequent connections look like real browser
 	sessionCache utls.ClientSessionCache
 
-	// Cached ClientHelloSpec - shuffled once on pool creation, reused for all connections
-	// This matches Chrome's behavior: shuffle TLS extensions once per session, not per connection
+	// Cached ClientHelloSpec - used to check if PSK spec is available
+	// Note: Do not reuse directly - generate fresh spec per connection to avoid race
 	cachedSpec    *utls.ClientHelloSpec
 	cachedPSKSpec *utls.ClientHelloSpec
+
+	// Shuffle seed for generating fresh specs per connection
+	// utls's ApplyPreset mutates specs, so each connection needs its own copy
+	shuffleSeed int64
 
 	// Configuration
 	maxConns           int
@@ -134,21 +138,26 @@ type HostPool struct {
 // Note: This generates its own shuffled specs. For consistent session fingerprinting,
 // use Manager.GetPool() instead which shares cached specs across all hosts.
 func NewHostPool(host, port string, preset *fingerprint.Preset, dnsCache *dns.Cache) *HostPool {
+	// Generate shuffle seed for standalone usage
+	var seedBytes [8]byte
+	crand.Read(seedBytes[:])
+	shuffleSeed := int64(binary.LittleEndian.Uint64(seedBytes[:]))
+
 	// Generate specs for standalone usage (backward compatibility)
 	var cachedSpec, cachedPSKSpec *utls.ClientHelloSpec
-	if spec, err := utls.UTLSIdToSpec(preset.ClientHelloID); err == nil {
+	if spec, err := utls.UTLSIdToSpecWithSeed(preset.ClientHelloID, shuffleSeed); err == nil {
 		cachedSpec = &spec
 	}
 	if preset.PSKClientHelloID.Client != "" {
-		if spec, err := utls.UTLSIdToSpec(preset.PSKClientHelloID); err == nil {
+		if spec, err := utls.UTLSIdToSpecWithSeed(preset.PSKClientHelloID, shuffleSeed); err == nil {
 			cachedPSKSpec = &spec
 		}
 	}
-	return NewHostPoolWithConfig(host, port, preset, dnsCache, false, "", cachedSpec, cachedPSKSpec)
+	return NewHostPoolWithConfig(host, port, preset, dnsCache, false, "", cachedSpec, cachedPSKSpec, shuffleSeed)
 }
 
 // NewHostPoolWithConfig creates a pool with TLS and proxy configuration
-func NewHostPoolWithConfig(host, port string, preset *fingerprint.Preset, dnsCache *dns.Cache, insecureSkipVerify bool, proxyURL string, cachedSpec, cachedPSKSpec *utls.ClientHelloSpec) *HostPool {
+func NewHostPoolWithConfig(host, port string, preset *fingerprint.Preset, dnsCache *dns.Cache, insecureSkipVerify bool, proxyURL string, cachedSpec, cachedPSKSpec *utls.ClientHelloSpec, shuffleSeed int64) *HostPool {
 	pool := &HostPool{
 		host:               host,
 		port:               port,
@@ -162,8 +171,9 @@ func NewHostPoolWithConfig(host, port string, preset *fingerprint.Preset, dnsCac
 		connectTimeout:     30 * time.Second,
 		insecureSkipVerify: insecureSkipVerify,
 		proxyURL:           proxyURL,
-		cachedSpec:         cachedSpec,    // Use manager's cached spec for consistent shuffle
-		cachedPSKSpec:      cachedPSKSpec, // Use manager's cached PSK spec
+		cachedSpec:         cachedSpec,    // Reference spec (for availability check)
+		cachedPSKSpec:      cachedPSKSpec, // Reference PSK spec (for availability check)
+		shuffleSeed:        shuffleSeed,   // Seed for generating fresh specs per connection
 	}
 
 	return pool
@@ -307,45 +317,47 @@ func (p *HostPool) createConn(ctx context.Context) (*Conn, error) {
 		EncryptedClientHelloConfigList: echConfigList,  // ECH configuration (if available)
 	}
 
-	// Determine which cached spec to use:
-	// - If we have a cached session for this host and PSK spec available, use PSK spec
-	// - Otherwise use the regular cached spec
-	// Using cached specs ensures TLS extension order is consistent (shuffled once per session, like Chrome)
+	// Generate fresh spec for this connection to avoid race condition
+	// utls's ApplyPreset mutates the spec (clears KeyShares.Data, etc.), so each
+	// connection needs its own copy. Use same shuffleSeed for consistent ordering.
 	var specToUse *utls.ClientHelloSpec
-	usePSK := false
-	if p.cachedPSKSpec != nil {
-		// Check if there's a cached session (key is ServerName)
-		if session, ok := p.sessionCache.Get(p.host); ok && session != nil {
-			specToUse = p.cachedPSKSpec
-			usePSK = true
+	var tlsConn *utls.UConn
+
+	// Prefer PSK spec when available - Chrome always includes PSK extension structure
+	if p.cachedPSKSpec != nil && p.preset.PSKClientHelloID.Client != "" {
+		// Generate fresh PSK spec for this connection
+		if spec, err := utls.UTLSIdToSpecWithSeed(p.preset.PSKClientHelloID, p.shuffleSeed); err == nil {
+			specToUse = &spec
 		}
 	}
-	if specToUse == nil {
-		specToUse = p.cachedSpec
+	if specToUse == nil && p.cachedSpec != nil {
+		// Generate fresh regular spec
+		if spec, err := utls.UTLSIdToSpecWithSeed(p.preset.ClientHelloID, p.shuffleSeed); err == nil {
+			specToUse = &spec
+		}
 	}
 
-	// Create UClient with HelloCustom and apply our cached spec
-	// This ensures the TLS extension order is consistent across all connections
-	var tlsConn *utls.UConn
+	// Create UClient with HelloCustom and apply the fresh spec
 	if specToUse != nil {
-		// Use cached spec - extension order is preserved from pool creation
 		tlsConn = utls.UClient(rawConn, tlsConfig, utls.HelloCustom)
 		if err := tlsConn.ApplyPreset(specToUse); err != nil {
 			rawConn.Close()
 			return nil, fmt.Errorf("failed to apply TLS preset: %w", err)
 		}
 	} else {
-		// Fallback to ClientHelloID if spec caching failed
+		// Fallback to ClientHelloID if spec generation failed - prefer PSK variant
 		clientHelloID := p.preset.ClientHelloID
-		if usePSK && p.preset.PSKClientHelloID.Client != "" {
+		if p.preset.PSKClientHelloID.Client != "" {
 			clientHelloID = p.preset.PSKClientHelloID
 		}
 		tlsConn = utls.UClient(rawConn, tlsConfig, clientHelloID)
 	}
 
-	// Set session cache on the connection for PSK/resumption
-	// This enables pre_shared_key extension on subsequent connections
-	tlsConn.SetSessionCache(p.sessionCache)
+	// Only enable session cache if we have PSK spec - prevents panic when session
+	// is cached but spec doesn't have PSK extension (TOCTOU race mitigation)
+	if p.cachedPSKSpec != nil {
+		tlsConn.SetSessionCache(p.sessionCache)
+	}
 
 	// Perform TLS handshake
 	if err := tlsConn.HandshakeContext(ctx); err != nil {
@@ -1048,7 +1060,7 @@ func (m *Manager) GetPool(host, port string) (*HostPool, error) {
 		return pool, nil
 	}
 
-	pool = NewHostPoolWithConfig(host, port, m.preset, m.dnsCache, m.insecureSkipVerify, m.proxyURL, m.cachedSpec, m.cachedPSKSpec)
+	pool = NewHostPoolWithConfig(host, port, m.preset, m.dnsCache, m.insecureSkipVerify, m.proxyURL, m.cachedSpec, m.cachedPSKSpec, m.shuffleSeed)
 	if m.maxConnsPerHost > 0 {
 		pool.SetMaxConns(m.maxConnsPerHost)
 	}

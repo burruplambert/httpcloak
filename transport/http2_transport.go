@@ -273,17 +273,13 @@ func (t *HTTP2Transport) createConn(ctx context.Context, host, port string) (*pe
 	}
 
 	// Determine which cached spec to use:
-	// - If we have a cached session for this host and PSK spec available, use PSK spec
-	// - Otherwise use the regular cached spec
-	// Using cached specs ensures TLS extension order is consistent (shuffled once per session, like Chrome)
+	// Always use PSK spec when available - Chrome always includes the PSK extension structure
+	// in ClientHello, it's just empty on first connection and populated on resumption.
+	// This avoids TOCTOU race: checking session cache here but session arriving before handshake.
 	var specToUse *utls.ClientHelloSpec
 	if t.cachedPSKSpec != nil {
-		// Check if there's a cached session - if so, use PSK spec for resumption
-		if session, ok := t.sessionCache.Get(host); ok && session != nil {
-			specToUse = t.cachedPSKSpec
-		}
-	}
-	if specToUse == nil {
+		specToUse = t.cachedPSKSpec
+	} else {
 		specToUse = t.cachedSpec
 	}
 
@@ -312,10 +308,15 @@ func (t *HTTP2Transport) createConn(ctx context.Context, host, port string) (*pe
 		InsecureSkipVerify:                 false,
 		MinVersion:                         minVersion,
 		MaxVersion:                         tls.VersionTLS13,
-		ClientSessionCache:                 t.sessionCache,
 		OmitEmptyPsk:                       true,          // Chrome doesn't send empty PSK on first connection
 		PreferSkipResumptionOnNilExtension: true,          // Skip resumption if spec has no PSK extension instead of panicking
 		EncryptedClientHelloConfigList:     echConfigList, // ECH configuration (if available)
+	}
+
+	// Only enable session cache if we have PSK spec - prevents panic when session
+	// is cached but spec doesn't have PSK extension (TOCTOU race mitigation)
+	if t.cachedPSKSpec != nil {
+		tlsConfig.ClientSessionCache = t.sessionCache
 	}
 
 	// Create UClient with HelloCustom and apply our cached spec
@@ -333,8 +334,10 @@ func (t *HTTP2Transport) createConn(ctx context.Context, host, port string) (*pe
 		tlsConn = utls.UClient(rawConn, tlsConfig, t.preset.ClientHelloID)
 	}
 
-	// Set session cache for TLS resumption (faster subsequent connections)
-	tlsConn.SetSessionCache(t.sessionCache)
+	// Set session cache for TLS resumption (only if PSK spec available)
+	if t.cachedPSKSpec != nil {
+		tlsConn.SetSessionCache(t.sessionCache)
+	}
 
 	// Perform TLS handshake
 	if err := tlsConn.HandshakeContext(ctx); err != nil {

@@ -209,12 +209,13 @@ type QUICHostPool struct {
 	sessionCache tls.ClientSessionCache
 
 	// Configuration
-	maxConns        int
-	maxIdleTime     time.Duration
-	maxConnAge      time.Duration
-	connectTimeout  time.Duration
-	echConfig       []byte // Custom ECH configuration
-	echConfigDomain string // Domain to fetch ECH config from
+	maxConns           int
+	maxIdleTime        time.Duration
+	maxConnAge         time.Duration
+	connectTimeout     time.Duration
+	echConfig          []byte // Custom ECH configuration
+	echConfigDomain    string // Domain to fetch ECH config from
+	insecureSkipVerify bool   // Skip TLS certificate verification (for testing)
 }
 
 // NewQUICHostPool creates a new QUIC pool for a specific host
@@ -324,33 +325,36 @@ func (p *QUICHostPool) createConn(ctx context.Context) (*QUICConn, error) {
 	// TLS config for QUIC (HTTP/3)
 	tlsConfig := &tls.Config{
 		ServerName:         p.host,
-		InsecureSkipVerify: false,
+		InsecureSkipVerify: p.insecureSkipVerify,
 		NextProtos:         []string{http3.NextProtoH3}, // HTTP/3 ALPN
 		MinVersion:         tls.VersionTLS13,
-		ClientSessionCache: p.sessionCache, // Enable 0-RTT session resumption
 	}
 
-	// Check if we have a cached session for this host - if so, use PSK spec for resumption
-	// Chrome uses different ClientHello extensions when resuming vs new connection
-	hasSession := false
-	if p.sessionCache != nil {
-		if cs, ok := p.sessionCache.Get(p.host); ok && cs != nil {
-			hasSession = true
-		}
+	// Only enable session cache if we have PSK spec - prevents panic when session
+	// is cached but spec doesn't have PSK extension (TOCTOU race mitigation)
+	if p.cachedPSKSpec != nil {
+		tlsConfig.ClientSessionCache = p.sessionCache
 	}
 
-	// Select the appropriate ClientHelloSpec based on session availability
-	// PSK spec includes pre_shared_key extension needed for session resumption
-	selectedSpec := p.cachedClientHelloSpec
-	if hasSession && p.cachedPSKSpec != nil {
-		selectedSpec = p.cachedPSKSpec
-	}
-
-	// Get ClientHelloID from preset for TLS fingerprinting (fallback)
+	// Generate fresh spec for this connection to avoid race condition
+	// utls's ApplyPreset (used internally by QUIC) mutates the spec, so each
+	// connection needs its own copy. Use same shuffleSeed for consistent ordering.
+	var selectedSpec *utls.ClientHelloSpec
 	var clientHelloID *utls.ClientHelloID
-	if hasSession && p.preset != nil && p.preset.QUICPSKClientHelloID.Client != "" {
+
+	// Prefer PSK spec when available - Chrome always includes PSK extension structure
+	if p.cachedPSKSpec != nil && p.preset != nil && p.preset.QUICPSKClientHelloID.Client != "" {
+		// Generate fresh PSK spec for this connection
+		if spec, err := utls.UTLSIdToSpecWithSeed(p.preset.QUICPSKClientHelloID, p.shuffleSeed); err == nil {
+			selectedSpec = &spec
+		}
 		clientHelloID = &p.preset.QUICPSKClientHelloID
-	} else if p.preset != nil && p.preset.QUICClientHelloID.Client != "" {
+	}
+	if selectedSpec == nil && p.cachedClientHelloSpec != nil && p.preset != nil && p.preset.QUICClientHelloID.Client != "" {
+		// Generate fresh regular spec
+		if spec, err := utls.UTLSIdToSpecWithSeed(p.preset.QUICClientHelloID, p.shuffleSeed); err == nil {
+			selectedSpec = &spec
+		}
 		clientHelloID = &p.preset.QUICClientHelloID
 	}
 
@@ -542,10 +546,11 @@ type QUICManager struct {
 	closed   bool
 
 	// Configuration
-	maxConnsPerHost int               // 0 = unlimited
-	connectTo       map[string]string // Domain fronting: request host -> connect host
-	echConfig       []byte            // Custom ECH configuration
-	echConfigDomain string            // Domain to fetch ECH config from
+	maxConnsPerHost    int               // 0 = unlimited
+	connectTo          map[string]string // Domain fronting: request host -> connect host
+	echConfig          []byte            // Custom ECH configuration
+	echConfigDomain    string            // Domain to fetch ECH config from
+	insecureSkipVerify bool              // Skip TLS certificate verification
 
 	// Cached TLS specs - shared across all QUICHostPools for consistent fingerprint
 	// Chrome shuffles extension order once per session, not per connection
@@ -628,6 +633,13 @@ func (m *QUICManager) SetECHConfigDomain(domain string) {
 	m.echConfigDomain = domain
 }
 
+// SetInsecureSkipVerify sets whether to skip TLS certificate verification
+func (m *QUICManager) SetInsecureSkipVerify(skip bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.insecureSkipVerify = skip
+}
+
 // GetPool returns a pool for the given host, creating one if needed
 func (m *QUICManager) GetPool(host, port string) (*QUICHostPool, error) {
 	if port == "" {
@@ -671,6 +683,8 @@ func (m *QUICManager) GetPool(host, port string) (*QUICHostPool, error) {
 	if m.echConfigDomain != "" {
 		pool.echConfigDomain = m.echConfigDomain
 	}
+	// Pass InsecureSkipVerify to the pool
+	pool.insecureSkipVerify = m.insecureSkipVerify
 	m.pools[key] = pool
 	return pool, nil
 }

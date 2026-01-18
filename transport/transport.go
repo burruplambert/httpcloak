@@ -330,6 +330,9 @@ func (t *Transport) SetProtocol(p Protocol) {
 func (t *Transport) SetInsecureSkipVerify(skip bool) {
 	t.insecureSkipVerify = skip
 	t.h1Transport.SetInsecureSkipVerify(skip)
+	if t.h3Transport != nil {
+		t.h3Transport.SetInsecureSkipVerify(skip)
+	}
 }
 
 // SetProxy sets or updates the proxy configuration

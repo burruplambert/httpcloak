@@ -129,6 +129,17 @@ type HTTP3Transport struct {
 	// to create the original session ticket, not a fresh one from DNS
 	echConfigCache   map[string][]byte
 	echConfigCacheMu sync.RWMutex
+
+	// Skip TLS certificate verification (for testing)
+	insecureSkipVerify bool
+}
+
+// SetInsecureSkipVerify sets whether to skip TLS certificate verification
+func (t *HTTP3Transport) SetInsecureSkipVerify(skip bool) {
+	t.insecureSkipVerify = skip
+	if t.tlsConfig != nil {
+		t.tlsConfig.InsecureSkipVerify = skip
+	}
 }
 
 // hasSessionForHost checks if there's a cached TLS session for the given host
@@ -146,18 +157,21 @@ func (t *HTTP3Transport) hasSessionForHost(host string) bool {
 	return found
 }
 
-// getSpecForHost returns the appropriate ClientHelloSpec based on whether there's a cached session
-// Returns PSK spec if session exists (for 0-RTT resumption), otherwise regular spec
+// getSpecForHost returns the appropriate ClientHelloSpec for consistent TLS fingerprint
+// Always use PSK spec when available - Chrome always includes the PSK extension structure
+// in ClientHello, it's just empty on first connection and populated on resumption.
+// This avoids TOCTOU race: checking session cache here but session arriving before handshake.
 func (t *HTTP3Transport) getSpecForHost(host string) *utls.ClientHelloSpec {
-	if t.hasSessionForHost(host) && t.cachedClientHelloSpecPSK != nil {
+	if t.cachedClientHelloSpecPSK != nil {
 		return t.cachedClientHelloSpecPSK
 	}
 	return t.cachedClientHelloSpec
 }
 
 // getInnerSpecForHost returns the appropriate inner ClientHelloSpec for MASQUE connections
+// Always uses PSK spec when available for the same TOCTOU race prevention reason.
 func (t *HTTP3Transport) getInnerSpecForHost(host string) *utls.ClientHelloSpec {
-	if t.hasSessionForHost(host) && t.cachedClientHelloSpecInnerPSK != nil {
+	if t.cachedClientHelloSpecInnerPSK != nil {
 		return t.cachedClientHelloSpecInnerPSK
 	}
 	return t.cachedClientHelloSpecInner
@@ -184,14 +198,6 @@ func NewHTTP3TransportWithTransportConfig(preset *fingerprint.Preset, dnsCache *
 		echConfigCache: make(map[string][]byte), // Cache for ECH configs (for session resumption)
 	}
 
-	// Create TLS config for QUIC with session cache for 0-RTT
-	t.tlsConfig = &tls.Config{
-		NextProtos:         []string{http3.NextProtoH3},
-		MinVersion:         tls.VersionTLS13,
-		InsecureSkipVerify: false,
-		ClientSessionCache: t.sessionCache, // Enable 0-RTT session resumption
-	}
-
 	// Get the ClientHelloID for TLS fingerprinting in QUIC
 	// Use QUIC-specific preset if available (different TLS extensions for HTTP/3)
 	var clientHelloID *utls.ClientHelloID
@@ -216,10 +222,21 @@ func NewHTTP3TransportWithTransportConfig(preset *fingerprint.Preset, dnsCache *
 	// Also cache the PSK spec for session resumption (includes pre_shared_key extension)
 	// Chrome uses a different TLS extension set when resuming with PSK
 	if preset.QUICPSKClientHelloID.Client != "" {
-		pskSpec, err := utls.UTLSIdToSpecWithSeed(preset.QUICPSKClientHelloID, shuffleSeed)
-		if err == nil {
+		if pskSpec, err := utls.UTLSIdToSpecWithSeed(preset.QUICPSKClientHelloID, shuffleSeed); err == nil {
 			t.cachedClientHelloSpecPSK = &pskSpec
 		}
+	}
+
+	// Create TLS config for QUIC
+	// Only enable session cache if we have PSK spec - prevents panic when session
+	// is cached but spec doesn't have PSK extension (TOCTOU race mitigation)
+	t.tlsConfig = &tls.Config{
+		NextProtos:         []string{http3.NextProtoH3},
+		MinVersion:         tls.VersionTLS13,
+		InsecureSkipVerify: t.insecureSkipVerify,
+	}
+	if t.cachedClientHelloSpecPSK != nil {
+		t.tlsConfig.ClientSessionCache = t.sessionCache
 	}
 
 	// Create QUIC config with connection reuse settings and TLS fingerprinting
@@ -317,14 +334,6 @@ func NewHTTP3TransportWithConfig(preset *fingerprint.Preset, dnsCache *dns.Cache
 		echConfigCache: make(map[string][]byte),
 	}
 
-	// Create TLS config for QUIC
-	t.tlsConfig = &tls.Config{
-		NextProtos:         []string{http3.NextProtoH3},
-		MinVersion:         tls.VersionTLS13,
-		InsecureSkipVerify: false,
-		ClientSessionCache: t.sessionCache,
-	}
-
 	// Get ClientHelloID for TLS fingerprinting
 	var clientHelloID *utls.ClientHelloID
 	if preset.QUICClientHelloID.Client != "" {
@@ -343,10 +352,21 @@ func NewHTTP3TransportWithConfig(preset *fingerprint.Preset, dnsCache *dns.Cache
 
 	// Also cache the PSK spec for session resumption (includes pre_shared_key extension)
 	if preset.QUICPSKClientHelloID.Client != "" {
-		pskSpec, err := utls.UTLSIdToSpecWithSeed(preset.QUICPSKClientHelloID, shuffleSeed)
-		if err == nil {
+		if pskSpec, err := utls.UTLSIdToSpecWithSeed(preset.QUICPSKClientHelloID, shuffleSeed); err == nil {
 			t.cachedClientHelloSpecPSK = &pskSpec
 		}
+	}
+
+	// Create TLS config for QUIC
+	// Only enable session cache if we have PSK spec - prevents panic when session
+	// is cached but spec doesn't have PSK extension (TOCTOU race mitigation)
+	t.tlsConfig = &tls.Config{
+		NextProtos:         []string{http3.NextProtoH3},
+		MinVersion:         tls.VersionTLS13,
+		InsecureSkipVerify: t.insecureSkipVerify,
+	}
+	if t.cachedClientHelloSpecPSK != nil {
+		t.tlsConfig.ClientSessionCache = t.sessionCache
 	}
 
 	// Create QUIC config
@@ -448,14 +468,6 @@ func NewHTTP3TransportWithMASQUE(preset *fingerprint.Preset, dnsCache *dns.Cache
 		echConfigCache: make(map[string][]byte),
 	}
 
-	// Create TLS config for QUIC
-	t.tlsConfig = &tls.Config{
-		NextProtos:         []string{http3.NextProtoH3},
-		MinVersion:         tls.VersionTLS13,
-		InsecureSkipVerify: false,
-		ClientSessionCache: t.sessionCache,
-	}
-
 	// Get ClientHelloID for TLS fingerprinting
 	var clientHelloID *utls.ClientHelloID
 	if preset.QUICClientHelloID.Client != "" {
@@ -481,15 +493,25 @@ func NewHTTP3TransportWithMASQUE(preset *fingerprint.Preset, dnsCache *dns.Cache
 	// Also cache PSK specs for session resumption (includes pre_shared_key extension)
 	if preset.QUICPSKClientHelloID.Client != "" {
 		// Outer PSK spec
-		pskSpec, err := utls.UTLSIdToSpecWithSeed(preset.QUICPSKClientHelloID, shuffleSeed)
-		if err == nil {
+		if pskSpec, err := utls.UTLSIdToSpecWithSeed(preset.QUICPSKClientHelloID, shuffleSeed); err == nil {
 			t.cachedClientHelloSpecPSK = &pskSpec
 		}
 		// Inner PSK spec for MASQUE connections
-		innerPskSpec, err := utls.UTLSIdToSpecWithSeed(preset.QUICPSKClientHelloID, shuffleSeed)
-		if err == nil {
+		if innerPskSpec, err := utls.UTLSIdToSpecWithSeed(preset.QUICPSKClientHelloID, shuffleSeed); err == nil {
 			t.cachedClientHelloSpecInnerPSK = &innerPskSpec
 		}
+	}
+
+	// Create TLS config for QUIC
+	// Only enable session cache if we have PSK spec - prevents panic when session
+	// is cached but spec doesn't have PSK extension (TOCTOU race mitigation)
+	t.tlsConfig = &tls.Config{
+		NextProtos:         []string{http3.NextProtoH3},
+		MinVersion:         tls.VersionTLS13,
+		InsecureSkipVerify: t.insecureSkipVerify,
+	}
+	if t.cachedClientHelloSpecPSK != nil {
+		t.tlsConfig.ClientSessionCache = t.sessionCache
 	}
 
 	// Create QUIC config with MASQUE-specific settings
@@ -596,7 +618,10 @@ func (t *HTTP3Transport) dialQUICWithMASQUE(ctx context.Context, addr string, tl
 	tlsCfgCopy := tlsCfg.Clone()
 	tlsCfgCopy.ServerName = host
 	// Clone() doesn't preserve ClientSessionCache, restore it for session resumption
-	tlsCfgCopy.ClientSessionCache = t.sessionCache
+	// Only if we have PSK spec to prevent TOCTOU race
+	if t.cachedClientHelloSpecPSK != nil {
+		tlsCfgCopy.ClientSessionCache = t.sessionCache
+	}
 
 	// Fetch ECH config for inner connection
 	echConfigList := t.getECHConfig(ctx, host)
@@ -690,11 +715,14 @@ func (t *HTTP3Transport) dialQUICWithProxy(ctx context.Context, addr string, tls
 		}
 	}
 
-	// Use our own TLS config (with session cache) instead of the one passed by http3.Transport
+	// Use our own TLS config instead of the one passed by http3.Transport
 	tlsCfgCopy := t.tlsConfig.Clone()
 	tlsCfgCopy.ServerName = host
 	// Clone() doesn't preserve ClientSessionCache, restore it for session resumption
-	tlsCfgCopy.ClientSessionCache = t.sessionCache
+	// Only if we have PSK spec to prevent TOCTOU race
+	if t.cachedClientHelloSpecPSK != nil {
+		tlsCfgCopy.ClientSessionCache = t.sessionCache
+	}
 
 	// Clone our QUIC config (with proper fingerprinting settings)
 	cfgCopy := t.quicConfig.Clone()
@@ -830,12 +858,15 @@ func (t *HTTP3Transport) dialQUIC(ctx context.Context, addr string, tlsCfg *tls.
 		}
 	}
 
-	// Use our own TLS config (with session cache) instead of the one passed by http3.Transport
+	// Use our own TLS config instead of the one passed by http3.Transport
 	// http3.Transport may not include ClientSessionCache in the config it passes
 	tlsCfgCopy := t.tlsConfig.Clone()
 	tlsCfgCopy.ServerName = host
 	// Clone() doesn't preserve ClientSessionCache, restore it for session resumption
-	tlsCfgCopy.ClientSessionCache = t.sessionCache
+	// Only if we have PSK spec to prevent TOCTOU race
+	if t.cachedClientHelloSpecPSK != nil {
+		tlsCfgCopy.ClientSessionCache = t.sessionCache
+	}
 
 	// Clone our QUIC config (with proper fingerprinting settings)
 	cfgCopy := t.quicConfig.Clone()
@@ -1017,7 +1048,7 @@ func (t *HTTP3Transport) Connect(ctx context.Context, host, port string) error {
 	tlsCfg := &tls.Config{
 		ServerName:         host,
 		NextProtos:         []string{"h3"},
-		InsecureSkipVerify: false,
+		InsecureSkipVerify: t.insecureSkipVerify,
 	}
 
 	// Fetch ECH configs from DNS HTTPS records
