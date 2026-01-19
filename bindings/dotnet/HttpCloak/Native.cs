@@ -186,6 +186,22 @@ internal static class Native
     [DllImport(LibraryName, EntryPoint = "httpcloak_session_get_header_order", CallingConvention = CallingConvention.Cdecl)]
     public static extern IntPtr SessionGetHeaderOrder(long handle);
 
+    // Local proxy functions
+    [DllImport(LibraryName, EntryPoint = "httpcloak_local_proxy_start", CallingConvention = CallingConvention.Cdecl)]
+    public static extern long LocalProxyStart([MarshalAs(UnmanagedType.LPUTF8Str)] string? configJson);
+
+    [DllImport(LibraryName, EntryPoint = "httpcloak_local_proxy_stop", CallingConvention = CallingConvention.Cdecl)]
+    public static extern void LocalProxyStop(long handle);
+
+    [DllImport(LibraryName, EntryPoint = "httpcloak_local_proxy_get_port", CallingConvention = CallingConvention.Cdecl)]
+    public static extern int LocalProxyGetPort(long handle);
+
+    [DllImport(LibraryName, EntryPoint = "httpcloak_local_proxy_is_running", CallingConvention = CallingConvention.Cdecl)]
+    public static extern int LocalProxyIsRunning(long handle);
+
+    [DllImport(LibraryName, EntryPoint = "httpcloak_local_proxy_get_stats", CallingConvention = CallingConvention.Cdecl)]
+    public static extern IntPtr LocalProxyGetStats(long handle);
+
     /// <summary>
     /// Convert a native string pointer to a managed string and free the native memory.
     /// </summary>

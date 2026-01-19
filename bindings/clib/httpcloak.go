@@ -1494,9 +1494,133 @@ func httpcloak_get_ech_dns_servers() *C.char {
 // ============================================================================
 
 var (
-	ErrInvalidSession = errors.New("invalid session handle")
-	ErrInvalidStream  = errors.New("invalid stream handle")
+	ErrInvalidSession    = errors.New("invalid session handle")
+	ErrInvalidStream     = errors.New("invalid stream handle")
+	ErrInvalidLocalProxy = errors.New("invalid local proxy handle")
 )
+
+// ============================================================================
+// Local Proxy Management
+// ============================================================================
+
+// Local proxy handle management
+var (
+	localProxyMu      sync.RWMutex
+	localProxies      = make(map[int64]*httpcloak.LocalProxy)
+	localProxyCounter int64
+)
+
+// LocalProxyConfig holds configuration for starting a local proxy
+type LocalProxyConfig struct {
+	Port           int    `json:"port,omitempty"`            // Port to listen on (0 = auto)
+	Preset         string `json:"preset,omitempty"`          // Browser fingerprint preset
+	Timeout        int    `json:"timeout,omitempty"`         // Request timeout in seconds
+	MaxConnections int    `json:"max_connections,omitempty"` // Max concurrent connections
+	TCPProxy       string `json:"tcp_proxy,omitempty"`       // Upstream TCP proxy
+	UDPProxy       string `json:"udp_proxy,omitempty"`       // Upstream UDP proxy
+}
+
+//export httpcloak_local_proxy_start
+func httpcloak_local_proxy_start(configJSON *C.char) C.int64_t {
+	config := LocalProxyConfig{
+		Port:           0,
+		Preset:         "chrome-143",
+		Timeout:        30,
+		MaxConnections: 1000,
+	}
+
+	if configJSON != nil {
+		jsonStr := C.GoString(configJSON)
+		if jsonStr != "" {
+			json.Unmarshal([]byte(jsonStr), &config)
+		}
+	}
+
+	var opts []httpcloak.LocalProxyOption
+	if config.Preset != "" {
+		opts = append(opts, httpcloak.WithProxyPreset(config.Preset))
+	}
+	if config.Timeout > 0 {
+		opts = append(opts, httpcloak.WithProxyTimeout(time.Duration(config.Timeout)*time.Second))
+	}
+	if config.MaxConnections > 0 {
+		opts = append(opts, httpcloak.WithProxyMaxConnections(config.MaxConnections))
+	}
+	if config.TCPProxy != "" || config.UDPProxy != "" {
+		opts = append(opts, httpcloak.WithProxyUpstream(config.TCPProxy, config.UDPProxy))
+	}
+
+	proxy, err := httpcloak.StartLocalProxy(config.Port, opts...)
+	if err != nil {
+		return -1
+	}
+
+	localProxyMu.Lock()
+	localProxyCounter++
+	handle := localProxyCounter
+	localProxies[handle] = proxy
+	localProxyMu.Unlock()
+
+	return C.int64_t(handle)
+}
+
+//export httpcloak_local_proxy_stop
+func httpcloak_local_proxy_stop(handle C.int64_t) {
+	localProxyMu.Lock()
+	proxy, exists := localProxies[int64(handle)]
+	if exists {
+		delete(localProxies, int64(handle))
+	}
+	localProxyMu.Unlock()
+
+	if proxy != nil {
+		proxy.Stop()
+	}
+}
+
+//export httpcloak_local_proxy_get_port
+func httpcloak_local_proxy_get_port(handle C.int64_t) C.int {
+	localProxyMu.RLock()
+	proxy, exists := localProxies[int64(handle)]
+	localProxyMu.RUnlock()
+
+	if !exists || proxy == nil {
+		return -1
+	}
+
+	return C.int(proxy.Port())
+}
+
+//export httpcloak_local_proxy_is_running
+func httpcloak_local_proxy_is_running(handle C.int64_t) C.int {
+	localProxyMu.RLock()
+	proxy, exists := localProxies[int64(handle)]
+	localProxyMu.RUnlock()
+
+	if !exists || proxy == nil {
+		return 0
+	}
+
+	if proxy.IsRunning() {
+		return 1
+	}
+	return 0
+}
+
+//export httpcloak_local_proxy_get_stats
+func httpcloak_local_proxy_get_stats(handle C.int64_t) *C.char {
+	localProxyMu.RLock()
+	proxy, exists := localProxies[int64(handle)]
+	localProxyMu.RUnlock()
+
+	if !exists || proxy == nil {
+		return makeErrorJSON(ErrInvalidLocalProxy)
+	}
+
+	stats := proxy.Stats()
+	data, _ := json.Marshal(stats)
+	return C.CString(string(data))
+}
 
 // ============================================================================
 // Streaming API

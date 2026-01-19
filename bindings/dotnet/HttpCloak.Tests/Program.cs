@@ -2,7 +2,37 @@ using System;
 using System.IO;
 using System.Text.Json;
 using System.Threading;
+using System.Threading.Tasks;
 using HttpCloak;
+using HttpCloak.Tests;
+
+// Check command line args for which test to run
+var cmdArgs = Environment.GetCommandLineArgs();
+string testArg = cmdArgs.Length > 1 ? cmdArgs[1] : "";
+
+if (testArg == "proxy")
+{
+    await LocalProxyTest.RunAsync();
+    return;
+}
+
+if (testArg == "bench")
+{
+    await BenchmarkTest.RunAsync();
+    return;
+}
+
+if (testArg == "throughput")
+{
+    await ThroughputTest.RunAsync();
+    return;
+}
+
+if (testArg == "rawspeed")
+{
+    await RawSpeedTest.RunAsync();
+    return;
+}
 
 Console.WriteLine(new string('=', 70));
 Console.WriteLine("C#: Comprehensive Session Test (H3 + 0-RTT)");
