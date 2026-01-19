@@ -161,6 +161,25 @@ internal static class Native
     [DllImport(LibraryName, EntryPoint = "httpcloak_session_unmarshal", CallingConvention = CallingConvention.Cdecl)]
     public static extern long SessionUnmarshal([MarshalAs(UnmanagedType.LPUTF8Str)] string data);
 
+    // Proxy management functions
+    [DllImport(LibraryName, EntryPoint = "httpcloak_session_set_proxy", CallingConvention = CallingConvention.Cdecl)]
+    public static extern IntPtr SessionSetProxy(long handle, [MarshalAs(UnmanagedType.LPUTF8Str)] string? proxyUrl);
+
+    [DllImport(LibraryName, EntryPoint = "httpcloak_session_set_tcp_proxy", CallingConvention = CallingConvention.Cdecl)]
+    public static extern IntPtr SessionSetTcpProxy(long handle, [MarshalAs(UnmanagedType.LPUTF8Str)] string? proxyUrl);
+
+    [DllImport(LibraryName, EntryPoint = "httpcloak_session_set_udp_proxy", CallingConvention = CallingConvention.Cdecl)]
+    public static extern IntPtr SessionSetUdpProxy(long handle, [MarshalAs(UnmanagedType.LPUTF8Str)] string? proxyUrl);
+
+    [DllImport(LibraryName, EntryPoint = "httpcloak_session_get_proxy", CallingConvention = CallingConvention.Cdecl)]
+    public static extern IntPtr SessionGetProxy(long handle);
+
+    [DllImport(LibraryName, EntryPoint = "httpcloak_session_get_tcp_proxy", CallingConvention = CallingConvention.Cdecl)]
+    public static extern IntPtr SessionGetTcpProxy(long handle);
+
+    [DllImport(LibraryName, EntryPoint = "httpcloak_session_get_udp_proxy", CallingConvention = CallingConvention.Cdecl)]
+    public static extern IntPtr SessionGetUdpProxy(long handle);
+
     /// <summary>
     /// Convert a native string pointer to a managed string and free the native memory.
     /// </summary>

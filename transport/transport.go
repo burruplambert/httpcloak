@@ -353,17 +353,30 @@ func (t *Transport) SetProxy(proxy *ProxyConfig) {
 	t.h2Transport = NewHTTP2TransportWithProxy(t.preset, t.dnsCache, proxy)
 
 	// Recreate HTTP/3 - with proxy support if applicable
-	if proxy != nil && proxy.URL != "" {
-		if isSOCKS5Proxy(proxy.URL) {
-			h3Transport, err := NewHTTP3TransportWithProxy(t.preset, t.dnsCache, proxy)
+	// Check both URL (unified proxy) and UDPProxy (split proxy config)
+	udpProxyURL := ""
+	if proxy != nil {
+		if proxy.UDPProxy != "" {
+			udpProxyURL = proxy.UDPProxy
+		} else if proxy.URL != "" {
+			udpProxyURL = proxy.URL
+		}
+	}
+
+	if udpProxyURL != "" {
+		if isSOCKS5Proxy(udpProxyURL) {
+			// Use UDPProxy in the config for the actual connection
+			h3Proxy := &ProxyConfig{URL: udpProxyURL}
+			h3Transport, err := NewHTTP3TransportWithProxy(t.preset, t.dnsCache, h3Proxy)
 			if err != nil {
 				// Fall back to non-proxied HTTP/3
 				t.h3Transport = NewHTTP3Transport(t.preset, t.dnsCache)
 			} else {
 				t.h3Transport = h3Transport
 			}
-		} else if isMASQUEProxy(proxy.URL) {
-			h3Transport, err := NewHTTP3TransportWithMASQUE(t.preset, t.dnsCache, proxy, nil)
+		} else if isMASQUEProxy(udpProxyURL) {
+			h3Proxy := &ProxyConfig{URL: udpProxyURL}
+			h3Transport, err := NewHTTP3TransportWithMASQUE(t.preset, t.dnsCache, h3Proxy, nil)
 			if err != nil {
 				t.h3Transport = NewHTTP3Transport(t.preset, t.dnsCache)
 			} else {

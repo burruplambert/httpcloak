@@ -808,6 +808,95 @@ public sealed class Session : IDisposable
     }
 
     // =========================================================================
+    // Proxy Management
+    // =========================================================================
+
+    /// <summary>
+    /// Change both TCP and UDP proxies for the session.
+    /// This closes all existing connections and creates new ones through the new proxy.
+    /// Use this for runtime proxy switching (e.g., rotating proxies).
+    /// </summary>
+    /// <param name="proxyUrl">Proxy URL (e.g., "http://user:pass@host:port", "socks5://host:port"). Pass null or empty for direct connection.</param>
+    /// <example>
+    /// <code>
+    /// using var session = new Session(proxy: "http://proxy1:8080");
+    /// await session.GetAsync("https://example.com");  // Uses proxy1
+    /// session.SetProxy("http://proxy2:8080");         // Switch to proxy2
+    /// await session.GetAsync("https://example.com");  // Uses proxy2
+    /// session.SetProxy("");                           // Switch to direct connection
+    /// </code>
+    /// </example>
+    public void SetProxy(string? proxyUrl)
+    {
+        ThrowIfDisposed();
+        Native.SessionSetProxy(_handle, proxyUrl ?? "");
+    }
+
+    /// <summary>
+    /// Change only the TCP proxy (for HTTP/1.1 and HTTP/2).
+    /// Use this with SetUdpProxy() for split proxy configuration.
+    /// </summary>
+    /// <param name="proxyUrl">Proxy URL for TCP traffic</param>
+    public void SetTcpProxy(string? proxyUrl)
+    {
+        ThrowIfDisposed();
+        Native.SessionSetTcpProxy(_handle, proxyUrl ?? "");
+    }
+
+    /// <summary>
+    /// Change only the UDP proxy (for HTTP/3 via SOCKS5 or MASQUE).
+    /// HTTP/3 requires either SOCKS5 (with UDP ASSOCIATE support) or MASQUE proxy.
+    /// </summary>
+    /// <param name="proxyUrl">Proxy URL for UDP traffic (e.g., "socks5://host:port" or MASQUE URL)</param>
+    public void SetUdpProxy(string? proxyUrl)
+    {
+        ThrowIfDisposed();
+        Native.SessionSetUdpProxy(_handle, proxyUrl ?? "");
+    }
+
+    /// <summary>
+    /// Get the current proxy URL.
+    /// </summary>
+    /// <returns>Current proxy URL, or empty string if using direct connection</returns>
+    public string GetProxy()
+    {
+        ThrowIfDisposed();
+        IntPtr resultPtr = Native.SessionGetProxy(_handle);
+        return Native.PtrToStringAndFree(resultPtr) ?? "";
+    }
+
+    /// <summary>
+    /// Get the current TCP proxy URL.
+    /// </summary>
+    /// <returns>Current TCP proxy URL, or empty string if using direct connection</returns>
+    public string GetTcpProxy()
+    {
+        ThrowIfDisposed();
+        IntPtr resultPtr = Native.SessionGetTcpProxy(_handle);
+        return Native.PtrToStringAndFree(resultPtr) ?? "";
+    }
+
+    /// <summary>
+    /// Get the current UDP proxy URL.
+    /// </summary>
+    /// <returns>Current UDP proxy URL, or empty string if using direct connection</returns>
+    public string GetUdpProxy()
+    {
+        ThrowIfDisposed();
+        IntPtr resultPtr = Native.SessionGetUdpProxy(_handle);
+        return Native.PtrToStringAndFree(resultPtr) ?? "";
+    }
+
+    /// <summary>
+    /// Get or set the current proxy URL.
+    /// </summary>
+    public string Proxy
+    {
+        get => GetProxy();
+        set => SetProxy(value);
+    }
+
+    // =========================================================================
     // Session Persistence
     // =========================================================================
 

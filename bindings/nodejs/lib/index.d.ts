@@ -178,6 +178,48 @@ export class Session {
 
   /** Get cookies as a property */
   readonly cookies: Record<string, string>;
+
+  // Proxy management
+
+  /**
+   * Change both TCP and UDP proxies for the session.
+   * This closes all existing connections and creates new ones through the new proxy.
+   * @param proxyUrl - Proxy URL (e.g., "http://user:pass@host:port", "socks5://host:port"). Empty string for direct.
+   */
+  setProxy(proxyUrl: string): void;
+
+  /**
+   * Change only the TCP proxy (for HTTP/1.1 and HTTP/2).
+   * @param proxyUrl - Proxy URL for TCP traffic
+   */
+  setTcpProxy(proxyUrl: string): void;
+
+  /**
+   * Change only the UDP proxy (for HTTP/3 via SOCKS5 or MASQUE).
+   * @param proxyUrl - Proxy URL for UDP traffic
+   */
+  setUdpProxy(proxyUrl: string): void;
+
+  /**
+   * Get the current proxy URL.
+   * @returns Current proxy URL, or empty string if using direct connection
+   */
+  getProxy(): string;
+
+  /**
+   * Get the current TCP proxy URL.
+   * @returns Current TCP proxy URL, or empty string if using direct connection
+   */
+  getTcpProxy(): string;
+
+  /**
+   * Get the current UDP proxy URL.
+   * @returns Current UDP proxy URL, or empty string if using direct connection
+   */
+  getUdpProxy(): string;
+
+  /** Get/set the current proxy as a property */
+  proxy: string;
 }
 
 /** Get the httpcloak library version */

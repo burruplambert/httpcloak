@@ -738,6 +738,13 @@ function getLib() {
       httpcloak_session_load: nativeLibHandle.func("httpcloak_session_load", "int64", ["str"]),
       httpcloak_session_marshal: nativeLibHandle.func("httpcloak_session_marshal", "str", ["int64"]),
       httpcloak_session_unmarshal: nativeLibHandle.func("httpcloak_session_unmarshal", "int64", ["str"]),
+      // Proxy management functions
+      httpcloak_session_set_proxy: nativeLibHandle.func("httpcloak_session_set_proxy", "str", ["int64", "str"]),
+      httpcloak_session_set_tcp_proxy: nativeLibHandle.func("httpcloak_session_set_tcp_proxy", "str", ["int64", "str"]),
+      httpcloak_session_set_udp_proxy: nativeLibHandle.func("httpcloak_session_set_udp_proxy", "str", ["int64", "str"]),
+      httpcloak_session_get_proxy: nativeLibHandle.func("httpcloak_session_get_proxy", "str", ["int64"]),
+      httpcloak_session_get_tcp_proxy: nativeLibHandle.func("httpcloak_session_get_tcp_proxy", "str", ["int64"]),
+      httpcloak_session_get_udp_proxy: nativeLibHandle.func("httpcloak_session_get_udp_proxy", "str", ["int64"]),
     };
   }
   return lib;
@@ -1664,6 +1671,107 @@ class Session {
    */
   get cookies() {
     return this.getCookies();
+  }
+
+  // ===========================================================================
+  // Proxy Management
+  // ===========================================================================
+
+  /**
+   * Change both TCP and UDP proxies for the session.
+   *
+   * This closes all existing connections and creates new ones through the new proxy.
+   * Use this for runtime proxy switching (e.g., rotating proxies).
+   *
+   * @param {string} proxyUrl - Proxy URL (e.g., "http://user:pass@host:port", "socks5://host:port")
+   *                            Pass empty string or null to switch to direct connection.
+   *
+   * Example:
+   *   const session = new httpcloak.Session({ proxy: "http://proxy1:8080" });
+   *   await session.get("https://example.com");  // Uses proxy1
+   *   session.setProxy("http://proxy2:8080");    // Switch to proxy2
+   *   await session.get("https://example.com");  // Uses proxy2
+   *   session.setProxy("");                      // Switch to direct connection
+   */
+  setProxy(proxyUrl) {
+    const url = proxyUrl || "";
+    this._lib.httpcloak_session_set_proxy(this._handle, url);
+  }
+
+  /**
+   * Change only the TCP proxy (for HTTP/1.1 and HTTP/2).
+   *
+   * Use this with setUdpProxy() for split proxy configuration where
+   * TCP and UDP traffic go through different proxies.
+   *
+   * @param {string} proxyUrl - Proxy URL for TCP traffic
+   *
+   * Example:
+   *   session.setTcpProxy("http://tcp-proxy:8080");
+   *   session.setUdpProxy("socks5://udp-proxy:1080");
+   */
+  setTcpProxy(proxyUrl) {
+    const url = proxyUrl || "";
+    this._lib.httpcloak_session_set_tcp_proxy(this._handle, url);
+  }
+
+  /**
+   * Change only the UDP proxy (for HTTP/3 via SOCKS5 or MASQUE).
+   *
+   * HTTP/3 requires either SOCKS5 (with UDP ASSOCIATE support) or MASQUE proxy.
+   *
+   * @param {string} proxyUrl - Proxy URL for UDP traffic (e.g., "socks5://host:port" or MASQUE URL)
+   *
+   * Example:
+   *   session.setUdpProxy("socks5://socks-proxy:1080");
+   */
+  setUdpProxy(proxyUrl) {
+    const url = proxyUrl || "";
+    this._lib.httpcloak_session_set_udp_proxy(this._handle, url);
+  }
+
+  /**
+   * Get the current proxy URL.
+   *
+   * @returns {string} Current proxy URL, or empty string if using direct connection
+   */
+  getProxy() {
+    const result = this._lib.httpcloak_session_get_proxy(this._handle);
+    return result || "";
+  }
+
+  /**
+   * Get the current TCP proxy URL.
+   *
+   * @returns {string} Current TCP proxy URL, or empty string if using direct connection
+   */
+  getTcpProxy() {
+    const result = this._lib.httpcloak_session_get_tcp_proxy(this._handle);
+    return result || "";
+  }
+
+  /**
+   * Get the current UDP proxy URL.
+   *
+   * @returns {string} Current UDP proxy URL, or empty string if using direct connection
+   */
+  getUdpProxy() {
+    const result = this._lib.httpcloak_session_get_udp_proxy(this._handle);
+    return result || "";
+  }
+
+  /**
+   * Get the current proxy as a property.
+   */
+  get proxy() {
+    return this.getProxy();
+  }
+
+  /**
+   * Set the proxy via property assignment.
+   */
+  set proxy(proxyUrl) {
+    this.setProxy(proxyUrl);
   }
 
   // ===========================================================================
