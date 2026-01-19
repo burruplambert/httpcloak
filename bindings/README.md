@@ -107,11 +107,14 @@ sudo apt install mingw-w64
 
 ### Session Options
 
-| Option   | Type   | Default      | Description                      |
-|----------|--------|--------------|----------------------------------|
-| preset   | string | "chrome-143" | Browser preset to emulate        |
-| proxy    | string | null         | Proxy URL                        |
-| timeout  | int    | 30           | Request timeout in seconds       |
+| Option          | Type   | Default      | Description                                              |
+|-----------------|--------|--------------|----------------------------------------------------------|
+| preset          | string | "chrome-143" | Browser preset to emulate                                |
+| proxy           | string | null         | Proxy URL                                                |
+| timeout         | int    | 30           | Request timeout in seconds                               |
+| httpVersion     | string | "auto"       | HTTP version: "auto", "h1", "h2", "h3"                   |
+| quicIdleTimeout | int    | 30           | QUIC idle timeout in seconds (for HTTP/3 connections)    |
+| tlsOnly         | bool   | false        | TLS-only mode: skip preset HTTP headers                  |
 
 ### Response Object
 
