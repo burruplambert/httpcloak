@@ -315,6 +315,47 @@ session = httpcloak.Session(preset="chrome-143", http_version="h1")  # Force HTT
 
 Auto mode tries HTTP/3 first, falls back gracefully.
 
+### 🔀 Runtime Proxy Switching
+
+Switch proxies mid-session without creating new connections. Perfect for proxy rotation.
+
+```python
+session = httpcloak.Session(preset="chrome-143")
+
+# Start with direct connection
+r = session.get("https://api.ipify.org")
+print(f"Direct IP: {r.text}")
+
+# Switch to proxy 1
+session.set_proxy("http://proxy1.example.com:8080")
+r = session.get("https://api.ipify.org")
+print(f"Proxy 1 IP: {r.text}")
+
+# Switch to proxy 2
+session.set_proxy("socks5://proxy2.example.com:1080")
+r = session.get("https://api.ipify.org")
+print(f"Proxy 2 IP: {r.text}")
+
+# Back to direct
+session.set_proxy("")
+```
+
+**Split proxy configuration** - use different proxies for HTTP/2 and HTTP/3:
+
+```python
+session = httpcloak.Session(preset="chrome-143")
+
+# TCP proxy for HTTP/1.1 and HTTP/2
+session.set_tcp_proxy("http://tcp-proxy.example.com:8080")
+
+# UDP proxy for HTTP/3 (requires SOCKS5 UDP ASSOCIATE or MASQUE)
+session.set_udp_proxy("socks5://udp-proxy.example.com:1080")
+
+# Check current configuration
+print(session.get_tcp_proxy())  # TCP proxy URL
+print(session.get_udp_proxy())  # UDP proxy URL
+```
+
 ### 📤 Streaming & Uploads
 
 ```python
@@ -427,6 +468,14 @@ session.post(url, data=None, json=None, **kwargs)
 session.get_stream(url)        # Streaming download
 session.close()
 
+# Proxy switching
+session.set_proxy(url)         # Set both TCP and UDP proxy
+session.set_tcp_proxy(url)     # Set TCP proxy only (H1/H2)
+session.set_udp_proxy(url)     # Set UDP proxy only (H3)
+session.get_proxy()            # Get current proxy
+session.get_tcp_proxy()        # Get current TCP proxy
+session.get_udp_proxy()        # Get current UDP proxy
+
 # Response object
 response.status_code           # HTTP status
 response.ok                    # True if status < 400
@@ -472,6 +521,14 @@ resp, err := c.Do(ctx, &client.Request{
     Referer:       "https://example.com",
 })
 
+// Proxy switching
+c.SetProxy(url)            // Set both TCP and UDP proxy
+c.SetTCPProxy(url)         // Set TCP proxy only (H1/H2)
+c.SetUDPProxy(url)         // Set UDP proxy only (H3)
+c.GetProxy()               // Get current proxy
+c.GetTCPProxy()            // Get current TCP proxy
+c.GetUDPProxy()            // Get current UDP proxy
+
 // Response object
 resp.StatusCode
 resp.Protocol
@@ -509,6 +566,15 @@ session.getSync(url, options)
 session.postSync(url, options)
 session.close()
 
+// Proxy switching
+session.setProxy(url)          // Set both TCP and UDP proxy
+session.setTcpProxy(url)       // Set TCP proxy only (H1/H2)
+session.setUdpProxy(url)       // Set UDP proxy only (H3)
+session.getProxy()             // Get current proxy
+session.getTcpProxy()          // Get current TCP proxy
+session.getUdpProxy()          // Get current UDP proxy
+session.proxy                  // Property accessor (get/set)
+
 // Response object
 response.statusCode
 response.ok
@@ -536,6 +602,15 @@ session.Post(url, json: obj, data: dict, headers: dict)
 session.Put(url, ...)
 session.Delete(url)
 session.Dispose()
+
+// Proxy switching
+session.SetProxy(url)          // Set both TCP and UDP proxy
+session.SetTcpProxy(url)       // Set TCP proxy only (H1/H2)
+session.SetUdpProxy(url)       // Set UDP proxy only (H3)
+session.GetProxy()             // Get current proxy
+session.GetTcpProxy()          // Get current TCP proxy
+session.GetUdpProxy()          // Get current UDP proxy
+session.Proxy                  // Property accessor (get/set)
 
 // Response object
 response.StatusCode
