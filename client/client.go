@@ -204,6 +204,11 @@ func NewClient(presetName string, opts ...Option) *Client {
 			quicManager.SetECHConfigDomain(config.ECHConfigDomain)
 		}
 	}
+	if config.DisableECH {
+		if quicManager != nil {
+			quicManager.SetDisableECH(true)
+		}
+	}
 
 	client := &Client{
 		poolManager:       h2Manager,

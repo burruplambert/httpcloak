@@ -49,6 +49,9 @@ from .client import (
     # Utility functions
     available_presets,
     version,
+    # DNS configuration
+    set_ech_dns_servers,
+    get_ech_dns_servers,
 )
 
 __all__ = [
@@ -68,5 +71,7 @@ __all__ = [
     "request",
     "available_presets",
     "version",
+    "set_ech_dns_servers",
+    "get_ech_dns_servers",
 ]
 __version__ = "1.5.3"

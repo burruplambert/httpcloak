@@ -825,6 +825,10 @@ def _setup_lib(lib):
     lib.httpcloak_version.restype = c_void_p
     lib.httpcloak_available_presets.argtypes = []
     lib.httpcloak_available_presets.restype = c_void_p
+    lib.httpcloak_set_ech_dns_servers.argtypes = [c_char_p]
+    lib.httpcloak_set_ech_dns_servers.restype = c_void_p
+    lib.httpcloak_get_ech_dns_servers.argtypes = []
+    lib.httpcloak_get_ech_dns_servers.restype = c_void_p
 
     # Async functions
     lib.httpcloak_register_callback.argtypes = [ASYNC_CALLBACK]
@@ -1075,6 +1079,58 @@ def available_presets() -> List[str]:
     """Get list of available browser presets."""
     lib = _get_lib()
     result_ptr = lib.httpcloak_available_presets()
+    result = _ptr_to_string(result_ptr)
+    if result:
+        return json.loads(result)
+    return []
+
+
+def set_ech_dns_servers(servers: Optional[List[str]] = None) -> None:
+    """
+    Configure the DNS servers used for ECH (Encrypted Client Hello) config queries.
+
+    By default, ECH queries use Google (8.8.8.8), Cloudflare (1.1.1.1), and Quad9 (9.9.9.9).
+    Use this function to configure custom DNS servers for environments with restricted
+    network access or for privacy requirements.
+
+    This is a global setting that affects all sessions.
+
+    Args:
+        servers: List of DNS server addresses in "host:port" format (e.g., ["10.0.0.53:53"]).
+                 Pass None or empty list to reset to defaults.
+
+    Example:
+        >>> import httpcloak
+        >>> httpcloak.set_ech_dns_servers(["10.0.0.53:53", "192.168.1.1:53"])
+        >>> httpcloak.set_ech_dns_servers(None)  # Reset to defaults
+    """
+    lib = _get_lib()
+    if servers is None or len(servers) == 0:
+        lib.httpcloak_set_ech_dns_servers(None)
+    else:
+        servers_json = json.dumps(servers).encode("utf-8")
+        error_ptr = lib.httpcloak_set_ech_dns_servers(servers_json)
+        if error_ptr:
+            error = _ptr_to_string(error_ptr)
+            if error:
+                raise HTTPCloakError(f"Failed to set ECH DNS servers: {error}")
+
+
+def get_ech_dns_servers() -> List[str]:
+    """
+    Get the current DNS servers used for ECH (Encrypted Client Hello) config queries.
+
+    Returns:
+        List of DNS server addresses in "host:port" format.
+
+    Example:
+        >>> import httpcloak
+        >>> servers = httpcloak.get_ech_dns_servers()
+        >>> print(servers)
+        ['8.8.8.8:53', '1.1.1.1:53', '9.9.9.9:53']
+    """
+    lib = _get_lib()
+    result_ptr = lib.httpcloak_get_ech_dns_servers()
     result = _ptr_to_string(result_ptr)
     if result:
         return json.loads(result)

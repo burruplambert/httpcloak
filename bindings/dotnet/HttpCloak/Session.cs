@@ -1657,6 +1657,47 @@ public static class HttpCloakInfo
 
         return JsonSerializer.Deserialize(json, JsonContext.Default.StringArray) ?? Array.Empty<string>();
     }
+
+    /// <summary>
+    /// Configure the DNS servers used for ECH (Encrypted Client Hello) config queries.
+    /// By default, ECH queries use Google (8.8.8.8), Cloudflare (1.1.1.1), and Quad9 (9.9.9.9).
+    /// This is a global setting that affects all sessions.
+    /// </summary>
+    /// <param name="servers">
+    /// Array of DNS server addresses in "host:port" format (e.g., "10.0.0.53:53").
+    /// Pass null or empty array to reset to defaults.
+    /// </param>
+    /// <exception cref="HttpCloakException">Thrown if the servers list is invalid.</exception>
+    public static void SetEchDnsServers(string[]? servers)
+    {
+        string? serversJson = null;
+        if (servers != null && servers.Length > 0)
+        {
+            serversJson = JsonSerializer.Serialize(servers, JsonContext.Default.StringArray);
+        }
+
+        IntPtr errorPtr = Native.SetEchDnsServers(serversJson);
+        string? error = Native.PtrToStringAndFree(errorPtr);
+        if (!string.IsNullOrEmpty(error))
+        {
+            throw new HttpCloakException($"Failed to set ECH DNS servers: {error}");
+        }
+    }
+
+    /// <summary>
+    /// Get the current DNS servers used for ECH (Encrypted Client Hello) config queries.
+    /// </summary>
+    /// <returns>Array of DNS server addresses in "host:port" format.</returns>
+    public static string[] GetEchDnsServers()
+    {
+        IntPtr ptr = Native.GetEchDnsServers();
+        string? json = Native.PtrToStringAndFree(ptr);
+
+        if (string.IsNullOrEmpty(json))
+            return Array.Empty<string>();
+
+        return JsonSerializer.Deserialize(json, JsonContext.Default.StringArray) ?? Array.Empty<string>();
+    }
 }
 
 // Internal types for JSON serialization

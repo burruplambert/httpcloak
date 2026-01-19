@@ -709,6 +709,8 @@ function getLib() {
       httpcloak_free_string: nativeLibHandle.func("httpcloak_free_string", "void", ["void*"]),
       httpcloak_version: nativeLibHandle.func("httpcloak_version", "str", []),
       httpcloak_available_presets: nativeLibHandle.func("httpcloak_available_presets", "str", []),
+      httpcloak_set_ech_dns_servers: nativeLibHandle.func("httpcloak_set_ech_dns_servers", "str", ["str"]),
+      httpcloak_get_ech_dns_servers: nativeLibHandle.func("httpcloak_get_ech_dns_servers", "str", []),
       // Async functions
       httpcloak_register_callback: nativeLibHandle.func("httpcloak_register_callback", "int64", [koffi.pointer(AsyncCallbackProto)]),
       httpcloak_unregister_callback: nativeLibHandle.func("httpcloak_unregister_callback", "void", ["int64"]),
@@ -1038,6 +1040,53 @@ function version() {
 function availablePresets() {
   const nativeLib = getLib();
   const resultPtr = nativeLib.httpcloak_available_presets();
+  const result = resultToString(resultPtr);
+  if (result) {
+    return JSON.parse(result);
+  }
+  return [];
+}
+
+/**
+ * Configure the DNS servers used for ECH (Encrypted Client Hello) config queries.
+ *
+ * By default, ECH queries use Google (8.8.8.8), Cloudflare (1.1.1.1), and Quad9 (9.9.9.9).
+ * Use this function to configure custom DNS servers for environments with restricted
+ * network access or for privacy requirements.
+ *
+ * This is a global setting that affects all sessions.
+ *
+ * @param {string[]|null} servers - Array of DNS server addresses in "host:port" format (e.g., ["10.0.0.53:53"]).
+ *                                  Pass null or empty array to reset to defaults.
+ * @throws {Error} If the servers list is invalid.
+ * @example
+ * setEchDnsServers(["10.0.0.53:53", "192.168.1.1:53"]);
+ * setEchDnsServers(null);  // Reset to defaults
+ */
+function setEchDnsServers(servers) {
+  const nativeLib = getLib();
+  let serversJson = null;
+  if (servers && servers.length > 0) {
+    serversJson = JSON.stringify(servers);
+  }
+  const errorPtr = nativeLib.httpcloak_set_ech_dns_servers(serversJson);
+  const error = resultToString(errorPtr);
+  if (error) {
+    throw new HTTPCloakError(`Failed to set ECH DNS servers: ${error}`);
+  }
+}
+
+/**
+ * Get the current DNS servers used for ECH (Encrypted Client Hello) config queries.
+ *
+ * @returns {string[]} Array of DNS server addresses in "host:port" format.
+ * @example
+ * const servers = getEchDnsServers();
+ * console.log(servers);  // ['8.8.8.8:53', '1.1.1.1:53', '9.9.9.9:53']
+ */
+function getEchDnsServers() {
+  const nativeLib = getLib();
+  const resultPtr = nativeLib.httpcloak_get_ech_dns_servers();
   const result = resultToString(resultPtr);
   if (result) {
     return JSON.parse(result);
@@ -2325,4 +2374,7 @@ module.exports = {
   // Utility
   version,
   availablePresets,
+  // DNS configuration
+  setEchDnsServers,
+  getEchDnsServers,
 };

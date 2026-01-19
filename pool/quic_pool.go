@@ -33,8 +33,8 @@ const (
 )
 
 func init() {
-	// Set Chrome-like connection ID length (8 bytes vs default 4)
-	quic.SetDefaultConnectionIDLength(8)
+	// Set Chrome-like connection ID length (0 bytes - Chrome sends empty SCID)
+	quic.SetDefaultConnectionIDLength(0)
 
 	// Set Chrome-like max_datagram_frame_size (65536 vs default 16383)
 	quic.SetMaxDatagramSize(65536)
@@ -215,6 +215,7 @@ type QUICHostPool struct {
 	connectTimeout     time.Duration
 	echConfig          []byte // Custom ECH configuration
 	echConfigDomain    string // Domain to fetch ECH config from
+	disableECH         bool   // Disable automatic ECH fetching (Chrome doesn't always use ECH)
 	insecureSkipVerify bool   // Skip TLS certificate verification (for testing)
 }
 
@@ -342,14 +343,23 @@ func (p *QUICHostPool) createConn(ctx context.Context) (*QUICConn, error) {
 	var selectedSpec *utls.ClientHelloSpec
 	var clientHelloID *utls.ClientHelloID
 
-	// Prefer PSK spec when available - Chrome always includes PSK extension structure
-	if p.cachedPSKSpec != nil && p.preset != nil && p.preset.QUICPSKClientHelloID.Client != "" {
+	// Check if we have a cached session for this host
+	// PSK spec (with early_data extension) should ONLY be used for session resumption
+	// Using PSK spec on fresh connections causes handshake failures on some servers
+	// Note: There's a small TOCTOU window here (another goroutine could add a session
+	// after this check), but this matches the proxy path behavior and the window is
+	// small enough that it rarely causes issues in practice.
+	hasSession := p.hasSessionForHost()
+
+	// Use PSK spec ONLY when resuming a session (matches proxy path behavior)
+	if hasSession && p.cachedPSKSpec != nil && p.preset != nil && p.preset.QUICPSKClientHelloID.Client != "" {
 		// Generate fresh PSK spec for this connection
 		if spec, err := utls.UTLSIdToSpecWithSeed(p.preset.QUICPSKClientHelloID, p.shuffleSeed); err == nil {
 			selectedSpec = &spec
 		}
 		clientHelloID = &p.preset.QUICPSKClientHelloID
 	}
+	// Use regular spec for fresh connections
 	if selectedSpec == nil && p.cachedClientHelloSpec != nil && p.preset != nil && p.preset.QUICClientHelloID.Client != "" {
 		// Generate fresh regular spec
 		if spec, err := utls.UTLSIdToSpecWithSeed(p.preset.QUICClientHelloID, p.shuffleSeed); err == nil {
@@ -359,14 +369,17 @@ func (p *QUICHostPool) createConn(ctx context.Context) (*QUICConn, error) {
 	}
 
 	// Get ECH configuration - use custom config if set, otherwise fetch from DNS
+	// Skip ECH if disabled (Chrome doesn't always use ECH even when available)
 	var echConfigList []byte
-	if len(p.echConfig) > 0 {
-		echConfigList = p.echConfig
-	} else if p.echConfigDomain != "" {
-		echConfigList, _ = dns.FetchECHConfigs(ctx, p.echConfigDomain)
-	} else if clientHelloID != nil {
-		// Fetch ECH configs from DNS HTTPS records for real ECH negotiation
-		echConfigList, _ = dns.FetchECHConfigs(ctx, p.host)
+	if !p.disableECH {
+		if len(p.echConfig) > 0 {
+			echConfigList = p.echConfig
+		} else if p.echConfigDomain != "" {
+			echConfigList, _ = dns.FetchECHConfigs(ctx, p.echConfigDomain)
+		} else if clientHelloID != nil {
+			// Fetch ECH configs from DNS HTTPS records for real ECH negotiation
+			echConfigList, _ = dns.FetchECHConfigs(ctx, p.host)
+		}
 	}
 
 	// QUIC config with Chrome-like settings
@@ -382,9 +395,13 @@ func (p *QUICHostPool) createConn(ctx context.Context) (*QUICConn, error) {
 		ChromeStyleInitialPackets:    true,  // Chrome-like frame patterns in Initial packets
 		ClientHelloID:                 clientHelloID,   // Fallback if cached spec fails
 		CachedClientHelloSpec:         selectedSpec,    // Selected spec (regular or PSK) for fingerprint
-		ECHConfigList:                 echConfigList,   // ECH from DNS HTTPS records
 		TransportParameterOrder:       quic.TransportParameterOrderChrome, // Chrome transport param ordering
 		TransportParameterShuffleSeed: p.shuffleSeed, // Consistent transport param shuffle per session
+	}
+	// Only set ECHConfigList if we have a config - matches proxy path behavior
+	// Setting nil explicitly vs not setting at all triggers different behavior in quic-go
+	if len(echConfigList) > 0 {
+		quicConfig.ECHConfigList = echConfigList
 	}
 
 	// Get IPv6 and IPv4 addresses separately
@@ -453,9 +470,15 @@ func (p *QUICHostPool) createConn(ctx context.Context) (*QUICConn, error) {
 					continue
 				}
 
-				conn, err := quic.DialEarly(ctx, udpConn, udpAddr, tlsCfg, cfg)
+				// Use quic.Transport.DialEarly instead of quic.DialEarly directly
+				// This matches the proxy path behavior and handles ECH/GREASE correctly
+				quicTransport := &quic.Transport{
+					Conn: udpConn,
+				}
+
+				conn, err := quicTransport.DialEarly(ctx, udpAddr, tlsCfg, cfg)
 				if err != nil {
-					udpConn.Close()
+					quicTransport.Close()
 					lastErr = err
 					continue
 				}
@@ -522,6 +545,19 @@ func (p *QUICHostPool) CloseConnections() {
 	p.connections = make([]*QUICConn, 0)
 }
 
+// hasSessionForHost checks if there's a cached TLS session for the given host
+// This is used to determine whether to use PSK spec (for resumption) or regular spec
+// Returns false if no valid session exists (fresh connection should use regular spec)
+func (p *QUICHostPool) hasSessionForHost() bool {
+	if p.sessionCache == nil {
+		return false
+	}
+	// TLS 1.3 session key is typically just the server name
+	session, ok := p.sessionCache.Get(p.host)
+	// Must have both a valid lookup AND a non-nil session state
+	return ok && session != nil
+}
+
 // Stats returns pool statistics
 func (p *QUICHostPool) Stats() (total int, healthy int, totalRequests int64) {
 	p.mu.Lock()
@@ -550,6 +586,7 @@ type QUICManager struct {
 	connectTo          map[string]string // Domain fronting: request host -> connect host
 	echConfig          []byte            // Custom ECH configuration
 	echConfigDomain    string            // Domain to fetch ECH config from
+	disableECH         bool              // Disable automatic ECH fetching
 	insecureSkipVerify bool              // Skip TLS certificate verification
 
 	// Cached TLS specs - shared across all QUICHostPools for consistent fingerprint
@@ -633,6 +670,14 @@ func (m *QUICManager) SetECHConfigDomain(domain string) {
 	m.echConfigDomain = domain
 }
 
+// SetDisableECH disables automatic ECH fetching
+// Chrome doesn't always use ECH even when available from DNS
+func (m *QUICManager) SetDisableECH(disable bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.disableECH = disable
+}
+
 // SetInsecureSkipVerify sets whether to skip TLS certificate verification
 func (m *QUICManager) SetInsecureSkipVerify(skip bool) {
 	m.mu.Lock()
@@ -683,6 +728,8 @@ func (m *QUICManager) GetPool(host, port string) (*QUICHostPool, error) {
 	if m.echConfigDomain != "" {
 		pool.echConfigDomain = m.echConfigDomain
 	}
+	// Pass disableECH flag to the pool
+	pool.disableECH = m.disableECH
 	// Pass InsecureSkipVerify to the pool
 	pool.insecureSkipVerify = m.insecureSkipVerify
 	m.pools[key] = pool

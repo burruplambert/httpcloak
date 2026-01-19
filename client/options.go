@@ -123,6 +123,11 @@ type ClientConfig struct {
 	// you can use cloudflare-ech.com's ECH config for any CF-proxied domain.
 	ECHConfigDomain string
 
+	// DisableECH disables automatic ECH fetching from DNS.
+	// Chrome doesn't always use ECH even when available - some sites may
+	// reject connections with ECH enabled. Set this to match Chrome behavior.
+	DisableECH bool
+
 	// ForceProtocol forces a specific HTTP protocol for all requests.
 	// ProtocolAuto (default): Auto-detect with fallback (H3 -> H2 -> H1)
 	// ProtocolHTTP1: Force HTTP/1.1 only
@@ -407,6 +412,20 @@ func WithECHConfig(echConfig []byte) Option {
 func WithECHFrom(domain string) Option {
 	return func(c *ClientConfig) {
 		c.ECHConfigDomain = domain
+	}
+}
+
+// WithDisableECH disables automatic ECH fetching from DNS.
+// Chrome doesn't always use ECH even when available from DNS HTTPS records.
+// Some sites may reject connections with ECH enabled. Use this option to
+// match real Chrome behavior on sites that have ECH issues.
+//
+// Example:
+//
+//	client.NewClient("chrome-143", client.WithDisableECH())
+func WithDisableECH() Option {
+	return func(c *ClientConfig) {
+		c.DisableECH = true
 	}
 }
 

@@ -26,6 +26,7 @@ import (
 	"unsafe"
 
 	"github.com/sardanioss/httpcloak"
+	"github.com/sardanioss/httpcloak/dns"
 )
 
 func init() {
@@ -1412,6 +1413,37 @@ func httpcloak_available_presets() *C.char {
 		"firefox-133", "safari-18",
 	}
 	data, _ := json.Marshal(presets)
+	return C.CString(string(data))
+}
+
+//export httpcloak_set_ech_dns_servers
+func httpcloak_set_ech_dns_servers(serversJSON *C.char) *C.char {
+	if serversJSON == nil {
+		// Reset to defaults
+		dns.SetECHDNSServers(nil)
+		return nil
+	}
+
+	jsonStr := C.GoString(serversJSON)
+	if jsonStr == "" || jsonStr == "null" || jsonStr == "[]" {
+		// Reset to defaults
+		dns.SetECHDNSServers(nil)
+		return nil
+	}
+
+	var servers []string
+	if err := json.Unmarshal([]byte(jsonStr), &servers); err != nil {
+		return C.CString(err.Error())
+	}
+
+	dns.SetECHDNSServers(servers)
+	return nil
+}
+
+//export httpcloak_get_ech_dns_servers
+func httpcloak_get_ech_dns_servers() *C.char {
+	servers := dns.GetECHDNSServers()
+	data, _ := json.Marshal(servers)
 	return C.CString(string(data))
 }
 

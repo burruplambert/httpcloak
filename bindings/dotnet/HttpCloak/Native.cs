@@ -104,6 +104,12 @@ internal static class Native
     [DllImport(LibraryName, EntryPoint = "httpcloak_available_presets", CallingConvention = CallingConvention.Cdecl)]
     public static extern IntPtr AvailablePresets();
 
+    [DllImport(LibraryName, EntryPoint = "httpcloak_set_ech_dns_servers", CallingConvention = CallingConvention.Cdecl)]
+    public static extern IntPtr SetEchDnsServers([MarshalAs(UnmanagedType.LPUTF8Str)] string? serversJson);
+
+    [DllImport(LibraryName, EntryPoint = "httpcloak_get_ech_dns_servers", CallingConvention = CallingConvention.Cdecl)]
+    public static extern IntPtr GetEchDnsServers();
+
     // Async callback delegate: void (*)(int64_t callback_id, const char* response_json, const char* error)
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     public delegate void AsyncCallback(long callbackId, IntPtr responseJson, IntPtr error);

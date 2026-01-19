@@ -186,6 +186,24 @@ export function version(): string;
 /** Get list of available browser presets */
 export function availablePresets(): string[];
 
+/**
+ * Configure the DNS servers used for ECH (Encrypted Client Hello) config queries.
+ *
+ * By default, ECH queries use Google (8.8.8.8), Cloudflare (1.1.1.1), and Quad9 (9.9.9.9).
+ * This is a global setting that affects all sessions.
+ *
+ * @param servers - Array of DNS server addresses in "host:port" format. Pass null or empty array to reset to defaults.
+ * @throws {HTTPCloakError} If the servers list is invalid.
+ */
+export function setEchDnsServers(servers: string[] | null): void;
+
+/**
+ * Get the current DNS servers used for ECH (Encrypted Client Hello) config queries.
+ *
+ * @returns Array of DNS server addresses in "host:port" format.
+ */
+export function getEchDnsServers(): string[];
+
 export interface ConfigureOptions extends SessionOptions {
   /** Default headers for all requests */
   headers?: Record<string, string>;
