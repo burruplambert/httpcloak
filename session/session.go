@@ -70,12 +70,13 @@ func NewSession(id string, config *protocol.SessionConfig) *Session {
 		}
 	}
 
-	// Create transport config with ConnectTo and ECH settings
+	// Create transport config with ConnectTo, ECH, and TLS-only settings
 	var transportConfig *transport.TransportConfig
-	if len(config.ConnectTo) > 0 || config.ECHConfigDomain != "" {
+	if len(config.ConnectTo) > 0 || config.ECHConfigDomain != "" || config.TLSOnly {
 		transportConfig = &transport.TransportConfig{
 			ConnectTo:       config.ConnectTo,
 			ECHConfigDomain: config.ECHConfigDomain,
+			TLSOnly:         config.TLSOnly,
 		}
 	}
 

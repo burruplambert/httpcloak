@@ -90,6 +90,8 @@ export interface SessionOptions {
   connectTo?: Record<string, string>;
   /** Domain to fetch ECH config from (e.g., "cloudflare-ech.com" for any Cloudflare domain) */
   echConfigDomain?: string;
+  /** TLS-only mode: skip preset HTTP headers, only apply TLS fingerprint (default: false) */
+  tlsOnly?: boolean;
 }
 
 export interface RequestOptions {

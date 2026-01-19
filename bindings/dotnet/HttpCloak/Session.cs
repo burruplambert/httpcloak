@@ -134,6 +134,7 @@ public sealed class Session : IDisposable
     /// <param name="auth">Default auth (username, password) for all requests</param>
     /// <param name="connectTo">Domain fronting map (requestHost -> connectHost)</param>
     /// <param name="echConfigDomain">Domain to fetch ECH config from (e.g., "cloudflare-ech.com")</param>
+    /// <param name="tlsOnly">TLS-only mode: use TLS fingerprint but skip preset HTTP headers (default: false)</param>
     public Session(
         string preset = "chrome-143",
         string? proxy = null,
@@ -148,7 +149,8 @@ public sealed class Session : IDisposable
         bool preferIpv4 = false,
         (string Username, string Password)? auth = null,
         Dictionary<string, string>? connectTo = null,
-        string? echConfigDomain = null)
+        string? echConfigDomain = null,
+        bool tlsOnly = false)
     {
         Auth = auth;
 
@@ -166,7 +168,8 @@ public sealed class Session : IDisposable
             Retry = retry,
             PreferIpv4 = preferIpv4,
             ConnectTo = connectTo,
-            EchConfigDomain = echConfigDomain
+            EchConfigDomain = echConfigDomain,
+            TlsOnly = tlsOnly
         };
 
         string configJson = JsonSerializer.Serialize(config, JsonContext.Default.SessionConfig);
@@ -582,12 +585,14 @@ public sealed class Session : IDisposable
         if (timeout != null)
             return RequestAsync("GET", url, null, headers, timeout, auth, parameters, cookies);
 
-        string? headersJson = headers.Count > 0
-            ? JsonSerializer.Serialize(headers, JsonContext.Default.DictionaryStringString)
+        // Wrap headers in RequestOptions structure (Go expects {"headers": {...}, "timeout": ...})
+        var options = new RequestOptions { Headers = headers.Count > 0 ? headers : null };
+        string? optionsJson = (options.Headers != null)
+            ? JsonSerializer.Serialize(options, JsonContext.Default.RequestOptions)
             : null;
 
         var (callbackId, task) = AsyncCallbackManager.Instance.RegisterRequest();
-        Native.GetAsync(_handle, url, headersJson, callbackId);
+        Native.GetAsync(_handle, url, optionsJson, callbackId);
 
         return task;
     }
@@ -613,12 +618,14 @@ public sealed class Session : IDisposable
         if (timeout != null)
             return RequestAsync("POST", url, body, headers, timeout, auth, parameters, cookies);
 
-        string? headersJson = headers.Count > 0
-            ? JsonSerializer.Serialize(headers, JsonContext.Default.DictionaryStringString)
+        // Wrap headers in RequestOptions structure (Go expects {"headers": {...}, "timeout": ...})
+        var options = new RequestOptions { Headers = headers.Count > 0 ? headers : null };
+        string? optionsJson = (options.Headers != null)
+            ? JsonSerializer.Serialize(options, JsonContext.Default.RequestOptions)
             : null;
 
         var (callbackId, task) = AsyncCallbackManager.Instance.RegisterRequest();
-        Native.PostAsync(_handle, url, body, headersJson, callbackId);
+        Native.PostAsync(_handle, url, body, optionsJson, callbackId);
 
         return task;
     }
@@ -1879,6 +1886,10 @@ internal class SessionConfig
     [JsonPropertyName("ech_config_domain")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? EchConfigDomain { get; set; }
+
+    [JsonPropertyName("tls_only")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool TlsOnly { get; set; }
 }
 
 internal class RequestConfig
@@ -1955,6 +1966,20 @@ internal class ErrorResponse
 {
     [JsonPropertyName("error")]
     public string? Error { get; set; }
+}
+
+/// <summary>
+/// Request options for async requests (matches Go's RequestOptions struct).
+/// </summary>
+internal class RequestOptions
+{
+    [JsonPropertyName("headers")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Dictionary<string, string>? Headers { get; set; }
+
+    [JsonPropertyName("timeout")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? Timeout { get; set; }
 }
 
 internal class StreamOptions
@@ -2303,6 +2328,7 @@ public sealed class HttpCloakHandler : HttpMessageHandler
 [JsonSerializable(typeof(Dictionary<string, string>))]
 [JsonSerializable(typeof(Dictionary<string, string[]>))]
 [JsonSerializable(typeof(string[]))]
+[JsonSerializable(typeof(RequestOptions))]
 [JsonSerializable(typeof(StreamOptions))]
 [JsonSerializable(typeof(StreamMetadata))]
 internal partial class JsonContext : JsonSerializerContext { }

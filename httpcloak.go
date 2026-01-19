@@ -289,6 +289,7 @@ type sessionConfig struct {
 	preferIPv4         bool
 	connectTo          map[string]string // Domain fronting: request_host -> connect_host
 	echConfigDomain    string            // Domain to fetch ECH config from
+	tlsOnly            bool              // TLS-only mode: skip preset headers, set all manually
 }
 
 // WithSessionProxy sets a proxy for the session
@@ -419,6 +420,16 @@ func WithECHFrom(domain string) SessionOption {
 	}
 }
 
+// WithTLSOnly enables TLS-only mode.
+// In this mode, the preset's TLS fingerprint is used but its default HTTP headers
+// are NOT applied. You must set all headers manually per-request.
+// Useful when you need full control over HTTP headers while keeping the TLS fingerprint.
+func WithTLSOnly() SessionOption {
+	return func(c *sessionConfig) {
+		c.tlsOnly = true
+	}
+}
+
 // NewSession creates a new persistent session with cookie management
 func NewSession(preset string, opts ...SessionOption) *Session {
 	cfg := &sessionConfig{
@@ -441,6 +452,7 @@ func NewSession(preset string, opts ...SessionOption) *Session {
 		PreferIPv4:         cfg.preferIPv4,
 		ConnectTo:          cfg.connectTo,
 		ECHConfigDomain:    cfg.echConfigDomain,
+		TLSOnly:            cfg.tlsOnly,
 	}
 
 	// Retry configuration

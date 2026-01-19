@@ -178,6 +178,10 @@ type SessionConfig struct {
 	// Domain to fetch ECH config from (e.g., "cloudflare-ech.com")
 	ECHConfigDomain string `json:"echConfigDomain,omitempty"`
 
+	// TLS-only mode: use TLS fingerprint but skip preset HTTP headers
+	// Useful when you want to set all headers manually
+	TLSOnly bool `json:"tlsOnly,omitempty"`
+
 	// Default authentication (can be overridden per-request)
 	Auth *AuthConfig `json:"auth,omitempty"`
 }

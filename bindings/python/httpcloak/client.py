@@ -1174,6 +1174,7 @@ class Session:
         prefer_ipv4: Prefer IPv4 addresses over IPv6 (default: False)
         connect_to: Domain fronting map {request_host: connect_host} - DNS resolves connect_host but SNI/Host uses request_host
         ech_config_domain: Domain to fetch ECH config from (e.g., "cloudflare-ech.com" for any CF domain)
+        tls_only: TLS-only mode - skip preset HTTP headers, only apply TLS fingerprint (default: False)
 
     Example:
         with httpcloak.Session(preset="chrome-143") as session:
@@ -1219,6 +1220,7 @@ class Session:
         auth: Optional[Tuple[str, str]] = None,
         connect_to: Optional[Dict[str, str]] = None,
         ech_config_domain: Optional[str] = None,
+        tls_only: bool = False,
     ):
         self._lib = _get_lib()
         self._default_timeout = timeout
@@ -1248,6 +1250,8 @@ class Session:
             config["connect_to"] = connect_to
         if ech_config_domain:
             config["ech_config_domain"] = ech_config_domain
+        if tls_only:
+            config["tls_only"] = True
 
         config_json = json.dumps(config).encode("utf-8")
         self._handle = self._lib.httpcloak_session_new(config_json)

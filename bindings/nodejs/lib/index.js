@@ -1125,6 +1125,7 @@ class Session {
    * @param {Array} [options.auth] - Default auth [username, password] for all requests
    * @param {Object} [options.connectTo] - Domain fronting map {requestHost: connectHost}
    * @param {string} [options.echConfigDomain] - Domain to fetch ECH config from (e.g., "cloudflare-ech.com")
+   * @param {boolean} [options.tlsOnly=false] - TLS-only mode: skip preset HTTP headers, only apply TLS fingerprint
    */
   constructor(options = {}) {
     const {
@@ -1143,6 +1144,7 @@ class Session {
       auth = null,
       connectTo = null,
       echConfigDomain = null,
+      tlsOnly = false,
     } = options;
 
     this._lib = getLib();
@@ -1184,6 +1186,9 @@ class Session {
     }
     if (echConfigDomain) {
       config.ech_config_domain = echConfigDomain;
+    }
+    if (tlsOnly) {
+      config.tls_only = true;
     }
 
     this._handle = this._lib.httpcloak_session_new(JSON.stringify(config));

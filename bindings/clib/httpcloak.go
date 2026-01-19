@@ -168,6 +168,7 @@ type SessionConfig struct {
 	PreferIPv4      bool              `json:"prefer_ipv4,omitempty"`       // Prefer IPv4 over IPv6
 	ConnectTo       map[string]string `json:"connect_to,omitempty"`        // Domain fronting: request_host -> connect_host
 	ECHConfigDomain string            `json:"ech_config_domain,omitempty"` // Domain to fetch ECH config from
+	TLSOnly         bool              `json:"tls_only,omitempty"`          // TLS-only mode: skip preset headers, set all manually
 }
 
 // Error response
@@ -728,6 +729,11 @@ func httpcloak_session_new(configJSON *C.char) C.int64_t {
 	// Handle ECH config domain
 	if config.ECHConfigDomain != "" {
 		opts = append(opts, httpcloak.WithECHFrom(config.ECHConfigDomain))
+	}
+
+	// Handle TLS-only mode
+	if config.TLSOnly {
+		opts = append(opts, httpcloak.WithTLSOnly())
 	}
 
 	session := httpcloak.NewSession(config.Preset, opts...)

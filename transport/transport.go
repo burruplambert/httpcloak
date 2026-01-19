@@ -121,6 +121,10 @@ type TransportConfig struct {
 
 	// ECHConfigDomain is a domain to fetch ECH config from instead of target
 	ECHConfigDomain string
+
+	// TLSOnly mode: use TLS fingerprint but skip preset HTTP headers
+	// User sets all headers manually
+	TLSOnly bool
 }
 
 // Request represents an HTTP request
@@ -234,6 +238,9 @@ type Transport struct {
 	// Custom header order (nil = use preset's order)
 	customHeaderOrder   []string
 	customHeaderOrderMu sync.RWMutex
+
+	// TLS-only mode: skip preset HTTP headers, use TLS fingerprint only
+	tlsOnly bool
 }
 
 // NewTransport creates a new unified transport
@@ -251,6 +258,12 @@ func NewTransportWithConfig(presetName string, proxy *ProxyConfig, config *Trans
 	preset := fingerprint.Get(presetName)
 	dnsCache := dns.NewCache()
 
+	// Determine TLS-only mode from config
+	tlsOnly := false
+	if config != nil {
+		tlsOnly = config.TLSOnly
+	}
+
 	t := &Transport{
 		dnsCache:        dnsCache,
 		preset:          preset,
@@ -259,6 +272,7 @@ func NewTransportWithConfig(presetName string, proxy *ProxyConfig, config *Trans
 		protocolSupport: make(map[string]Protocol),
 		proxy:           proxy,
 		config:          config,
+		tlsOnly:         tlsOnly,
 	}
 
 	// Determine effective TCP and UDP proxy URLs
@@ -948,7 +962,7 @@ func (t *Transport) doHTTP1(ctx context.Context, req *Request) (*Response, error
 	}
 
 	// Set preset headers (with ordering for fingerprinting)
-	applyPresetHeaders(httpReq, t.preset, t.getHeaderOrder())
+	applyPresetHeaders(httpReq, t.preset, t.getHeaderOrder(), t.tlsOnly)
 
 	// Override with custom headers (multi-value support)
 	for key, values := range req.Headers {
@@ -1056,7 +1070,7 @@ func (t *Transport) doHTTP2(ctx context.Context, req *Request) (*Response, error
 	}
 
 	// Set preset headers (with ordering for fingerprinting)
-	applyPresetHeaders(httpReq, t.preset, t.getHeaderOrder())
+	applyPresetHeaders(httpReq, t.preset, t.getHeaderOrder(), t.tlsOnly)
 
 	// Override with custom headers (multi-value support)
 	for key, values := range req.Headers {
@@ -1179,7 +1193,7 @@ func (t *Transport) doHTTP3(ctx context.Context, req *Request) (*Response, error
 	}
 
 	// Set preset headers (with ordering for fingerprinting)
-	applyPresetHeaders(httpReq, t.preset, t.getHeaderOrder())
+	applyPresetHeaders(httpReq, t.preset, t.getHeaderOrder(), t.tlsOnly)
 
 	// Override with custom headers (multi-value support)
 	for key, values := range req.Headers {
@@ -1300,19 +1314,23 @@ func (t *Transport) GetHTTP3Transport() *HTTP3Transport {
 // applyPresetHeaders applies headers from the preset to the request.
 // Uses ordered headers (HeaderOrder) if available, otherwise falls back to the map.
 // customHeaderOrder overrides preset's default order if provided.
-func applyPresetHeaders(httpReq *http.Request, preset *fingerprint.Preset, customHeaderOrder []string) {
-	if len(preset.HeaderOrder) > 0 {
-		// Use ordered headers for HTTP/2 and HTTP/3 fingerprinting
-		for _, hp := range preset.HeaderOrder {
-			httpReq.Header.Set(hp.Key, hp.Value)
+// If tlsOnly is true, skips applying preset headers but still sets header order for fingerprinting.
+func applyPresetHeaders(httpReq *http.Request, preset *fingerprint.Preset, customHeaderOrder []string, tlsOnly bool) {
+	// In TLS-only mode, skip applying preset headers but still set header order
+	if !tlsOnly {
+		if len(preset.HeaderOrder) > 0 {
+			// Use ordered headers for HTTP/2 and HTTP/3 fingerprinting
+			for _, hp := range preset.HeaderOrder {
+				httpReq.Header.Set(hp.Key, hp.Value)
+			}
+		} else {
+			// Fallback to unordered headers map
+			for key, value := range preset.Headers {
+				httpReq.Header.Set(key, value)
+			}
 		}
-	} else {
-		// Fallback to unordered headers map
-		for key, value := range preset.Headers {
-			httpReq.Header.Set(key, value)
-		}
+		httpReq.Header.Set("User-Agent", preset.UserAgent)
 	}
-	httpReq.Header.Set("User-Agent", preset.UserAgent)
 
 	// Set header order for HTTP/2 and HTTP/3 fingerprinting
 	// Custom order takes precedence, then preset's order, then fallback to hardcoded default

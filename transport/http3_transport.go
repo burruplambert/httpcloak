@@ -898,25 +898,29 @@ func (t *HTTP3Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	t.mu.Unlock()
 
 	// Use ordered headers if available (HTTP/3 header order matters for fingerprinting)
-	if len(t.preset.HeaderOrder) > 0 {
-		// Apply headers in the specified order
-		for _, hp := range t.preset.HeaderOrder {
-			if req.Header.Get(hp.Key) == "" {
-				req.Header.Set(hp.Key, hp.Value)
+	// Skip if in TLS-only mode (headers handled by applyPresetHeaders which respects tlsOnly)
+	tlsOnly := t.config != nil && t.config.TLSOnly
+	if !tlsOnly {
+		if len(t.preset.HeaderOrder) > 0 {
+			// Apply headers in the specified order
+			for _, hp := range t.preset.HeaderOrder {
+				if req.Header.Get(hp.Key) == "" {
+					req.Header.Set(hp.Key, hp.Value)
+				}
+			}
+		} else {
+			// Fallback to unordered headers map
+			for key, value := range t.preset.Headers {
+				if req.Header.Get(key) == "" {
+					req.Header.Set(key, value)
+				}
 			}
 		}
-	} else {
-		// Fallback to unordered headers map
-		for key, value := range t.preset.Headers {
-			if req.Header.Get(key) == "" {
-				req.Header.Set(key, value)
-			}
-		}
-	}
 
-	// Set User-Agent if not set
-	if req.Header.Get("User-Agent") == "" {
-		req.Header.Set("User-Agent", t.preset.UserAgent)
+		// Set User-Agent if not set
+		if req.Header.Get("User-Agent") == "" {
+			req.Header.Set("User-Agent", t.preset.UserAgent)
+		}
 	}
 
 	// Make request - http3.Transport handles connection pooling

@@ -75,7 +75,7 @@ type HTTP2Settings struct {
 	MaxHeaderListSize    uint32
 	// Window update and stream settings
 	ConnectionWindowUpdate uint32
-	StreamWeight           uint16 // Chrome sends 219 on wire (set to 220, code does -1)
+	StreamWeight           uint16 // Chrome sends 255 on wire (set to 256, code does -1)
 	StreamExclusive        bool
 }
 
@@ -95,7 +95,6 @@ func Chrome131() *Preset {
 			"sec-ch-ua-mobile":   "?0",
 			"sec-ch-ua-platform": `"` + p.Platform + `"`,
 			// Standard navigation headers (human clicked link)
-			// Note: Cache-Control is NOT sent on normal navigation, only on hard refresh (Ctrl+F5)
 			"Upgrade-Insecure-Requests": "1",
 			"Accept":                    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
 			"Sec-Fetch-Site":            "none",
@@ -106,6 +105,22 @@ func Chrome131() *Preset {
 			"Accept-Language":           "en-US,en;q=0.9",
 			"Priority":                  "u=0, i",
 		},
+		// Chrome header order for HTTP/2 and HTTP/3 (order matters!)
+		HeaderOrder: []HeaderPair{
+			{"sec-ch-ua", `"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"`},
+			{"sec-ch-ua-mobile", "?0"},
+			{"sec-ch-ua-platform", `"` + p.Platform + `"`},
+			{"upgrade-insecure-requests", "1"},
+			{"user-agent", ""}, // Placeholder - actual value set from preset.UserAgent
+			{"accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"},
+			{"sec-fetch-site", "none"},
+			{"sec-fetch-mode", "navigate"},
+			{"sec-fetch-user", "?1"},
+			{"sec-fetch-dest", "document"},
+			{"accept-encoding", "gzip, deflate, br, zstd"},
+			{"accept-language", "en-US,en;q=0.9"},
+			{"priority", "u=0, i"},
+		},
 		HTTP2Settings: HTTP2Settings{
 			HeaderTableSize:        65536,
 			EnablePush:             false,
@@ -114,7 +129,7 @@ func Chrome131() *Preset {
 			MaxFrameSize:           16384,
 			MaxHeaderListSize:      262144,
 			ConnectionWindowUpdate: 15663105,
-			StreamWeight:           220, // Chrome uses 219 (verified via dissecticon)
+			StreamWeight:           256, // Chrome uses 255 on wire (verified via tls.peet.ws)
 			StreamExclusive:        true,
 		},
 		SupportHTTP3: true,
@@ -135,7 +150,6 @@ func Chrome133() *Preset {
 			"sec-ch-ua-mobile":   "?0",
 			"sec-ch-ua-platform": `"` + p.Platform + `"`,
 			// Standard navigation headers (human clicked link)
-			// Note: Cache-Control is NOT sent on normal navigation, only on hard refresh (Ctrl+F5)
 			"Upgrade-Insecure-Requests": "1",
 			"Accept":                    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
 			"Sec-Fetch-Site":            "none",
@@ -146,6 +160,22 @@ func Chrome133() *Preset {
 			"Accept-Language":           "en-US,en;q=0.9",
 			"Priority":                  "u=0, i",
 		},
+		// Chrome header order for HTTP/2 and HTTP/3 (order matters!)
+		HeaderOrder: []HeaderPair{
+			{"sec-ch-ua", `"Google Chrome";v="133", "Chromium";v="133", "Not_A Brand";v="24"`},
+			{"sec-ch-ua-mobile", "?0"},
+			{"sec-ch-ua-platform", `"` + p.Platform + `"`},
+			{"upgrade-insecure-requests", "1"},
+			{"user-agent", ""}, // Placeholder - actual value set from preset.UserAgent
+			{"accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"},
+			{"sec-fetch-site", "none"},
+			{"sec-fetch-mode", "navigate"},
+			{"sec-fetch-user", "?1"},
+			{"sec-fetch-dest", "document"},
+			{"accept-encoding", "gzip, deflate, br, zstd"},
+			{"accept-language", "en-US,en;q=0.9"},
+			{"priority", "u=0, i"},
+		},
 		HTTP2Settings: HTTP2Settings{
 			HeaderTableSize:        65536,
 			EnablePush:             false,
@@ -154,7 +184,7 @@ func Chrome133() *Preset {
 			MaxFrameSize:           16384,
 			MaxHeaderListSize:      262144,
 			ConnectionWindowUpdate: 15663105,
-			StreamWeight:           220,
+			StreamWeight:           256,
 			StreamExclusive:        true,
 		},
 		SupportHTTP3: true,
@@ -175,7 +205,6 @@ func Chrome141() *Preset {
 			"sec-ch-ua-mobile":   "?0",
 			"sec-ch-ua-platform": `"` + p.Platform + `"`,
 			// Standard navigation headers (human clicked link)
-			// Note: Cache-Control is NOT sent on normal navigation, only on hard refresh (Ctrl+F5)
 			"Upgrade-Insecure-Requests": "1",
 			"Accept":                    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
 			"Sec-Fetch-Site":            "none",
@@ -186,6 +215,22 @@ func Chrome141() *Preset {
 			"Accept-Language":           "en-US,en;q=0.9",
 			"Priority":                  "u=0, i",
 		},
+		// Chrome header order for HTTP/2 and HTTP/3 (order matters!)
+		HeaderOrder: []HeaderPair{
+			{"sec-ch-ua", `"Google Chrome";v="141", "Not?A_Brand";v="8", "Chromium";v="141"`},
+			{"sec-ch-ua-mobile", "?0"},
+			{"sec-ch-ua-platform", `"` + p.Platform + `"`},
+			{"upgrade-insecure-requests", "1"},
+			{"user-agent", ""}, // Placeholder - actual value set from preset.UserAgent
+			{"accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"},
+			{"sec-fetch-site", "none"},
+			{"sec-fetch-mode", "navigate"},
+			{"sec-fetch-user", "?1"},
+			{"sec-fetch-dest", "document"},
+			{"accept-encoding", "gzip, deflate, br, zstd"},
+			{"accept-language", "en-US,en;q=0.9"},
+			{"priority", "u=0, i"},
+		},
 		HTTP2Settings: HTTP2Settings{
 			HeaderTableSize:        65536,
 			EnablePush:             false,
@@ -194,7 +239,7 @@ func Chrome141() *Preset {
 			MaxFrameSize:           16384,
 			MaxHeaderListSize:      262144,
 			ConnectionWindowUpdate: 15663105,
-			StreamWeight:           220,
+			StreamWeight:           256,
 			StreamExclusive:        true,
 		},
 		SupportHTTP3: true,
@@ -216,6 +261,17 @@ func Firefox133() *Preset {
 			"Sec-Fetch-Mode":  "navigate",
 			"Sec-Fetch-Site":  "none",
 			"Sec-Fetch-User":  "?1",
+		},
+		// Firefox header order for HTTP/2 (different from Chrome)
+		HeaderOrder: []HeaderPair{
+			{"user-agent", ""}, // Placeholder - actual value set from preset.UserAgent
+			{"accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"},
+			{"accept-language", "en-US,en;q=0.5"},
+			{"accept-encoding", "gzip, deflate, br"},
+			{"sec-fetch-dest", "document"},
+			{"sec-fetch-mode", "navigate"},
+			{"sec-fetch-site", "none"},
+			{"sec-fetch-user", "?1"},
 		},
 		HTTP2Settings: HTTP2Settings{
 			HeaderTableSize:        65536,
@@ -273,19 +329,21 @@ func Chrome143() *Preset {
 			"Priority":                  "u=0, i",
 		},
 		// Chrome 143 header order for HTTP/2 and HTTP/3 (order matters!)
+		// Verified against real Chrome 143 on Linux via tls.peet.ws
 		HeaderOrder: []HeaderPair{
-			{"accept-language", "en-US,en;q=0.9"},
 			{"sec-ch-ua", `"Google Chrome";v="143", "Chromium";v="143", "Not A(Brand";v="24"`},
+			{"sec-ch-ua-mobile", "?0"},
+			{"sec-ch-ua-platform", `"` + p.Platform + `"`},
+			{"upgrade-insecure-requests", "1"},
+			{"user-agent", ""}, // Placeholder - actual value set from preset.UserAgent
 			{"accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"},
 			{"sec-fetch-site", "none"},
-			{"sec-fetch-user", "?1"},
-			{"accept-encoding", "gzip, deflate, br, zstd"},
-			{"upgrade-insecure-requests", "1"},
-			{"sec-ch-ua-platform", `"` + p.Platform + `"`},
-			{"sec-ch-ua-mobile", "?0"},
-			{"sec-fetch-dest", "document"},
-			{"priority", "u=0, i"},
 			{"sec-fetch-mode", "navigate"},
+			{"sec-fetch-user", "?1"},
+			{"sec-fetch-dest", "document"},
+			{"accept-encoding", "gzip, deflate, br, zstd"},
+			{"accept-language", "en-US,en;q=0.9"},
+			{"priority", "u=0, i"},
 		},
 		HTTP2Settings: HTTP2Settings{
 			HeaderTableSize:        65536,
@@ -295,7 +353,7 @@ func Chrome143() *Preset {
 			MaxFrameSize:           16384,
 			MaxHeaderListSize:      262144,
 			ConnectionWindowUpdate: 15663105,
-			StreamWeight:           220,
+			StreamWeight:           256,
 			StreamExclusive:        true,
 		},
 		SupportHTTP3: true,
@@ -317,7 +375,6 @@ func Chrome143Windows() *Preset {
 			"sec-ch-ua-mobile":   "?0",
 			"sec-ch-ua-platform": `"Windows"`,
 			// Standard navigation headers (human clicked link)
-			// Note: Cache-Control is NOT sent on normal navigation, only on hard refresh (Ctrl+F5)
 			"Upgrade-Insecure-Requests": "1",
 			"Accept":                    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
 			"Sec-Fetch-Site":            "none",
@@ -328,6 +385,23 @@ func Chrome143Windows() *Preset {
 			"Accept-Language":           "en-US,en;q=0.9",
 			"Priority":                  "u=0, i",
 		},
+		// Chrome 143 header order for HTTP/2 and HTTP/3 (order matters!)
+		// Verified against real Chrome 143 on Windows via tls.peet.ws
+		HeaderOrder: []HeaderPair{
+			{"sec-ch-ua", `"Google Chrome";v="143", "Chromium";v="143", "Not A(Brand";v="24"`},
+			{"sec-ch-ua-mobile", "?0"},
+			{"sec-ch-ua-platform", `"Windows"`},
+			{"upgrade-insecure-requests", "1"},
+			{"user-agent", ""}, // Placeholder - actual value set from preset.UserAgent
+			{"accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"},
+			{"sec-fetch-site", "none"},
+			{"sec-fetch-mode", "navigate"},
+			{"sec-fetch-user", "?1"},
+			{"sec-fetch-dest", "document"},
+			{"accept-encoding", "gzip, deflate, br, zstd"},
+			{"accept-language", "en-US,en;q=0.9"},
+			{"priority", "u=0, i"},
+		},
 		HTTP2Settings: HTTP2Settings{
 			HeaderTableSize:        65536,
 			EnablePush:             false,
@@ -336,7 +410,7 @@ func Chrome143Windows() *Preset {
 			MaxFrameSize:           16384,
 			MaxHeaderListSize:      262144,
 			ConnectionWindowUpdate: 15663105,
-			StreamWeight:           220,
+			StreamWeight:           256,
 			StreamExclusive:        true,
 		},
 		SupportHTTP3: true,
@@ -358,7 +432,6 @@ func Chrome143Linux() *Preset {
 			"sec-ch-ua-mobile":   "?0",
 			"sec-ch-ua-platform": `"Linux"`,
 			// Standard navigation headers (human clicked link)
-			// Note: Cache-Control is NOT sent on normal navigation, only on hard refresh (Ctrl+F5)
 			"Upgrade-Insecure-Requests": "1",
 			"Accept":                    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
 			"Sec-Fetch-Site":            "none",
@@ -369,6 +442,23 @@ func Chrome143Linux() *Preset {
 			"Accept-Language":           "en-US,en;q=0.9",
 			"Priority":                  "u=0, i",
 		},
+		// Chrome 143 header order for HTTP/2 and HTTP/3 (order matters!)
+		// Verified against real Chrome 143 on Linux via tls.peet.ws
+		HeaderOrder: []HeaderPair{
+			{"sec-ch-ua", `"Google Chrome";v="143", "Chromium";v="143", "Not A(Brand";v="24"`},
+			{"sec-ch-ua-mobile", "?0"},
+			{"sec-ch-ua-platform", `"Linux"`},
+			{"upgrade-insecure-requests", "1"},
+			{"user-agent", ""}, // Placeholder - actual value set from preset.UserAgent
+			{"accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"},
+			{"sec-fetch-site", "none"},
+			{"sec-fetch-mode", "navigate"},
+			{"sec-fetch-user", "?1"},
+			{"sec-fetch-dest", "document"},
+			{"accept-encoding", "gzip, deflate, br, zstd"},
+			{"accept-language", "en-US,en;q=0.9"},
+			{"priority", "u=0, i"},
+		},
 		HTTP2Settings: HTTP2Settings{
 			HeaderTableSize:        65536,
 			EnablePush:             false,
@@ -377,7 +467,7 @@ func Chrome143Linux() *Preset {
 			MaxFrameSize:           16384,
 			MaxHeaderListSize:      262144,
 			ConnectionWindowUpdate: 15663105,
-			StreamWeight:           220,
+			StreamWeight:           256,
 			StreamExclusive:        true,
 		},
 		SupportHTTP3: true,
@@ -399,7 +489,6 @@ func Chrome143macOS() *Preset {
 			"sec-ch-ua-mobile":   "?0",
 			"sec-ch-ua-platform": `"macOS"`,
 			// Standard navigation headers (human clicked link)
-			// Note: Cache-Control is NOT sent on normal navigation, only on hard refresh (Ctrl+F5)
 			"Upgrade-Insecure-Requests": "1",
 			"Accept":                    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
 			"Sec-Fetch-Site":            "none",
@@ -410,6 +499,23 @@ func Chrome143macOS() *Preset {
 			"Accept-Language":           "en-US,en;q=0.9",
 			"Priority":                  "u=0, i",
 		},
+		// Chrome 143 header order for HTTP/2 and HTTP/3 (order matters!)
+		// Verified against real Chrome 143 on macOS via tls.peet.ws
+		HeaderOrder: []HeaderPair{
+			{"sec-ch-ua", `"Google Chrome";v="143", "Chromium";v="143", "Not A(Brand";v="24"`},
+			{"sec-ch-ua-mobile", "?0"},
+			{"sec-ch-ua-platform", `"macOS"`},
+			{"upgrade-insecure-requests", "1"},
+			{"user-agent", ""}, // Placeholder - actual value set from preset.UserAgent
+			{"accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"},
+			{"sec-fetch-site", "none"},
+			{"sec-fetch-mode", "navigate"},
+			{"sec-fetch-user", "?1"},
+			{"sec-fetch-dest", "document"},
+			{"accept-encoding", "gzip, deflate, br, zstd"},
+			{"accept-language", "en-US,en;q=0.9"},
+			{"priority", "u=0, i"},
+		},
 		HTTP2Settings: HTTP2Settings{
 			HeaderTableSize:        65536,
 			EnablePush:             false,
@@ -418,7 +524,7 @@ func Chrome143macOS() *Preset {
 			MaxFrameSize:           16384,
 			MaxHeaderListSize:      262144,
 			ConnectionWindowUpdate: 15663105,
-			StreamWeight:           220,
+			StreamWeight:           256,
 			StreamExclusive:        true,
 		},
 		SupportHTTP3: true,
@@ -439,6 +545,16 @@ func Safari18() *Preset {
 			"Sec-Fetch-Dest":  "document",
 			"Sec-Fetch-Mode":  "navigate",
 			"Sec-Fetch-Site":  "none",
+		},
+		// Safari header order for HTTP/2 (different from Chrome)
+		HeaderOrder: []HeaderPair{
+			{"accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"},
+			{"sec-fetch-dest", "document"},
+			{"sec-fetch-mode", "navigate"},
+			{"sec-fetch-site", "none"},
+			{"accept-language", "en-US,en;q=0.9"},
+			{"accept-encoding", "gzip, deflate, br"},
+			{"user-agent", ""}, // Placeholder - actual value set from preset.UserAgent
 		},
 		HTTP2Settings: HTTP2Settings{
 			HeaderTableSize:        4096,
@@ -477,6 +593,21 @@ func IOSChrome143() *Preset {
 			"Accept-Encoding":           "gzip, deflate, br",
 			"Accept-Language":           "en-US,en;q=0.9",
 		},
+		// iOS Chrome header order (Chrome UI with Safari's engine)
+		HeaderOrder: []HeaderPair{
+			{"sec-ch-ua", `"Google Chrome";v="143", "Chromium";v="143", "Not A(Brand";v="24"`},
+			{"sec-ch-ua-mobile", "?1"},
+			{"sec-ch-ua-platform", `"iOS"`},
+			{"upgrade-insecure-requests", "1"},
+			{"user-agent", ""}, // Placeholder - actual value set from preset.UserAgent
+			{"accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"},
+			{"sec-fetch-site", "none"},
+			{"sec-fetch-mode", "navigate"},
+			{"sec-fetch-user", "?1"},
+			{"sec-fetch-dest", "document"},
+			{"accept-encoding", "gzip, deflate, br"},
+			{"accept-language", "en-US,en;q=0.9"},
+		},
 		HTTP2Settings: HTTP2Settings{
 			// iOS uses Safari's HTTP/2 settings
 			HeaderTableSize:        4096,
@@ -507,6 +638,16 @@ func IOSSafari17() *Preset {
 			"Sec-Fetch-Dest":  "document",
 			"Sec-Fetch-Mode":  "navigate",
 			"Sec-Fetch-Site":  "none",
+		},
+		// iOS Safari header order for HTTP/2 (same as macOS Safari)
+		HeaderOrder: []HeaderPair{
+			{"accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"},
+			{"sec-fetch-dest", "document"},
+			{"sec-fetch-mode", "navigate"},
+			{"sec-fetch-site", "none"},
+			{"accept-language", "en-US,en;q=0.9"},
+			{"accept-encoding", "gzip, deflate, br"},
+			{"user-agent", ""}, // Placeholder - actual value set from preset.UserAgent
 		},
 		HTTP2Settings: HTTP2Settings{
 			HeaderTableSize:        4096,
@@ -547,6 +688,23 @@ func AndroidChrome143() *Preset {
 			"Accept-Language":           "en-US,en;q=0.9",
 			"Priority":                  "u=0, i",
 		},
+		// Chrome 143 header order for HTTP/2 and HTTP/3 (order matters!)
+		// Same as desktop Chrome but with mobile flag
+		HeaderOrder: []HeaderPair{
+			{"sec-ch-ua", `"Google Chrome";v="143", "Chromium";v="143", "Not A(Brand";v="24"`},
+			{"sec-ch-ua-mobile", "?1"},
+			{"sec-ch-ua-platform", `"Android"`},
+			{"upgrade-insecure-requests", "1"},
+			{"user-agent", ""}, // Placeholder - actual value set from preset.UserAgent
+			{"accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"},
+			{"sec-fetch-site", "none"},
+			{"sec-fetch-mode", "navigate"},
+			{"sec-fetch-user", "?1"},
+			{"sec-fetch-dest", "document"},
+			{"accept-encoding", "gzip, deflate, br, zstd"},
+			{"accept-language", "en-US,en;q=0.9"},
+			{"priority", "u=0, i"},
+		},
 		HTTP2Settings: HTTP2Settings{
 			// Android Chrome uses same HTTP/2 settings as desktop Chrome
 			HeaderTableSize:        65536,
@@ -556,7 +714,7 @@ func AndroidChrome143() *Preset {
 			MaxFrameSize:           16384,
 			MaxHeaderListSize:      262144,
 			ConnectionWindowUpdate: 15663105,
-			StreamWeight:           220,
+			StreamWeight:           256,
 			StreamExclusive:        true,
 		},
 		SupportHTTP3: true,
