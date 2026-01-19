@@ -1,6 +1,7 @@
 package pool
 
 import (
+	"encoding/base64"
 	"testing"
 )
 
@@ -110,7 +111,7 @@ func TestProxyConfigAddr(t *testing.T) {
 	}
 }
 
-// TestBase64Encode tests base64 encoding
+// TestBase64Encode tests base64 encoding (verifies stdlib matches expected outputs)
 func TestBase64Encode(t *testing.T) {
 	tests := []struct {
 		input    string
@@ -128,9 +129,9 @@ func TestBase64Encode(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			result := base64Encode([]byte(tt.input))
+			result := base64.StdEncoding.EncodeToString([]byte(tt.input))
 			if result != tt.expected {
-				t.Errorf("base64Encode(%q) = %q, expected %q", tt.input, result, tt.expected)
+				t.Errorf("base64.StdEncoding.EncodeToString(%q) = %q, expected %q", tt.input, result, tt.expected)
 			}
 		})
 	}
@@ -306,6 +307,6 @@ func BenchmarkBase64Encode(b *testing.B) {
 	data := []byte("username:password")
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		base64Encode(data)
+		base64.StdEncoding.EncodeToString(data)
 	}
 }

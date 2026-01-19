@@ -51,11 +51,15 @@ func NewCache() *Cache {
 
 // SetPreferIPv4 sets whether to prefer IPv4 addresses over IPv6
 func (c *Cache) SetPreferIPv4(prefer bool) {
+	c.mu.Lock()
 	c.preferIPv4 = prefer
+	c.mu.Unlock()
 }
 
 // PreferIPv4 returns whether IPv4 is preferred over IPv6
 func (c *Cache) PreferIPv4() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	return c.preferIPv4
 }
 
@@ -125,7 +129,7 @@ func (c *Cache) ResolveOne(ctx context.Context, host string) (net.IP, error) {
 		return nil, &net.DNSError{Err: "no addresses found", Name: host}
 	}
 
-	if c.preferIPv4 {
+	if c.PreferIPv4() {
 		// Prefer IPv4
 		for _, ip := range ips {
 			if ip.To4() != nil {
@@ -169,7 +173,7 @@ func (c *Cache) ResolveAllSorted(ctx context.Context, host string) ([]net.IP, er
 	result := make([]net.IP, 0, len(ips))
 	i, j := 0, 0
 
-	if c.preferIPv4 {
+	if c.PreferIPv4() {
 		// IPv4 first: IPv4, IPv6, IPv4, IPv6, ...
 		for i < len(ipv4) || j < len(ipv6) {
 			if i < len(ipv4) {
@@ -300,6 +304,34 @@ var (
 	echCacheMu sync.RWMutex
 )
 
+// Default DNS servers for ECH queries
+var (
+	echDNSServers   = []string{"8.8.8.8:53", "1.1.1.1:53", "9.9.9.9:53"}
+	echDNSServersMu sync.RWMutex
+)
+
+// SetECHDNSServers sets the DNS servers to use for ECH config queries.
+// Pass nil or empty slice to reset to defaults.
+func SetECHDNSServers(servers []string) {
+	echDNSServersMu.Lock()
+	defer echDNSServersMu.Unlock()
+	if len(servers) == 0 {
+		echDNSServers = []string{"8.8.8.8:53", "1.1.1.1:53", "9.9.9.9:53"}
+	} else {
+		echDNSServers = make([]string, len(servers))
+		copy(echDNSServers, servers)
+	}
+}
+
+// GetECHDNSServers returns the current DNS servers used for ECH config queries.
+func GetECHDNSServers() []string {
+	echDNSServersMu.RLock()
+	defer echDNSServersMu.RUnlock()
+	result := make([]string, len(echDNSServers))
+	copy(result, echDNSServers)
+	return result
+}
+
 // FetchECHConfigs fetches ECH configs from DNS HTTPS records for the given hostname.
 // Returns nil if no ECH configs are available (this is not an error).
 func FetchECHConfigs(ctx context.Context, hostname string) ([]byte, error) {
@@ -347,8 +379,8 @@ func queryECHFromDNS(ctx context.Context, hostname string) ([]byte, uint32, erro
 	msg.SetQuestion(dns.Fqdn(hostname), dns.TypeHTTPS)
 	msg.RecursionDesired = true
 
-	// Use system resolver or fallback to well-known DNS
-	dnsServers := []string{"8.8.8.8:53", "1.1.1.1:53", "9.9.9.9:53"}
+	// Use configured DNS servers (defaults to well-known public DNS)
+	dnsServers := GetECHDNSServers()
 
 	var lastErr error
 	for _, server := range dnsServers {

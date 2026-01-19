@@ -12,6 +12,10 @@ import (
 // TLS session tickets typically expire after 24-48 hours
 const TLSSessionMaxAge = 24 * time.Hour
 
+// TLSSessionCacheMaxSize is the maximum number of sessions to cache
+// Matches the size used by pool/pool.go for LRU session cache
+const TLSSessionCacheMaxSize = 32
+
 // TLSSessionState represents a serializable TLS session
 type TLSSessionState struct {
 	Ticket    string    `json:"ticket"`     // base64 encoded
@@ -20,10 +24,11 @@ type TLSSessionState struct {
 }
 
 // PersistableSessionCache implements tls.ClientSessionCache
-// with export/import capabilities for session persistence
+// with export/import capabilities for session persistence and LRU eviction
 type PersistableSessionCache struct {
-	mu       sync.RWMutex
-	sessions map[string]*cachedSession
+	mu          sync.RWMutex
+	sessions    map[string]*cachedSession
+	accessOrder []string // LRU order: oldest at front, newest at back
 }
 
 type cachedSession struct {
@@ -40,13 +45,26 @@ func NewPersistableSessionCache() *PersistableSessionCache {
 
 // Get implements tls.ClientSessionCache
 func (c *PersistableSessionCache) Get(sessionKey string) (*tls.ClientSessionState, bool) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
 	if cached, ok := c.sessions[sessionKey]; ok {
+		// Move to end of accessOrder (most recently used)
+		c.moveToEnd(sessionKey)
 		return cached.state, true
 	}
 	return nil, false
+}
+
+// moveToEnd moves a key to the end of accessOrder (must be called with lock held)
+func (c *PersistableSessionCache) moveToEnd(key string) {
+	for i, k := range c.accessOrder {
+		if k == key {
+			c.accessOrder = append(c.accessOrder[:i], c.accessOrder[i+1:]...)
+			c.accessOrder = append(c.accessOrder, key)
+			return
+		}
+	}
 }
 
 // Put implements tls.ClientSessionCache
@@ -54,10 +72,30 @@ func (c *PersistableSessionCache) Put(sessionKey string, cs *tls.ClientSessionSt
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	// Check if key already exists
+	if _, exists := c.sessions[sessionKey]; exists {
+		// Update existing entry and move to end
+		c.sessions[sessionKey] = &cachedSession{
+			state:     cs,
+			createdAt: time.Now(),
+		}
+		c.moveToEnd(sessionKey)
+		return
+	}
+
+	// Evict oldest if at capacity
+	if len(c.sessions) >= TLSSessionCacheMaxSize && len(c.accessOrder) > 0 {
+		oldest := c.accessOrder[0]
+		c.accessOrder = c.accessOrder[1:]
+		delete(c.sessions, oldest)
+	}
+
+	// Add new entry
 	c.sessions[sessionKey] = &cachedSession{
 		state:     cs,
 		createdAt: time.Now(),
 	}
+	c.accessOrder = append(c.accessOrder, sessionKey)
 }
 
 // Export serializes all TLS sessions for persistence
@@ -139,6 +177,14 @@ func (c *PersistableSessionCache) Import(sessions map[string]TLSSessionState) er
 			state:     clientState,
 			createdAt: serialized.CreatedAt,
 		}
+		c.accessOrder = append(c.accessOrder, key)
+	}
+
+	// Enforce max size limit after import (evict oldest if over limit)
+	for len(c.sessions) > TLSSessionCacheMaxSize && len(c.accessOrder) > 0 {
+		oldest := c.accessOrder[0]
+		c.accessOrder = c.accessOrder[1:]
+		delete(c.sessions, oldest)
 	}
 
 	return nil
@@ -149,6 +195,7 @@ func (c *PersistableSessionCache) Clear() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.sessions = make(map[string]*cachedSession)
+	c.accessOrder = nil
 }
 
 // Count returns the number of cached sessions

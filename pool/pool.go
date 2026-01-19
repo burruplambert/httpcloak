@@ -3,6 +3,7 @@ package pool
 import (
 	"context"
 	crand "crypto/rand"
+	"encoding/base64"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -399,9 +400,14 @@ func (p *HostPool) createConn(ctx context.Context) (*Conn, error) {
 			StreamDep: 0,
 		},
 		HeaderOrder: []string{
+			// Chrome 143 header order (verified via tls.peet.ws)
+			"cache-control", // appears on reload/session resumption
 			"sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform",
-			"upgrade-insecure-requests", "user-agent", "accept",
+			"upgrade-insecure-requests", "user-agent",
+			"content-type", "content-length", // for POST requests
+			"accept", "origin", // origin for CORS
 			"sec-fetch-site", "sec-fetch-mode", "sec-fetch-user", "sec-fetch-dest",
+			"referer",
 			"accept-encoding", "accept-language",
 			"cookie", "priority",
 		},
@@ -658,7 +664,7 @@ func (p *HostPool) dialHTTPProxy(ctx context.Context, proxy *proxyConfig) (net.C
 	// Add proxy authentication if provided
 	if proxy.Username != "" {
 		auth := proxy.Username + ":" + proxy.Password
-		encoded := base64Encode([]byte(auth))
+		encoded := base64.StdEncoding.EncodeToString([]byte(auth))
 		connectReq += fmt.Sprintf("Proxy-Authorization: Basic %s\r\n", encoded)
 	}
 
@@ -832,29 +838,6 @@ func parsePort(port string) (int, error) {
 		p = p*10 + int(c-'0')
 	}
 	return p, nil
-}
-
-// base64Encode encodes data as base64
-func base64Encode(data []byte) string {
-	const base64Chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-	result := make([]byte, 0, ((len(data)+2)/3)*4)
-
-	for i := 0; i < len(data); i += 3 {
-		var b uint32
-		remaining := len(data) - i
-		if remaining >= 3 {
-			b = uint32(data[i])<<16 | uint32(data[i+1])<<8 | uint32(data[i+2])
-			result = append(result, base64Chars[b>>18], base64Chars[(b>>12)&0x3F], base64Chars[(b>>6)&0x3F], base64Chars[b&0x3F])
-		} else if remaining == 2 {
-			b = uint32(data[i])<<16 | uint32(data[i+1])<<8
-			result = append(result, base64Chars[b>>18], base64Chars[(b>>12)&0x3F], base64Chars[(b>>6)&0x3F], '=')
-		} else {
-			b = uint32(data[i]) << 16
-			result = append(result, base64Chars[b>>18], base64Chars[(b>>12)&0x3F], '=', '=')
-		}
-	}
-
-	return string(result)
 }
 
 // isHTTP200 checks if response starts with HTTP/1.x 200

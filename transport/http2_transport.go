@@ -41,9 +41,10 @@ type HTTP2Transport struct {
 	cachedPSKSpec *utls.ClientHelloSpec
 
 	// Configuration
-	maxIdleTime    time.Duration
-	maxConnAge     time.Duration
-	connectTimeout time.Duration
+	maxIdleTime        time.Duration
+	maxConnAge         time.Duration
+	connectTimeout     time.Duration
+	insecureSkipVerify bool
 
 	// Cleanup
 	stopCleanup chan struct{}
@@ -305,7 +306,7 @@ func (t *HTTP2Transport) createConn(ctx context.Context, host, port string) (*pe
 	// Wrap with uTLS for fingerprinting
 	tlsConfig := &utls.Config{
 		ServerName:                         host,
-		InsecureSkipVerify:                 false,
+		InsecureSkipVerify:                 t.insecureSkipVerify,
 		MinVersion:                         minVersion,
 		MaxVersion:                         tls.VersionTLS13,
 		OmitEmptyPsk:                       true,          // Chrome doesn't send empty PSK on first connection
@@ -384,11 +385,16 @@ func (t *HTTP2Transport) createConn(ctx context.Context, host, port string) (*pe
 			StreamDep: 0,
 		},
 		HeaderOrder: []string{
-			"content-length", "sec-ch-ua-platform", "user-agent", "sec-ch-ua",
-			"content-type", "sec-ch-ua-mobile", "accept", "origin",
+			// Chrome 143 header order (verified via tls.peet.ws)
+			"cache-control", // appears on reload/session resumption
+			"sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform",
+			"upgrade-insecure-requests", "user-agent",
+			"content-type", "content-length", // for POST requests
+			"accept", "origin", // origin for CORS
 			"sec-fetch-site", "sec-fetch-mode", "sec-fetch-user", "sec-fetch-dest",
-			"referer", "accept-encoding", "accept-language", "priority",
-			"upgrade-insecure-requests", "cookie",
+			"referer",
+			"accept-encoding", "accept-language",
+			"cookie", "priority",
 		},
 		UserAgent:           t.preset.UserAgent,
 		StreamPriorityMode:  http2.StreamPriorityChrome,
@@ -628,6 +634,11 @@ func (t *HTTP2Transport) GetSessionCache() utls.ClientSessionCache {
 // SetSessionCache sets the TLS session cache
 func (t *HTTP2Transport) SetSessionCache(cache utls.ClientSessionCache) {
 	t.sessionCache = cache
+}
+
+// SetInsecureSkipVerify sets whether to skip TLS certificate verification
+func (t *HTTP2Transport) SetInsecureSkipVerify(skip bool) {
+	t.insecureSkipVerify = skip
 }
 
 // Stats returns transport statistics

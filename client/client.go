@@ -750,7 +750,7 @@ func (c *Client) doOnce(ctx context.Context, req *Request, redirectHistory []*Re
 		if c.config.Proxy != "" && !transport.SupportsQUIC(c.config.Proxy) {
 			return nil, fmt.Errorf("HTTP/3 requires SOCKS5 or MASQUE proxy: HTTP proxies cannot tunnel UDP")
 		}
-		if c.quicManager == nil && c.masqueTransport == nil {
+		if c.quicManager == nil && c.masqueTransport == nil && c.socks5H3Transport == nil {
 			return nil, fmt.Errorf("HTTP/3 is disabled (no QUIC manager or MASQUE transport available)")
 		}
 		resp, usedProtocol, err = c.doHTTP3(ctx, host, port, httpReq, timing, startTime)
