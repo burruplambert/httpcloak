@@ -246,6 +246,22 @@ session = httpcloak.Session(
 
 Cloudflare trace shows `sni=encrypted` instead of `sni=plaintext`.
 
+### ⚡ Session Resumption (0-RTT)
+
+TLS session tickets make you look like a returning visitor.
+
+```python
+# Warm up on any Cloudflare site
+session.get("https://cloudflare.com/")
+session.save("session.json")
+
+# Use on your target
+session = httpcloak.Session.load("session.json")
+r = session.get("https://target.com/")  # Bot score: 99
+```
+
+Cross-domain warming works because Cloudflare sites share TLS infrastructure.
+
 ### 🌐 HTTP/3 Through Proxies
 
 Two methods for QUIC through proxies:
@@ -476,6 +492,12 @@ session.get_proxy()            # Get current proxy
 session.get_tcp_proxy()        # Get current TCP proxy
 session.get_udp_proxy()        # Get current UDP proxy
 
+# Session persistence (0-RTT resumption)
+session.save("session.json")   # Save to file
+session = Session.load("session.json")  # Load from file
+data = session.marshal()       # Export as string
+session = Session.unmarshal(data)  # Import from string
+
 # Response object
 response.status_code           # HTTP status
 response.ok                    # True if status < 400
@@ -529,6 +551,12 @@ c.GetProxy()               // Get current proxy
 c.GetTCPProxy()            // Get current TCP proxy
 c.GetUDPProxy()            // Get current UDP proxy
 
+// Session persistence (0-RTT resumption)
+c.Save("session.json")     // Save to file
+c, _ = client.Load("session.json")  // Load from file
+data, _ := c.Marshal()     // Export as string
+c, _ = client.Unmarshal(data)  // Import from string
+
 // Response object
 resp.StatusCode
 resp.Protocol
@@ -575,6 +603,12 @@ session.getTcpProxy()          // Get current TCP proxy
 session.getUdpProxy()          // Get current UDP proxy
 session.proxy                  // Property accessor (get/set)
 
+// Session persistence (0-RTT resumption)
+session.save("session.json")   // Save to file
+session = httpcloak.Session.load("session.json")  // Load from file
+const data = session.marshal() // Export as string
+session = httpcloak.Session.unmarshal(data)  // Import from string
+
 // Response object
 response.statusCode
 response.ok
@@ -611,6 +645,12 @@ session.GetProxy()             // Get current proxy
 session.GetTcpProxy()          // Get current TCP proxy
 session.GetUdpProxy()          // Get current UDP proxy
 session.Proxy                  // Property accessor (get/set)
+
+// Session persistence (0-RTT resumption)
+session.Save("session.json")   // Save to file
+var session = Session.Load("session.json")  // Load from file
+var data = session.Marshal()   // Export as string
+var session = Session.Unmarshal(data)  // Import from string
 
 // Response object
 response.StatusCode
