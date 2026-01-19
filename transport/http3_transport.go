@@ -390,19 +390,21 @@ func NewHTTP3TransportWithConfig(preset *fingerprint.Preset, dnsCache *dns.Cache
 	}
 
 	// Set up SOCKS5 UDP relay if proxy is configured
+	// HTTP/3 requires SOCKS5 UDP ASSOCIATE which not all proxies support
 	if proxyConfig != nil && proxyConfig.URL != "" {
 		socks5Conn, err := proxy.NewSOCKS5UDPConn(proxyConfig.URL)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create SOCKS5 UDP connection: %w", err)
+			return nil, fmt.Errorf("failed to connect to SOCKS5 proxy: %w", err)
 		}
 
 		// Establish UDP ASSOCIATE (with 15 second timeout)
+		// This is required for QUIC/HTTP3 but not all SOCKS5 proxies support it
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 
 		if err := socks5Conn.Establish(ctx); err != nil {
 			socks5Conn.Close()
-			return nil, fmt.Errorf("SOCKS5 UDP ASSOCIATE failed: %w", err)
+			return nil, fmt.Errorf("SOCKS5 proxy does not support UDP relay (required for HTTP/3): %w. Use HTTP/2 with this proxy or switch to a proxy that supports SOCKS5 UDP ASSOCIATE", err)
 		}
 
 		t.socks5Conn = socks5Conn

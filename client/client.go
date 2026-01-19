@@ -97,6 +97,9 @@ type Client struct {
 	// Track which hosts need HTTP/1.1 (don't support HTTP/2)
 	h2Failures   map[string]time.Time
 	h2FailuresMu sync.RWMutex
+
+	// Store H3 initialization error for better error messages
+	h3InitError error
 }
 
 // NewClient creates a new HTTP client with default configuration
@@ -138,6 +141,7 @@ func NewClient(presetName string, opts ...Option) *Client {
 	var quicManager *pool.QUICManager
 	var masqueTransport *transport.HTTP3Transport
 	var socks5H3Transport *transport.HTTP3Transport
+	var h3InitError error
 	if !config.DisableH3 {
 		if udpProxyURL != "" && transport.IsMASQUEProxy(udpProxyURL) {
 			// Use dedicated MASQUE transport for MASQUE proxies
@@ -147,6 +151,7 @@ func NewClient(presetName string, opts ...Option) *Client {
 			if err != nil {
 				// Fall back to non-H3 if MASQUE transport creation fails
 				masqueTransport = nil
+				h3InitError = err
 			}
 		} else if udpProxyURL != "" && transport.IsSOCKS5Proxy(udpProxyURL) {
 			// Use SOCKS5 UDP relay transport for HTTP/3
@@ -156,6 +161,7 @@ func NewClient(presetName string, opts ...Option) *Client {
 			if err != nil {
 				// Fall back to non-H3 if SOCKS5 transport creation fails
 				socks5H3Transport = nil
+				h3InitError = err
 			}
 		} else if udpProxyURL == "" {
 			// Use QUICManager for direct connections only
@@ -220,6 +226,7 @@ func NewClient(presetName string, opts ...Option) *Client {
 		config:            config,
 		h3Failures:        make(map[string]time.Time),
 		h2Failures:        make(map[string]time.Time),
+		h3InitError:       h3InitError,
 	}
 
 	// Auto-enable cookies when retry is enabled
@@ -756,7 +763,10 @@ func (c *Client) doOnce(ctx context.Context, req *Request, redirectHistory []*Re
 			return nil, fmt.Errorf("HTTP/3 requires SOCKS5 or MASQUE proxy: HTTP proxies cannot tunnel UDP")
 		}
 		if c.quicManager == nil && c.masqueTransport == nil && c.socks5H3Transport == nil {
-			return nil, fmt.Errorf("HTTP/3 is disabled (no QUIC manager or MASQUE transport available)")
+			if c.h3InitError != nil {
+				return nil, fmt.Errorf("HTTP/3 is disabled: %w", c.h3InitError)
+			}
+			return nil, fmt.Errorf("HTTP/3 is disabled (no QUIC transport available)")
 		}
 		resp, usedProtocol, err = c.doHTTP3(ctx, host, port, httpReq, timing, startTime)
 		if err != nil {
