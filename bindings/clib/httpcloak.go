@@ -1461,10 +1461,12 @@ func httpcloak_version() *C.char {
 
 //export httpcloak_available_presets
 func httpcloak_available_presets() *C.char {
+	// Must match exactly what's in fingerprint/presets.go
 	presets := []string{
 		"chrome-143", "chrome-143-windows", "chrome-143-linux", "chrome-143-macos",
-		"chrome-131", "chrome-131-windows", "chrome-131-linux", "chrome-131-macos",
-		"firefox-133", "safari-18",
+		"chrome-141", "chrome-133", "chrome-131",
+		"ios-chrome-143", "android-chrome-143",
+		"firefox-133", "safari-18", "ios-safari-17",
 	}
 	data, _ := json.Marshal(presets)
 	return C.CString(string(data))
