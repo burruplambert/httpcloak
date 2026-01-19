@@ -1126,6 +1126,7 @@ class Session {
    * @param {Object} [options.connectTo] - Domain fronting map {requestHost: connectHost}
    * @param {string} [options.echConfigDomain] - Domain to fetch ECH config from (e.g., "cloudflare-ech.com")
    * @param {boolean} [options.tlsOnly=false] - TLS-only mode: skip preset HTTP headers, only apply TLS fingerprint
+   * @param {number} [options.quicIdleTimeout=0] - QUIC idle timeout in seconds (default: 30, 0 uses default)
    */
   constructor(options = {}) {
     const {
@@ -1145,6 +1146,7 @@ class Session {
       connectTo = null,
       echConfigDomain = null,
       tlsOnly = false,
+      quicIdleTimeout = 0,
     } = options;
 
     this._lib = getLib();
@@ -1189,6 +1191,9 @@ class Session {
     }
     if (tlsOnly) {
       config.tls_only = true;
+    }
+    if (quicIdleTimeout > 0) {
+      config.quic_idle_timeout = quicIdleTimeout;
     }
 
     this._handle = this._lib.httpcloak_session_new(JSON.stringify(config));

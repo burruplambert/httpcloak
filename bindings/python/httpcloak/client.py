@@ -1175,6 +1175,7 @@ class Session:
         connect_to: Domain fronting map {request_host: connect_host} - DNS resolves connect_host but SNI/Host uses request_host
         ech_config_domain: Domain to fetch ECH config from (e.g., "cloudflare-ech.com" for any CF domain)
         tls_only: TLS-only mode - skip preset HTTP headers, only apply TLS fingerprint (default: False)
+        quic_idle_timeout: QUIC connection idle timeout in seconds (default: 30). Set higher for long-lived H3 connections.
 
     Example:
         with httpcloak.Session(preset="chrome-143") as session:
@@ -1221,6 +1222,7 @@ class Session:
         connect_to: Optional[Dict[str, str]] = None,
         ech_config_domain: Optional[str] = None,
         tls_only: bool = False,
+        quic_idle_timeout: int = 0,
     ):
         self._lib = _get_lib()
         self._default_timeout = timeout
@@ -1252,6 +1254,8 @@ class Session:
             config["ech_config_domain"] = ech_config_domain
         if tls_only:
             config["tls_only"] = True
+        if quic_idle_timeout > 0:
+            config["quic_idle_timeout"] = quic_idle_timeout
 
         config_json = json.dumps(config).encode("utf-8")
         self._handle = self._lib.httpcloak_session_new(config_json)

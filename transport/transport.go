@@ -125,6 +125,9 @@ type TransportConfig struct {
 	// TLSOnly mode: use TLS fingerprint but skip preset HTTP headers
 	// User sets all headers manually
 	TLSOnly bool
+
+	// QuicIdleTimeout is the idle timeout for QUIC connections (default: 30s)
+	QuicIdleTimeout time.Duration
 }
 
 // Request represents an HTTP request

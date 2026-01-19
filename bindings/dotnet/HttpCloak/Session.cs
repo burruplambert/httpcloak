@@ -135,6 +135,7 @@ public sealed class Session : IDisposable
     /// <param name="connectTo">Domain fronting map (requestHost -> connectHost)</param>
     /// <param name="echConfigDomain">Domain to fetch ECH config from (e.g., "cloudflare-ech.com")</param>
     /// <param name="tlsOnly">TLS-only mode: use TLS fingerprint but skip preset HTTP headers (default: false)</param>
+    /// <param name="quicIdleTimeout">QUIC idle timeout in seconds (default: 30). Set higher for long-lived HTTP/3 connections.</param>
     public Session(
         string preset = "chrome-143",
         string? proxy = null,
@@ -150,7 +151,8 @@ public sealed class Session : IDisposable
         (string Username, string Password)? auth = null,
         Dictionary<string, string>? connectTo = null,
         string? echConfigDomain = null,
-        bool tlsOnly = false)
+        bool tlsOnly = false,
+        int quicIdleTimeout = 0)
     {
         Auth = auth;
 
@@ -169,7 +171,8 @@ public sealed class Session : IDisposable
             PreferIpv4 = preferIpv4,
             ConnectTo = connectTo,
             EchConfigDomain = echConfigDomain,
-            TlsOnly = tlsOnly
+            TlsOnly = tlsOnly,
+            QuicIdleTimeout = quicIdleTimeout
         };
 
         string configJson = JsonSerializer.Serialize(config, JsonContext.Default.SessionConfig);
@@ -1890,6 +1893,10 @@ internal class SessionConfig
     [JsonPropertyName("tls_only")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool TlsOnly { get; set; }
+
+    [JsonPropertyName("quic_idle_timeout")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public int QuicIdleTimeout { get; set; }
 }
 
 internal class RequestConfig

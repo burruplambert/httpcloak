@@ -385,7 +385,7 @@ func (p *QUICHostPool) createConn(ctx context.Context) (*QUICConn, error) {
 	// QUIC config with Chrome-like settings
 	quicConfig := &quic.Config{
 		MaxIdleTimeout:               30 * time.Second, // Chrome uses 30s
-		KeepAlivePeriod:              30 * time.Second,
+		KeepAlivePeriod:              15 * time.Second, // Send keepalives before idle timeout
 		MaxIncomingStreams:           100,
 		MaxIncomingUniStreams:        103, // Chrome uses 103
 		Allow0RTT:                    true,

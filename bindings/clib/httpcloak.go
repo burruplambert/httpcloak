@@ -169,6 +169,7 @@ type SessionConfig struct {
 	ConnectTo       map[string]string `json:"connect_to,omitempty"`        // Domain fronting: request_host -> connect_host
 	ECHConfigDomain string            `json:"ech_config_domain,omitempty"` // Domain to fetch ECH config from
 	TLSOnly         bool              `json:"tls_only,omitempty"`          // TLS-only mode: skip preset headers, set all manually
+	QuicIdleTimeout int               `json:"quic_idle_timeout,omitempty"` // QUIC idle timeout in seconds (default: 30)
 }
 
 // Error response
@@ -734,6 +735,11 @@ func httpcloak_session_new(configJSON *C.char) C.int64_t {
 	// Handle TLS-only mode
 	if config.TLSOnly {
 		opts = append(opts, httpcloak.WithTLSOnly())
+	}
+
+	// Handle QUIC idle timeout
+	if config.QuicIdleTimeout > 0 {
+		opts = append(opts, httpcloak.WithQuicIdleTimeout(time.Duration(config.QuicIdleTimeout)*time.Second))
 	}
 
 	session := httpcloak.NewSession(config.Preset, opts...)

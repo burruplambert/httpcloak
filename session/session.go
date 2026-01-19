@@ -70,13 +70,14 @@ func NewSession(id string, config *protocol.SessionConfig) *Session {
 		}
 	}
 
-	// Create transport config with ConnectTo, ECH, and TLS-only settings
+	// Create transport config with ConnectTo, ECH, TLS-only, and QUIC timeout settings
 	var transportConfig *transport.TransportConfig
-	if len(config.ConnectTo) > 0 || config.ECHConfigDomain != "" || config.TLSOnly {
+	if len(config.ConnectTo) > 0 || config.ECHConfigDomain != "" || config.TLSOnly || config.QuicIdleTimeout > 0 {
 		transportConfig = &transport.TransportConfig{
 			ConnectTo:       config.ConnectTo,
 			ECHConfigDomain: config.ECHConfigDomain,
 			TLSOnly:         config.TLSOnly,
+			QuicIdleTimeout: time.Duration(config.QuicIdleTimeout) * time.Second,
 		}
 	}
 

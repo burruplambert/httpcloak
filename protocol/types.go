@@ -182,6 +182,10 @@ type SessionConfig struct {
 	// Useful when you want to set all headers manually
 	TLSOnly bool `json:"tlsOnly,omitempty"`
 
+	// QUIC idle timeout in seconds (default: 30)
+	// Connections are closed after this duration of inactivity
+	QuicIdleTimeout int `json:"quicIdleTimeout,omitempty"`
+
 	// Default authentication (can be overridden per-request)
 	Auth *AuthConfig `json:"auth,omitempty"`
 }

@@ -241,10 +241,18 @@ func NewHTTP3TransportWithTransportConfig(preset *fingerprint.Preset, dnsCache *
 		t.tlsConfig.ClientSessionCache = t.sessionCache
 	}
 
+	// Determine QUIC idle timeout (default 30s, configurable)
+	quicIdleTimeout := 30 * time.Second
+	if config != nil && config.QuicIdleTimeout > 0 {
+		quicIdleTimeout = config.QuicIdleTimeout
+	}
+	// Keepalive should be half of idle timeout to prevent connection closure
+	keepAlivePeriod := quicIdleTimeout / 2
+
 	// Create QUIC config with connection reuse settings and TLS fingerprinting
 	t.quicConfig = &quic.Config{
-		MaxIdleTimeout:               30 * time.Second, // Chrome uses 30s, not 90s
-		KeepAlivePeriod:              30 * time.Second,
+		MaxIdleTimeout:               quicIdleTimeout,  // Default 30s (Chrome), configurable
+		KeepAlivePeriod:              keepAlivePeriod,  // Half of idle timeout
 		MaxIncomingStreams:           100,
 		MaxIncomingUniStreams:        103, // Chrome uses 103
 		Allow0RTT:                    true,
@@ -371,10 +379,17 @@ func NewHTTP3TransportWithConfig(preset *fingerprint.Preset, dnsCache *dns.Cache
 		t.tlsConfig.ClientSessionCache = t.sessionCache
 	}
 
+	// Determine QUIC idle timeout (default 30s, configurable)
+	quicIdleTimeout := 30 * time.Second
+	if config != nil && config.QuicIdleTimeout > 0 {
+		quicIdleTimeout = config.QuicIdleTimeout
+	}
+	keepAlivePeriod := quicIdleTimeout / 2
+
 	// Create QUIC config
 	t.quicConfig = &quic.Config{
-		MaxIdleTimeout:                30 * time.Second,
-		KeepAlivePeriod:               30 * time.Second,
+		MaxIdleTimeout:                quicIdleTimeout,
+		KeepAlivePeriod:               keepAlivePeriod,
 		MaxIncomingStreams:            100,
 		MaxIncomingUniStreams:         103,
 		Allow0RTT:                     true,
@@ -518,14 +533,21 @@ func NewHTTP3TransportWithMASQUE(preset *fingerprint.Preset, dnsCache *dns.Cache
 		t.tlsConfig.ClientSessionCache = t.sessionCache
 	}
 
+	// Determine QUIC idle timeout (default 30s, configurable)
+	quicIdleTimeout := 30 * time.Second
+	if config != nil && config.QuicIdleTimeout > 0 {
+		quicIdleTimeout = config.QuicIdleTimeout
+	}
+	keepAlivePeriod := quicIdleTimeout / 2
+
 	// Create QUIC config with MASQUE-specific settings
 	// IMPORTANT: InitialPacketSize must be >= 1350 for MASQUE outer connection.
 	// MASQUE encapsulates inner QUIC packets (up to 1200 bytes) as HTTP/3 datagrams,
 	// which adds overhead. If outer packets are too small, inner packets get fragmented
 	// and the connection hangs.
 	t.quicConfig = &quic.Config{
-		MaxIdleTimeout:                30 * time.Second,
-		KeepAlivePeriod:               30 * time.Second,
+		MaxIdleTimeout:                quicIdleTimeout,
+		KeepAlivePeriod:               keepAlivePeriod,
 		MaxIncomingStreams:            100,
 		MaxIncomingUniStreams:         103,
 		Allow0RTT:                     true,
@@ -652,9 +674,16 @@ func (t *HTTP3Transport) dialQUICWithMASQUE(ctx context.Context, addr string, tl
 	// This tells utls to actually load and use the cached session for 0-RTT
 	innerSpec := t.getInnerSpecForHost(host)
 
+	// Determine QUIC idle timeout (default 30s, configurable)
+	quicIdleTimeout := 30 * time.Second
+	if t.config != nil && t.config.QuicIdleTimeout > 0 {
+		quicIdleTimeout = t.config.QuicIdleTimeout
+	}
+	keepAlivePeriod := quicIdleTimeout / 2
+
 	cfgCopy := &quic.Config{
-		MaxIdleTimeout:                  30 * time.Second,
-		KeepAlivePeriod:                 30 * time.Second,
+		MaxIdleTimeout:                  quicIdleTimeout,
+		KeepAlivePeriod:                 keepAlivePeriod,
 		MaxIncomingStreams:              100,
 		MaxIncomingUniStreams:           103,
 		Allow0RTT:                       true,
@@ -1063,9 +1092,17 @@ func (t *HTTP3Transport) Connect(ctx context.Context, host, port string) error {
 	// This is non-blocking - if it fails, we proceed without ECH
 	echConfigList, _ := dns.FetchECHConfigs(ctx, host)
 
+	// Determine QUIC idle timeout (default 30s, configurable)
+	quicIdleTimeout := 30 * time.Second
+	if t.config != nil && t.config.QuicIdleTimeout > 0 {
+		quicIdleTimeout = t.config.QuicIdleTimeout
+	}
+	keepAlivePeriod := quicIdleTimeout / 2
+
 	// QUIC config with Chrome-like settings and ECH
 	quicCfg := &quic.Config{
-		MaxIdleTimeout:                  30 * time.Second,
+		MaxIdleTimeout:                  quicIdleTimeout,
+		KeepAlivePeriod:                 keepAlivePeriod,
 		InitialStreamReceiveWindow:     512 * 1024,
 		MaxStreamReceiveWindow:         6 * 1024 * 1024,
 		InitialConnectionReceiveWindow: 15 * 1024 * 1024 / 2,

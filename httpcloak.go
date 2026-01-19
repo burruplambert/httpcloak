@@ -290,6 +290,7 @@ type sessionConfig struct {
 	connectTo          map[string]string // Domain fronting: request_host -> connect_host
 	echConfigDomain    string            // Domain to fetch ECH config from
 	tlsOnly            bool              // TLS-only mode: skip preset headers, set all manually
+	quicIdleTimeout    time.Duration     // QUIC idle timeout (default: 30s)
 }
 
 // WithSessionProxy sets a proxy for the session
@@ -430,6 +431,16 @@ func WithTLSOnly() SessionOption {
 	}
 }
 
+// WithQuicIdleTimeout sets the QUIC connection idle timeout.
+// Default is 30 seconds (matches Chrome). Connections are closed after
+// this duration of inactivity. Set higher values if you need longer-lived
+// HTTP/3 connections with gaps between requests.
+func WithQuicIdleTimeout(d time.Duration) SessionOption {
+	return func(c *sessionConfig) {
+		c.quicIdleTimeout = d
+	}
+}
+
 // NewSession creates a new persistent session with cookie management
 func NewSession(preset string, opts ...SessionOption) *Session {
 	cfg := &sessionConfig{
@@ -453,6 +464,7 @@ func NewSession(preset string, opts ...SessionOption) *Session {
 		ConnectTo:          cfg.connectTo,
 		ECHConfigDomain:    cfg.echConfigDomain,
 		TLSOnly:            cfg.tlsOnly,
+		QuicIdleTimeout:    int(cfg.quicIdleTimeout.Seconds()),
 	}
 
 	// Retry configuration

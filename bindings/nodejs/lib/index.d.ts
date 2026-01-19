@@ -92,6 +92,8 @@ export interface SessionOptions {
   echConfigDomain?: string;
   /** TLS-only mode: skip preset HTTP headers, only apply TLS fingerprint (default: false) */
   tlsOnly?: boolean;
+  /** QUIC idle timeout in seconds (default: 30). Set higher for long-lived HTTP/3 connections. */
+  quicIdleTimeout?: number;
 }
 
 export interface RequestOptions {
