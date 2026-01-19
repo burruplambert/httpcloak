@@ -2645,42 +2645,64 @@ def _get_session_for_request(kwargs: dict) -> Tuple[Session, bool]:
     Modifies kwargs in-place to remove session-level params.
     Returns (session, is_temporary) - caller must close temporary sessions.
     """
-    # Check for session-level kwargs that require a temporary session
+    # Pop all session-level kwargs (these should not be passed to request methods)
+    preset = kwargs.pop("preset", None)
+    proxy = kwargs.pop("proxy", None)
+    tcp_proxy = kwargs.pop("tcp_proxy", None)
+    udp_proxy = kwargs.pop("udp_proxy", None)
     verify = kwargs.pop("verify", None)
     allow_redirects = kwargs.pop("allow_redirects", None)
+    http_version = kwargs.pop("http_version", None)
+    max_redirects = kwargs.pop("max_redirects", None)
+    retry = kwargs.pop("retry", None)
+    retry_on_status = kwargs.pop("retry_on_status", None)
+    prefer_ipv4 = kwargs.pop("prefer_ipv4", None)
+    connect_to = kwargs.pop("connect_to", None)
+    ech_config_domain = kwargs.pop("ech_config_domain", None)
+
+    # Check if any session-level override was provided
+    has_override = any(v is not None for v in [
+        preset, proxy, tcp_proxy, udp_proxy, verify, allow_redirects,
+        http_version, max_redirects, retry, retry_on_status, prefer_ipv4,
+        connect_to, ech_config_domain
+    ])
 
     # If no session-level overrides, use default session
-    if verify is None and allow_redirects is None:
+    if not has_override:
         return _get_default_session(), False
 
-    # Get current defaults
-    preset = _default_config.get("preset", "chrome-143")
-    proxy = _default_config.get("proxy")
-    timeout = _default_config.get("timeout", 30)
-    http_version = _default_config.get("http_version", "auto")
-    max_redirects = _default_config.get("max_redirects", 10)
-    retry = _default_config.get("retry", 0)
-    retry_on_status = _default_config.get("retry_on_status")
-    prefer_ipv4 = _default_config.get("prefer_ipv4", False)
-
-    # Apply overrides
-    if verify is None:
-        verify = _default_config.get("verify", True)
-    if allow_redirects is None:
-        allow_redirects = _default_config.get("allow_redirects", True)
+    # Get current defaults and apply overrides
+    final_preset = preset if preset is not None else _default_config.get("preset", "chrome-143")
+    final_proxy = proxy if proxy is not None else _default_config.get("proxy")
+    final_tcp_proxy = tcp_proxy if tcp_proxy is not None else _default_config.get("tcp_proxy")
+    final_udp_proxy = udp_proxy if udp_proxy is not None else _default_config.get("udp_proxy")
+    final_timeout = _default_config.get("timeout", 30)
+    final_http_version = http_version if http_version is not None else _default_config.get("http_version", "auto")
+    final_verify = verify if verify is not None else _default_config.get("verify", True)
+    final_allow_redirects = allow_redirects if allow_redirects is not None else _default_config.get("allow_redirects", True)
+    final_max_redirects = max_redirects if max_redirects is not None else _default_config.get("max_redirects", 10)
+    final_retry = retry if retry is not None else _default_config.get("retry", 0)
+    final_retry_on_status = retry_on_status if retry_on_status is not None else _default_config.get("retry_on_status")
+    final_prefer_ipv4 = prefer_ipv4 if prefer_ipv4 is not None else _default_config.get("prefer_ipv4", False)
+    final_connect_to = connect_to if connect_to is not None else _default_config.get("connect_to")
+    final_ech_config_domain = ech_config_domain if ech_config_domain is not None else _default_config.get("ech_config_domain")
 
     # Create temporary session with overrides
     temp_session = Session(
-        preset=preset,
-        proxy=proxy,
-        timeout=timeout,
-        http_version=http_version,
-        verify=verify,
-        allow_redirects=allow_redirects,
-        max_redirects=max_redirects,
-        retry=retry,
-        retry_on_status=retry_on_status,
-        prefer_ipv4=prefer_ipv4,
+        preset=final_preset,
+        proxy=final_proxy,
+        tcp_proxy=final_tcp_proxy,
+        udp_proxy=final_udp_proxy,
+        timeout=final_timeout,
+        http_version=final_http_version,
+        verify=final_verify,
+        allow_redirects=final_allow_redirects,
+        max_redirects=final_max_redirects,
+        retry=final_retry,
+        retry_on_status=final_retry_on_status,
+        prefer_ipv4=final_prefer_ipv4,
+        connect_to=final_connect_to,
+        ech_config_domain=final_ech_config_domain,
     )
 
     # Copy default headers
