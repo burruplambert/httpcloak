@@ -7,6 +7,7 @@
 // - Cookie inspection
 // - Manual cookie setting
 // - Cookie clearing
+// - Header order customization
 //
 // Run: go run main.go
 package main
@@ -236,6 +237,41 @@ func main() {
 	resp2Text, _ := resp2.Text()
 	fmt.Printf("Session 1 cookies: %s", resp1Text)
 	fmt.Printf("Session 2 cookies: %s", resp2Text)
+
+	// =========================================================================
+	// Example 9: Header order customization
+	// =========================================================================
+	fmt.Println("\n[9] Header Order Customization")
+	fmt.Println(strings.Repeat("-", 50))
+
+	headerSession := client.NewClient("chrome-143")
+	defer headerSession.Close()
+
+	// Get default header order from preset
+	defaultOrder := headerSession.GetHeaderOrder()
+	fmt.Printf("Default header order (%d headers):\n", len(defaultOrder))
+	for i, h := range defaultOrder[:5] {
+		fmt.Printf("  %d. %s\n", i+1, h)
+	}
+	fmt.Printf("  ... and %d more\n", len(defaultOrder)-5)
+
+	// Set custom header order
+	customOrder := []string{"accept", "user-agent", "sec-ch-ua", "accept-language", "accept-encoding"}
+	headerSession.SetHeaderOrder(customOrder)
+	fmt.Printf("\nCustom order set: %v\n", headerSession.GetHeaderOrder())
+
+	// Make request with custom order
+	resp, err = headerSession.Get(ctx, "https://httpbin.org/headers", nil)
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+	} else {
+		fmt.Printf("Request with custom order - Status: %d, Protocol: %s\n", resp.StatusCode, resp.Protocol)
+	}
+
+	// Reset to default
+	headerSession.SetHeaderOrder(nil)
+	resetOrder := headerSession.GetHeaderOrder()
+	fmt.Printf("Reset to default (%d headers): %v...\n", len(resetOrder), resetOrder[:3])
 
 	fmt.Println("\n" + strings.Repeat("=", 70))
 	fmt.Println("All session examples completed!")

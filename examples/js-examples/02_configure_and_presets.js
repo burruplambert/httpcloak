@@ -5,6 +5,7 @@
  * - Using configure() for global defaults
  * - Different browser presets
  * - Forcing HTTP versions
+ * - Header order customization
  *
  * Run: node 02_configure_and_presets.js
  */
@@ -103,6 +104,37 @@ async function main() {
   availablePresets.forEach((preset) => console.log(`  - ${preset}`));
 
   console.log(`\nhttpcloak version: ${httpcloak.version()}`);
+
+  // Header order customization
+  console.log("\n" + "=".repeat(60));
+  console.log("Example 5: Header Order Customization");
+  console.log("-".repeat(60));
+
+  const session = new httpcloak.Session({ preset: "chrome-143" });
+
+  // Get default header order from preset
+  const defaultOrder = session.getHeaderOrder();
+  console.log(`Default header order (${defaultOrder.length} headers):`);
+  defaultOrder.slice(0, 5).forEach((header, i) => {
+    console.log(`  ${i + 1}. ${header}`);
+  });
+  console.log(`  ... and ${defaultOrder.length - 5} more`);
+
+  // Set custom header order
+  const customOrder = ["accept", "user-agent", "sec-ch-ua", "accept-language", "accept-encoding"];
+  session.setHeaderOrder(customOrder);
+  console.log(`\nCustom order set: ${JSON.stringify(session.getHeaderOrder())}`);
+
+  // Make request with custom order
+  const resp = await session.get("https://httpbin.org/headers");
+  console.log(`Request with custom order - Status: ${resp.statusCode}, Protocol: ${resp.protocol}`);
+
+  // Reset to default
+  session.setHeaderOrder([]);
+  const resetOrder = session.getHeaderOrder();
+  console.log(`Reset to default (${resetOrder.length} headers): ${JSON.stringify(resetOrder.slice(0, 3))}...`);
+
+  session.close();
 
   console.log("\n" + "=".repeat(60));
   console.log("Configuration examples completed!");

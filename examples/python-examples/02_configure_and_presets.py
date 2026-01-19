@@ -6,6 +6,7 @@ This example demonstrates:
 - Using configure() for global defaults
 - Different browser presets
 - Forcing HTTP versions
+- Header order customization
 """
 
 import httpcloak
@@ -79,6 +80,36 @@ for preset in presets:
     print(f"  - {preset}")
 
 print(f"\nhttpcloak version: {httpcloak.version()}")
+
+# Header order customization
+print("\n" + "=" * 60)
+print("Example 5: Header Order Customization")
+print("-" * 60)
+
+session = httpcloak.Session(preset="chrome-143")
+
+# Get default header order from preset
+default_order = session.get_header_order()
+print(f"Default header order ({len(default_order)} headers):")
+for i, header in enumerate(default_order[:5]):
+    print(f"  {i+1}. {header}")
+print(f"  ... and {len(default_order) - 5} more")
+
+# Set custom header order
+custom_order = ["accept", "user-agent", "sec-ch-ua", "accept-language", "accept-encoding"]
+session.set_header_order(custom_order)
+print(f"\nCustom order set: {session.get_header_order()}")
+
+# Make request with custom order
+r = session.get("https://httpbin.org/headers")
+print(f"Request with custom order - Status: {r.status_code}, Protocol: {r.protocol}")
+
+# Reset to default
+session.set_header_order([])
+reset_order = session.get_header_order()
+print(f"Reset to default ({len(reset_order)} headers): {reset_order[:3]}...")
+
+session.close()
 
 print("\n" + "=" * 60)
 print("Configuration examples completed!")

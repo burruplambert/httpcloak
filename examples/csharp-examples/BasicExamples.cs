@@ -8,6 +8,7 @@
  * - Sending headers and reading responses
  * - Using sessions for cookies
  * - Async operations
+ * - Header order customization
  *
  * Requirements:
  *   dotnet add package HttpCloak
@@ -34,6 +35,7 @@ class BasicExamples
         await Example5_AsyncRequests();
         await Example6_ErrorHandling();
         Example7_DifferentPresets();
+        Example8_HeaderOrderCustomization();
 
         Console.WriteLine("\n" + new string('=', 60));
         Console.WriteLine("All examples completed!");
@@ -214,5 +216,39 @@ class BasicExamples
                 : response.Text;
             Console.WriteLine($"{preset,-25}: {ua}");
         }
+    }
+
+    // ============================================================
+    // Example 8: Header Order Customization
+    // ============================================================
+    static void Example8_HeaderOrderCustomization()
+    {
+        Console.WriteLine("\n[Example 8] Header Order Customization");
+        Console.WriteLine(new string('-', 50));
+
+        using var session = new Session(preset: Presets.Chrome143);
+
+        // Get default header order from preset
+        var defaultOrder = session.GetHeaderOrder();
+        Console.WriteLine($"Default header order ({defaultOrder.Length} headers):");
+        for (int i = 0; i < Math.Min(5, defaultOrder.Length); i++)
+        {
+            Console.WriteLine($"  {i + 1}. {defaultOrder[i]}");
+        }
+        Console.WriteLine($"  ... and {defaultOrder.Length - 5} more");
+
+        // Set custom header order
+        var customOrder = new[] { "accept", "user-agent", "sec-ch-ua", "accept-language", "accept-encoding" };
+        session.SetHeaderOrder(customOrder);
+        Console.WriteLine($"\nCustom order set: [{string.Join(", ", session.GetHeaderOrder())}]");
+
+        // Make request with custom order
+        var response = session.Get("https://httpbin.org/headers");
+        Console.WriteLine($"Request with custom order - Status: {response.StatusCode}, Protocol: {response.Protocol}");
+
+        // Reset to default
+        session.SetHeaderOrder(null);
+        var resetOrder = session.GetHeaderOrder();
+        Console.WriteLine($"Reset to default ({resetOrder.Length} headers): [{string.Join(", ", resetOrder.Take(3))}]...");
     }
 }
