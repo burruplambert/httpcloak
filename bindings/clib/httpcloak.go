@@ -20,6 +20,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"sync"
 	"time"
@@ -1387,6 +1388,47 @@ func httpcloak_session_get_udp_proxy(handle C.int64_t) *C.char {
 		return C.CString("")
 	}
 	return C.CString(session.GetUDPProxy())
+}
+
+//export httpcloak_session_set_header_order
+func httpcloak_session_set_header_order(handle C.int64_t, orderJSON *C.char) *C.char {
+	session := getSession(handle)
+	if session == nil {
+		return makeErrorJSON(ErrInvalidSession)
+	}
+
+	orderStr := C.GoString(orderJSON)
+	if orderStr == "" || orderStr == "[]" || orderStr == "null" {
+		session.SetHeaderOrder(nil)
+		return C.CString(`{"success":true}`)
+	}
+
+	var order []string
+	if err := json.Unmarshal([]byte(orderStr), &order); err != nil {
+		return C.CString(fmt.Sprintf(`{"error":"invalid JSON: %s"}`, err.Error()))
+	}
+
+	session.SetHeaderOrder(order)
+	return C.CString(`{"success":true}`)
+}
+
+//export httpcloak_session_get_header_order
+func httpcloak_session_get_header_order(handle C.int64_t) *C.char {
+	session := getSession(handle)
+	if session == nil {
+		return C.CString("[]")
+	}
+
+	order := session.GetHeaderOrder()
+	if order == nil {
+		return C.CString("[]")
+	}
+
+	result, err := json.Marshal(order)
+	if err != nil {
+		return C.CString("[]")
+	}
+	return C.CString(string(result))
 }
 
 // ============================================================================

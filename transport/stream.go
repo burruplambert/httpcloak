@@ -197,7 +197,7 @@ func (t *Transport) doStreamHTTP1(ctx context.Context, req *Request) (*StreamRes
 	}
 
 	// Set preset headers
-	applyPresetHeaders(httpReq, t.preset)
+	applyPresetHeaders(httpReq, t.preset, t.getHeaderOrder())
 
 	// Override with custom headers (multi-value support)
 	for key, values := range req.Headers {
@@ -283,7 +283,7 @@ func (t *Transport) doStreamHTTP2(ctx context.Context, req *Request) (*StreamRes
 	}
 
 	// Set preset headers
-	applyPresetHeaders(httpReq, t.preset)
+	applyPresetHeaders(httpReq, t.preset, t.getHeaderOrder())
 
 	// Override with custom headers (multi-value support)
 	for key, values := range req.Headers {
@@ -369,7 +369,7 @@ func (t *Transport) doStreamHTTP3(ctx context.Context, req *Request) (*StreamRes
 	}
 
 	// Set preset headers
-	applyPresetHeaders(httpReq, t.preset)
+	applyPresetHeaders(httpReq, t.preset, t.getHeaderOrder())
 
 	// Override with custom headers (multi-value support)
 	for key, values := range req.Headers {

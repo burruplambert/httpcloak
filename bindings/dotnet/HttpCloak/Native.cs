@@ -180,6 +180,12 @@ internal static class Native
     [DllImport(LibraryName, EntryPoint = "httpcloak_session_get_udp_proxy", CallingConvention = CallingConvention.Cdecl)]
     public static extern IntPtr SessionGetUdpProxy(long handle);
 
+    [DllImport(LibraryName, EntryPoint = "httpcloak_session_set_header_order", CallingConvention = CallingConvention.Cdecl)]
+    public static extern IntPtr SessionSetHeaderOrder(long handle, [MarshalAs(UnmanagedType.LPUTF8Str)] string orderJson);
+
+    [DllImport(LibraryName, EntryPoint = "httpcloak_session_get_header_order", CallingConvention = CallingConvention.Cdecl)]
+    public static extern IntPtr SessionGetHeaderOrder(long handle);
+
     /// <summary>
     /// Convert a native string pointer to a managed string and free the native memory.
     /// </summary>

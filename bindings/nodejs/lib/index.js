@@ -745,6 +745,9 @@ function getLib() {
       httpcloak_session_get_proxy: nativeLibHandle.func("httpcloak_session_get_proxy", "str", ["int64"]),
       httpcloak_session_get_tcp_proxy: nativeLibHandle.func("httpcloak_session_get_tcp_proxy", "str", ["int64"]),
       httpcloak_session_get_udp_proxy: nativeLibHandle.func("httpcloak_session_get_udp_proxy", "str", ["int64"]),
+      // Header order customization
+      httpcloak_session_set_header_order: nativeLibHandle.func("httpcloak_session_set_header_order", "str", ["int64", "str"]),
+      httpcloak_session_get_header_order: nativeLibHandle.func("httpcloak_session_get_header_order", "str", ["int64"]),
     };
   }
   return lib;
@@ -1758,6 +1761,42 @@ class Session {
   getUdpProxy() {
     const result = this._lib.httpcloak_session_get_udp_proxy(this._handle);
     return result || "";
+  }
+
+  /**
+   * Set a custom header order for all requests.
+   *
+   * @param {string[]} order - Array of header names in desired order (lowercase).
+   *                           Pass empty array to reset to preset's default.
+   *
+   * Example:
+   *   session.setHeaderOrder([
+   *     "accept-language", "sec-ch-ua", "accept",
+   *     "sec-fetch-site", "sec-fetch-mode", "user-agent"
+   *   ]);
+   */
+  setHeaderOrder(order) {
+    const orderJson = JSON.stringify(order || []);
+    const result = this._lib.httpcloak_session_set_header_order(this._handle, orderJson);
+    if (result && result.includes("error")) {
+      const data = JSON.parse(result);
+      if (data.error) {
+        throw new Error(data.error);
+      }
+    }
+  }
+
+  /**
+   * Get the current header order.
+   *
+   * @returns {string[]} Array of header names in current order, or preset's default order
+   */
+  getHeaderOrder() {
+    const result = this._lib.httpcloak_session_get_header_order(this._handle);
+    if (result) {
+      return JSON.parse(result);
+    }
+    return [];
   }
 
   /**

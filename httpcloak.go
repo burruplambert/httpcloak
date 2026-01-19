@@ -591,6 +591,19 @@ func (s *Session) GetUDPProxy() string {
 	return s.inner.GetUDPProxy()
 }
 
+// SetHeaderOrder sets a custom header order for all requests.
+// Pass nil or empty slice to reset to preset's default order.
+// Order should contain lowercase header names.
+func (s *Session) SetHeaderOrder(order []string) {
+	s.inner.SetHeaderOrder(order)
+}
+
+// GetHeaderOrder returns the current header order.
+// Returns preset's default order if no custom order is set.
+func (s *Session) GetHeaderOrder() []string {
+	return s.inner.GetHeaderOrder()
+}
+
 // Close closes the session and releases resources
 func (s *Session) Close() {
 	s.inner.Close()

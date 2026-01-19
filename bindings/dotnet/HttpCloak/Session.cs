@@ -888,6 +888,49 @@ public sealed class Session : IDisposable
     }
 
     /// <summary>
+    /// Set a custom header order for all requests.
+    /// </summary>
+    /// <param name="order">Array of header names in desired order (lowercase). Pass null or empty array to reset to preset's default.</param>
+    /// <example>
+    /// <code>
+    /// session.SetHeaderOrder(new[] { "accept-language", "sec-ch-ua", "accept", "sec-fetch-site" });
+    /// </code>
+    /// </example>
+    public void SetHeaderOrder(string[]? order)
+    {
+        ThrowIfDisposed();
+        var orderJson = order != null && order.Length > 0
+            ? System.Text.Json.JsonSerializer.Serialize(order)
+            : "[]";
+        IntPtr resultPtr = Native.SessionSetHeaderOrder(_handle, orderJson);
+        var result = Native.PtrToStringAndFree(resultPtr);
+        if (!string.IsNullOrEmpty(result) && result.Contains("error"))
+        {
+            var data = System.Text.Json.JsonDocument.Parse(result);
+            if (data.RootElement.TryGetProperty("error", out var errorElement))
+            {
+                throw new InvalidOperationException(errorElement.GetString());
+            }
+        }
+    }
+
+    /// <summary>
+    /// Get the current header order.
+    /// </summary>
+    /// <returns>Array of header names in current order, or preset's default order</returns>
+    public string[] GetHeaderOrder()
+    {
+        ThrowIfDisposed();
+        IntPtr resultPtr = Native.SessionGetHeaderOrder(_handle);
+        var result = Native.PtrToStringAndFree(resultPtr);
+        if (!string.IsNullOrEmpty(result))
+        {
+            return System.Text.Json.JsonSerializer.Deserialize<string[]>(result) ?? Array.Empty<string>();
+        }
+        return Array.Empty<string>();
+    }
+
+    /// <summary>
     /// Get or set the current proxy URL.
     /// </summary>
     public string Proxy

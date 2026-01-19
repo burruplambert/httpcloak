@@ -230,6 +230,10 @@ type Transport struct {
 	// H3 proxy initialization error - if set, H3 requests will fail with this error
 	// instead of silently bypassing the proxy
 	h3ProxyError error
+
+	// Custom header order (nil = use preset's order)
+	customHeaderOrder   []string
+	customHeaderOrderMu sync.RWMutex
 }
 
 // NewTransport creates a new unified transport
@@ -545,6 +549,56 @@ func (t *Transport) SetECHConfigDomain(domain string) {
 	if t.h3Transport != nil {
 		t.h3Transport.SetECHConfigDomain(domain)
 	}
+}
+
+// SetHeaderOrder sets a custom header order for all requests.
+// Pass nil or empty slice to reset to preset's default order.
+// Order should contain lowercase header names.
+func (t *Transport) SetHeaderOrder(order []string) {
+	t.customHeaderOrderMu.Lock()
+	defer t.customHeaderOrderMu.Unlock()
+
+	if len(order) == 0 {
+		t.customHeaderOrder = nil
+		return
+	}
+
+	// Normalize to lowercase
+	t.customHeaderOrder = make([]string, len(order))
+	for i, h := range order {
+		t.customHeaderOrder[i] = strings.ToLower(h)
+	}
+}
+
+// GetHeaderOrder returns the current header order.
+// Returns preset's default order if no custom order is set.
+func (t *Transport) GetHeaderOrder() []string {
+	t.customHeaderOrderMu.RLock()
+	defer t.customHeaderOrderMu.RUnlock()
+
+	if len(t.customHeaderOrder) > 0 {
+		result := make([]string, len(t.customHeaderOrder))
+		copy(result, t.customHeaderOrder)
+		return result
+	}
+
+	// Return preset's order
+	if len(t.preset.HeaderOrder) > 0 {
+		result := make([]string, len(t.preset.HeaderOrder))
+		for i, hp := range t.preset.HeaderOrder {
+			result[i] = hp.Key
+		}
+		return result
+	}
+
+	return nil
+}
+
+// getHeaderOrder returns the current header order for internal use (no copy).
+func (t *Transport) getHeaderOrder() []string {
+	t.customHeaderOrderMu.RLock()
+	defer t.customHeaderOrderMu.RUnlock()
+	return t.customHeaderOrder
 }
 
 // GetConnectHost returns the connection host for a request host.
@@ -894,7 +948,7 @@ func (t *Transport) doHTTP1(ctx context.Context, req *Request) (*Response, error
 	}
 
 	// Set preset headers (with ordering for fingerprinting)
-	applyPresetHeaders(httpReq, t.preset)
+	applyPresetHeaders(httpReq, t.preset, t.getHeaderOrder())
 
 	// Override with custom headers (multi-value support)
 	for key, values := range req.Headers {
@@ -1002,7 +1056,7 @@ func (t *Transport) doHTTP2(ctx context.Context, req *Request) (*Response, error
 	}
 
 	// Set preset headers (with ordering for fingerprinting)
-	applyPresetHeaders(httpReq, t.preset)
+	applyPresetHeaders(httpReq, t.preset, t.getHeaderOrder())
 
 	// Override with custom headers (multi-value support)
 	for key, values := range req.Headers {
@@ -1125,7 +1179,7 @@ func (t *Transport) doHTTP3(ctx context.Context, req *Request) (*Response, error
 	}
 
 	// Set preset headers (with ordering for fingerprinting)
-	applyPresetHeaders(httpReq, t.preset)
+	applyPresetHeaders(httpReq, t.preset, t.getHeaderOrder())
 
 	// Override with custom headers (multi-value support)
 	for key, values := range req.Headers {
@@ -1245,7 +1299,8 @@ func (t *Transport) GetHTTP3Transport() *HTTP3Transport {
 
 // applyPresetHeaders applies headers from the preset to the request.
 // Uses ordered headers (HeaderOrder) if available, otherwise falls back to the map.
-func applyPresetHeaders(httpReq *http.Request, preset *fingerprint.Preset) {
+// customHeaderOrder overrides preset's default order if provided.
+func applyPresetHeaders(httpReq *http.Request, preset *fingerprint.Preset, customHeaderOrder []string) {
 	if len(preset.HeaderOrder) > 0 {
 		// Use ordered headers for HTTP/2 and HTTP/3 fingerprinting
 		for _, hp := range preset.HeaderOrder {
@@ -1258,6 +1313,32 @@ func applyPresetHeaders(httpReq *http.Request, preset *fingerprint.Preset) {
 		}
 	}
 	httpReq.Header.Set("User-Agent", preset.UserAgent)
+
+	// Set header order for HTTP/2 and HTTP/3 fingerprinting
+	// Custom order takes precedence, then preset's order, then fallback to hardcoded default
+	if len(customHeaderOrder) > 0 {
+		// Use custom header order
+		httpReq.Header[http.HeaderOrderKey] = customHeaderOrder
+	} else if len(preset.HeaderOrder) > 0 {
+		// Use preset's header order
+		order := make([]string, len(preset.HeaderOrder))
+		for i, hp := range preset.HeaderOrder {
+			order[i] = hp.Key
+		}
+		httpReq.Header[http.HeaderOrderKey] = order
+	} else {
+		// Fallback to hardcoded default (Chrome 143 order)
+		httpReq.Header[http.HeaderOrderKey] = []string{
+			"content-length", "sec-ch-ua-platform", "user-agent", "sec-ch-ua",
+			"content-type", "sec-ch-ua-mobile", "accept", "origin",
+			"sec-fetch-site", "sec-fetch-mode", "sec-fetch-user", "sec-fetch-dest",
+			"referer", "accept-encoding", "accept-language", "priority",
+			"upgrade-insecure-requests", "cookie",
+		}
+	}
+
+	// Set pseudo-header order (Chrome uses :method, :authority, :scheme, :path)
+	httpReq.Header[http.PHeaderOrderKey] = []string{":method", ":authority", ":scheme", ":path"}
 }
 
 func extractHost(urlStr string) string {

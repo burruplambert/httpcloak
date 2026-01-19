@@ -100,6 +100,10 @@ type Client struct {
 
 	// Store H3 initialization error for better error messages
 	h3InitError error
+
+	// Custom header order (nil = use preset's order)
+	customHeaderOrder   []string
+	customHeaderOrderMu sync.RWMutex
 }
 
 // NewClient creates a new HTTP client with default configuration
@@ -707,7 +711,7 @@ func (c *Client) doOnce(ctx context.Context, req *Request, redirectHistory []*Re
 
 	// Apply headers based on FetchMode - this sets EVERYTHING correctly
 	// The library is smart: pick a mode, get coherent headers automatically
-	applyModeHeaders(httpReq, c.preset, req, parsedURL)
+	applyModeHeaders(httpReq, c.preset, req, parsedURL, c.getHeaderOrder())
 
 	// Apply authentication
 	auth := req.Auth
@@ -1300,6 +1304,56 @@ func (c *Client) GetUDPProxy() string {
 	return c.config.UDPProxy
 }
 
+// SetHeaderOrder sets a custom header order for all requests.
+// Pass nil or empty slice to reset to preset's default order.
+// Order should contain lowercase header names.
+func (c *Client) SetHeaderOrder(order []string) {
+	c.customHeaderOrderMu.Lock()
+	defer c.customHeaderOrderMu.Unlock()
+
+	if len(order) == 0 {
+		c.customHeaderOrder = nil
+		return
+	}
+
+	// Normalize to lowercase
+	c.customHeaderOrder = make([]string, len(order))
+	for i, h := range order {
+		c.customHeaderOrder[i] = strings.ToLower(h)
+	}
+}
+
+// GetHeaderOrder returns the current header order.
+// Returns preset's default order if no custom order is set.
+func (c *Client) GetHeaderOrder() []string {
+	c.customHeaderOrderMu.RLock()
+	defer c.customHeaderOrderMu.RUnlock()
+
+	if len(c.customHeaderOrder) > 0 {
+		result := make([]string, len(c.customHeaderOrder))
+		copy(result, c.customHeaderOrder)
+		return result
+	}
+
+	// Return preset's order
+	if len(c.preset.HeaderOrder) > 0 {
+		result := make([]string, len(c.preset.HeaderOrder))
+		for i, hp := range c.preset.HeaderOrder {
+			result[i] = hp.Key
+		}
+		return result
+	}
+
+	return nil
+}
+
+// getHeaderOrder returns the current header order for internal use (no copy).
+func (c *Client) getHeaderOrder() []string {
+	c.customHeaderOrderMu.RLock()
+	defer c.customHeaderOrderMu.RUnlock()
+	return c.customHeaderOrder
+}
+
 // Stats returns connection pool statistics
 func (c *Client) Stats() map[string]struct {
 	Total    int
@@ -1311,7 +1365,8 @@ func (c *Client) Stats() map[string]struct {
 
 // applyModeHeaders sets ALL headers correctly based on FetchMode
 // This is the smart part - the library auto-detects the right mode and ensures coherence
-func applyModeHeaders(httpReq *http.Request, preset *fingerprint.Preset, req *Request, parsedURL *url.URL) {
+// customHeaderOrder overrides preset's default order if provided
+func applyModeHeaders(httpReq *http.Request, preset *fingerprint.Preset, req *Request, parsedURL *url.URL, customHeaderOrder []string) {
 	// Set User-Agent (custom or preset)
 	userAgent := preset.UserAgent
 	if req.UserAgent != "" {
@@ -1369,14 +1424,26 @@ func applyModeHeaders(httpReq *http.Request, preset *fingerprint.Preset, req *Re
 	}
 
 	// Set header order for HTTP/2 and HTTP/3 fingerprinting
-	// This ensures headers are sent in the same order as Chrome 143
-	// Order verified via dissecticon fingerprint server
-	httpReq.Header[http.HeaderOrderKey] = []string{
-		"content-length", "sec-ch-ua-platform", "user-agent", "sec-ch-ua",
-		"content-type", "sec-ch-ua-mobile", "accept", "origin",
-		"sec-fetch-site", "sec-fetch-mode", "sec-fetch-user", "sec-fetch-dest",
-		"referer", "accept-encoding", "accept-language", "priority",
-		"upgrade-insecure-requests", "cookie",
+	// Custom order takes precedence, then preset's order, then fallback to hardcoded default
+	if len(customHeaderOrder) > 0 {
+		// Use custom header order
+		httpReq.Header[http.HeaderOrderKey] = customHeaderOrder
+	} else if len(preset.HeaderOrder) > 0 {
+		// Use preset's header order
+		order := make([]string, len(preset.HeaderOrder))
+		for i, hp := range preset.HeaderOrder {
+			order[i] = hp.Key
+		}
+		httpReq.Header[http.HeaderOrderKey] = order
+	} else {
+		// Fallback to hardcoded default (Chrome 143 order)
+		httpReq.Header[http.HeaderOrderKey] = []string{
+			"content-length", "sec-ch-ua-platform", "user-agent", "sec-ch-ua",
+			"content-type", "sec-ch-ua-mobile", "accept", "origin",
+			"sec-fetch-site", "sec-fetch-mode", "sec-fetch-user", "sec-fetch-dest",
+			"referer", "accept-encoding", "accept-language", "priority",
+			"upgrade-insecure-requests", "cookie",
+		}
 	}
 
 	// Set pseudo-header order (Chrome uses :method, :authority, :scheme, :path)

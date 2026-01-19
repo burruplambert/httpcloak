@@ -114,7 +114,7 @@ func (c *Client) Prepare(ctx context.Context, req *Request) (*PreparedRequest, e
 	}
 
 	// Apply Sec-Fetch headers based on mode
-	applyModeHeaders(httpReq, c.preset, req, parsedURL)
+	applyModeHeaders(httpReq, c.preset, req, parsedURL, c.getHeaderOrder())
 
 	// Apply cookies if enabled
 	if c.cookies != nil {

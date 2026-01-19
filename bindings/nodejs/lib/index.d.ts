@@ -218,6 +218,20 @@ export class Session {
    */
   getUdpProxy(): string;
 
+  /**
+   * Set a custom header order for all requests.
+   * @param order - Array of header names in desired order (lowercase). Pass empty array to reset to preset's default.
+   * @example
+   * session.setHeaderOrder(["accept-language", "sec-ch-ua", "accept", "sec-fetch-site"]);
+   */
+  setHeaderOrder(order: string[]): void;
+
+  /**
+   * Get the current header order.
+   * @returns Array of header names in current order, or preset's default order
+   */
+  getHeaderOrder(): string[];
+
   /** Get/set the current proxy as a property */
   proxy: string;
 }

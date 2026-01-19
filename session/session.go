@@ -634,6 +634,30 @@ func (s *Session) GetUDPProxy() string {
 	return s.Config.Proxy
 }
 
+// SetHeaderOrder sets a custom header order for all requests.
+// Pass nil or empty slice to reset to preset's default order.
+// Order should contain lowercase header names.
+func (s *Session) SetHeaderOrder(order []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.transport != nil {
+		s.transport.SetHeaderOrder(order)
+	}
+}
+
+// GetHeaderOrder returns the current header order.
+// Returns preset's default order if no custom order is set.
+func (s *Session) GetHeaderOrder() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.transport != nil {
+		return s.transport.GetHeaderOrder()
+	}
+	return nil
+}
+
 // IdleTime returns how long since the session was last used
 func (s *Session) IdleTime() time.Duration {
 	s.mu.RLock()

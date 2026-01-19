@@ -372,6 +372,51 @@ print(session.get_tcp_proxy())  # TCP proxy URL
 print(session.get_udp_proxy())  # UDP proxy URL
 ```
 
+### 📋 Header Order Customization
+
+Control the order headers are sent for advanced fingerprinting scenarios.
+
+```python
+session = httpcloak.Session(preset="chrome-143")
+
+# Get the current header order (from preset)
+print(session.get_header_order())
+
+# Set custom header order
+session.set_header_order([
+    "accept-language", "sec-ch-ua", "accept",
+    "sec-fetch-site", "sec-fetch-mode", "user-agent",
+    "sec-ch-ua-platform", "sec-ch-ua-mobile"
+])
+
+# Make request with custom order
+r = session.get("https://example.com")
+
+# Reset to preset's default order
+session.set_header_order([])
+```
+
+**JavaScript:**
+```javascript
+session.setHeaderOrder(["accept-language", "sec-ch-ua", "accept", ...]);
+console.log(session.getHeaderOrder());
+session.setHeaderOrder([]);  // Reset to default
+```
+
+**C#:**
+```csharp
+session.SetHeaderOrder(new[] { "accept-language", "sec-ch-ua", "accept", ... });
+Console.WriteLine(string.Join(", ", session.GetHeaderOrder()));
+session.SetHeaderOrder(null);  // Reset to default
+```
+
+**Go:**
+```go
+c.SetHeaderOrder([]string{"accept-language", "sec-ch-ua", "accept", ...})
+fmt.Println(c.GetHeaderOrder())
+c.SetHeaderOrder(nil)  // Reset to default
+```
+
 ### 📤 Streaming & Uploads
 
 ```python
@@ -491,6 +536,10 @@ session.set_udp_proxy(url)     # Set UDP proxy only (H3)
 session.get_proxy()            # Get current proxy
 session.get_tcp_proxy()        # Get current TCP proxy
 session.get_udp_proxy()        # Get current UDP proxy
+
+# Header order customization
+session.set_header_order(order)  # Set custom header order (list of lowercase names)
+session.get_header_order()       # Get current header order
 
 # Session persistence (0-RTT resumption)
 session.save("session.json")   # Save to file

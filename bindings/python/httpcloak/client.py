@@ -891,6 +891,10 @@ def _setup_lib(lib):
     lib.httpcloak_session_get_tcp_proxy.restype = c_void_p
     lib.httpcloak_session_get_udp_proxy.argtypes = [c_int64]
     lib.httpcloak_session_get_udp_proxy.restype = c_void_p
+    lib.httpcloak_session_set_header_order.argtypes = [c_int64, c_char_p]
+    lib.httpcloak_session_set_header_order.restype = c_void_p
+    lib.httpcloak_session_get_header_order.argtypes = [c_int64]
+    lib.httpcloak_session_get_header_order.restype = c_void_p
 
     # Optimized raw response functions (body passed separately from JSON)
     lib.httpcloak_get_raw.argtypes = [c_int64, c_char_p, c_char_p]
@@ -2116,6 +2120,42 @@ class Session:
         """
         result_ptr = self._lib.httpcloak_session_get_udp_proxy(self._handle)
         return _ptr_to_string(result_ptr) or ""
+
+    def set_header_order(self, order: List[str]) -> None:
+        """
+        Set a custom header order for all requests.
+
+        Args:
+            order: List of header names in desired order (lowercase).
+                   Pass empty list to reset to preset's default.
+
+        Example:
+            session.set_header_order([
+                "accept-language", "sec-ch-ua", "accept",
+                "sec-fetch-site", "sec-fetch-mode", "user-agent"
+            ])
+        """
+        order_json = json.dumps(order) if order else "[]"
+        order_bytes = order_json.encode("utf-8")
+        result_ptr = self._lib.httpcloak_session_set_header_order(self._handle, order_bytes)
+        result = _ptr_to_string(result_ptr)
+        if result and "error" in result:
+            data = json.loads(result)
+            if "error" in data:
+                raise ValueError(data["error"])
+
+    def get_header_order(self) -> List[str]:
+        """
+        Get the current header order.
+
+        Returns:
+            List of header names in current order, or preset's default order
+        """
+        result_ptr = self._lib.httpcloak_session_get_header_order(self._handle)
+        result = _ptr_to_string(result_ptr)
+        if result:
+            return json.loads(result)
+        return []
 
     # =========================================================================
     # Streaming Methods
