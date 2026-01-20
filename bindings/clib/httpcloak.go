@@ -1532,6 +1532,7 @@ type LocalProxyConfig struct {
 	MaxConnections int    `json:"max_connections,omitempty"` // Max concurrent connections
 	TCPProxy       string `json:"tcp_proxy,omitempty"`       // Upstream TCP proxy
 	UDPProxy       string `json:"udp_proxy,omitempty"`       // Upstream UDP proxy
+	TLSOnly        bool   `json:"tls_only,omitempty"`        // TLS-only mode (skip preset HTTP headers)
 }
 
 //export httpcloak_local_proxy_start
@@ -1562,6 +1563,9 @@ func httpcloak_local_proxy_start(configJSON *C.char) C.int64_t {
 	}
 	if config.TCPProxy != "" || config.UDPProxy != "" {
 		opts = append(opts, httpcloak.WithProxyUpstream(config.TCPProxy, config.UDPProxy))
+	}
+	if config.TLSOnly {
+		opts = append(opts, httpcloak.WithProxyTLSOnly())
 	}
 
 	proxy, err := httpcloak.StartLocalProxy(config.Port, opts...)
