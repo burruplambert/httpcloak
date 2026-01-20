@@ -2748,8 +2748,10 @@ class LocalProxy:
 
     @property
     def proxy_url(self) -> str:
-        """Get the proxy URL for use with HTTP clients."""
-        return f"http://localhost:{self.port}"
+        """Get the proxy URL for use with HTTP clients.
+        Uses 127.0.0.1 instead of localhost to avoid IPv6 resolution issues.
+        """
+        return f"http://127.0.0.1:{self.port}"
 
     def get_stats(self) -> Dict[str, Any]:
         """

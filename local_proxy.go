@@ -437,7 +437,7 @@ func (p *LocalProxy) handleHTTP(clientConn net.Conn, req *http.Request, reader *
 
 	// Copy headers (skip hop-by-hop and X-Upstream-Proxy)
 	for key, values := range req.Header {
-		if isHopByHopHeader(key) || key == HeaderUpstreamProxy {
+		if isHopByHopHeader(key) || strings.EqualFold(key, HeaderUpstreamProxy) {
 			continue
 		}
 		for _, value := range values {

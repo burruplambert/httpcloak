@@ -2588,10 +2588,11 @@ class LocalProxy {
 
   /**
    * Get the proxy URL for use with HTTP clients.
+   * Uses 127.0.0.1 instead of localhost to avoid IPv6 resolution issues.
    * @returns {string}
    */
   get proxyUrl() {
-    return `http://localhost:${this.port}`;
+    return `http://127.0.0.1:${this.port}`;
   }
 
   /**
