@@ -3,17 +3,25 @@ package httpcloak
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/sardanioss/httpcloak/proxy"
+)
+
+const (
+	// HeaderUpstreamProxy is the header name for per-request proxy override.
+	// When set, this proxy is used instead of the configured upstream proxy.
+	HeaderUpstreamProxy = "X-Upstream-Proxy"
 )
 
 // LocalProxy is an HTTP proxy server that forwards requests through httpcloak
@@ -353,6 +361,7 @@ func (p *LocalProxy) handleConnection(conn net.Conn) {
 // handleCONNECT handles HTTP CONNECT requests (HTTPS tunneling)
 // Note: For CONNECT, we just tunnel - the client does its own TLS.
 // Fingerprinting only works if an upstream proxy is configured.
+// Supports X-Upstream-Proxy header for per-request proxy override.
 func (p *LocalProxy) handleCONNECT(clientConn net.Conn, req *http.Request) {
 	// Parse target host:port
 	targetHost := req.Host
@@ -373,11 +382,14 @@ func (p *LocalProxy) handleCONNECT(clientConn net.Conn, req *http.Request) {
 		return
 	}
 
+	// Check for per-request proxy override
+	proxyOverride := req.Header.Get(HeaderUpstreamProxy)
+
 	// Connect to target
 	ctx, cancel := context.WithTimeout(p.ctx, p.timeout)
 	defer cancel()
 
-	targetConn, err := p.dialTarget(ctx, host, port)
+	targetConn, err := p.dialTarget(ctx, host, port, proxyOverride)
 	if err != nil {
 		p.sendError(clientConn, http.StatusBadGateway, fmt.Sprintf("Failed to connect: %v", err))
 		return
@@ -394,7 +406,8 @@ func (p *LocalProxy) handleCONNECT(clientConn net.Conn, req *http.Request) {
 	p.tunnel(clientConn, targetConn)
 }
 
-// handleHTTP handles plain HTTP requests using fast direct forwarding
+// handleHTTP handles plain HTTP requests using fast direct forwarding.
+// Supports X-Upstream-Proxy header for per-request proxy override.
 func (p *LocalProxy) handleHTTP(clientConn net.Conn, req *http.Request, reader *bufio.Reader) {
 	// Build target URL
 	targetURL := req.URL.String()
@@ -409,6 +422,9 @@ func (p *LocalProxy) handleHTTP(clientConn net.Conn, req *http.Request, reader *
 		}
 	}
 
+	// Check for per-request proxy override
+	proxyOverride := req.Header.Get(HeaderUpstreamProxy)
+
 	// Create outgoing request
 	ctx, cancel := context.WithTimeout(p.ctx, p.timeout)
 	defer cancel()
@@ -419,9 +435,9 @@ func (p *LocalProxy) handleHTTP(clientConn net.Conn, req *http.Request, reader *
 		return
 	}
 
-	// Copy headers (skip hop-by-hop)
+	// Copy headers (skip hop-by-hop and X-Upstream-Proxy)
 	for key, values := range req.Header {
-		if isHopByHopHeader(key) {
+		if isHopByHopHeader(key) || key == HeaderUpstreamProxy {
 			continue
 		}
 		for _, value := range values {
@@ -430,8 +446,14 @@ func (p *LocalProxy) handleHTTP(clientConn net.Conn, req *http.Request, reader *
 	}
 	outReq.ContentLength = req.ContentLength
 
-	// Execute request using fast http.Client
-	resp, err := p.httpClient.Do(outReq)
+	// Choose HTTP client (use proxy-configured client if override specified)
+	client := p.httpClient
+	if proxyOverride != "" {
+		client = p.createProxyClient(proxyOverride)
+	}
+
+	// Execute request
+	resp, err := client.Do(outReq)
 	if err != nil {
 		p.sendError(clientConn, http.StatusBadGateway, fmt.Sprintf("Request failed: %v", err))
 		return
@@ -463,17 +485,29 @@ func (p *LocalProxy) handleHTTP(clientConn net.Conn, req *http.Request, reader *
 	}
 }
 
-// dialTarget connects to the target, optionally through upstream proxy
-func (p *LocalProxy) dialTarget(ctx context.Context, host, port string) (net.Conn, error) {
+// dialTarget connects to the target, optionally through upstream proxy.
+// If proxyOverride is non-empty, it takes precedence over the configured proxy.
+func (p *LocalProxy) dialTarget(ctx context.Context, host, port, proxyOverride string) (net.Conn, error) {
 	targetAddr := net.JoinHostPort(host, port)
 
+	// Determine which proxy to use (override takes precedence)
+	proxyURL := p.tcpProxy
+	if proxyOverride != "" {
+		proxyURL = proxyOverride
+	}
+
 	// If upstream SOCKS5 proxy configured, use it
-	if p.tcpProxy != "" && proxy.IsSOCKS5URL(p.tcpProxy) {
-		socks5Dialer, err := proxy.NewSOCKS5Dialer(p.tcpProxy)
+	if proxyURL != "" && proxy.IsSOCKS5URL(proxyURL) {
+		socks5Dialer, err := proxy.NewSOCKS5Dialer(proxyURL)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create SOCKS5 dialer: %w", err)
 		}
 		return socks5Dialer.DialContext(ctx, "tcp", targetAddr)
+	}
+
+	// If HTTP proxy configured, use CONNECT method
+	if proxyURL != "" && (strings.HasPrefix(proxyURL, "http://") || strings.HasPrefix(proxyURL, "https://")) {
+		return p.dialThroughHTTPProxy(ctx, proxyURL, targetAddr)
 	}
 
 	// Direct connection
@@ -482,6 +516,92 @@ func (p *LocalProxy) dialTarget(ctx context.Context, host, port string) (net.Con
 		KeepAlive: 30 * time.Second,
 	}
 	return dialer.DialContext(ctx, "tcp", targetAddr)
+}
+
+// createProxyClient creates an http.Client configured with the specified proxy URL.
+func (p *LocalProxy) createProxyClient(proxyURL string) *http.Client {
+	parsed, err := url.Parse(proxyURL)
+	if err != nil {
+		return p.httpClient // Fallback to default
+	}
+
+	transport := &http.Transport{
+		Proxy: http.ProxyURL(parsed),
+		MaxIdleConns:        10,
+		MaxIdleConnsPerHost: 2,
+		IdleConnTimeout:     30 * time.Second,
+		DisableCompression:  true,
+		WriteBufferSize:     64 * 1024,
+		ReadBufferSize:      64 * 1024,
+	}
+
+	return &http.Client{
+		Transport: transport,
+		Timeout:   p.timeout,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+}
+
+// dialThroughHTTPProxy connects to the target through an HTTP proxy using CONNECT.
+func (p *LocalProxy) dialThroughHTTPProxy(ctx context.Context, proxyURL, targetAddr string) (net.Conn, error) {
+	parsed, err := url.Parse(proxyURL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid proxy URL: %w", err)
+	}
+
+	proxyHost := parsed.Host
+	if parsed.Port() == "" {
+		if parsed.Scheme == "https" {
+			proxyHost = net.JoinHostPort(parsed.Hostname(), "443")
+		} else {
+			proxyHost = net.JoinHostPort(parsed.Hostname(), "80")
+		}
+	}
+
+	// Connect to proxy
+	dialer := &net.Dialer{
+		Timeout:   p.timeout,
+		KeepAlive: 30 * time.Second,
+	}
+	conn, err := dialer.DialContext(ctx, "tcp", proxyHost)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to proxy: %w", err)
+	}
+
+	// Send CONNECT request
+	connectReq := fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\n", targetAddr, targetAddr)
+
+	// Add proxy authentication if provided
+	if parsed.User != nil {
+		username := parsed.User.Username()
+		password, _ := parsed.User.Password()
+		auth := base64.StdEncoding.EncodeToString([]byte(username + ":" + password))
+		connectReq += fmt.Sprintf("Proxy-Authorization: Basic %s\r\n", auth)
+	}
+	connectReq += "\r\n"
+
+	if _, err := conn.Write([]byte(connectReq)); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("failed to send CONNECT: %w", err)
+	}
+
+	// Read response
+	reader := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(reader, nil)
+	if err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("failed to read proxy response: %w", err)
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		conn.Close()
+		return nil, fmt.Errorf("proxy CONNECT failed: %s", resp.Status)
+	}
+
+	return conn, nil
 }
 
 // tunnel performs bidirectional data transfer with large buffers
