@@ -31,6 +31,7 @@ Example:
 from .client import (
     # Classes
     Session,
+    LocalProxy,
     Response,
     FastResponse,
     HTTPCloakError,
@@ -56,6 +57,7 @@ from .client import (
 
 __all__ = [
     "Session",
+    "LocalProxy",
     "Response",
     "FastResponse",
     "HTTPCloakError",

@@ -914,6 +914,18 @@ def _setup_lib(lib):
     lib.httpcloak_response_free.argtypes = [c_int64]
     lib.httpcloak_response_free.restype = None
 
+    # Local proxy functions
+    lib.httpcloak_local_proxy_start.argtypes = [c_char_p]
+    lib.httpcloak_local_proxy_start.restype = c_int64
+    lib.httpcloak_local_proxy_stop.argtypes = [c_int64]
+    lib.httpcloak_local_proxy_stop.restype = None
+    lib.httpcloak_local_proxy_get_port.argtypes = [c_int64]
+    lib.httpcloak_local_proxy_get_port.restype = c_int
+    lib.httpcloak_local_proxy_is_running.argtypes = [c_int64]
+    lib.httpcloak_local_proxy_is_running.restype = c_int
+    lib.httpcloak_local_proxy_get_stats.argtypes = [c_int64]
+    lib.httpcloak_local_proxy_get_stats.restype = c_void_p
+
 
 def _ptr_to_string(ptr) -> Optional[str]:
     """Convert a C string pointer to Python string and free it."""
@@ -2649,6 +2661,127 @@ def configure(
         )
         if final_headers:
             _default_session.headers.update(final_headers)
+
+
+class LocalProxy:
+    """
+    Local HTTP proxy server that forwards requests through HTTPCloak with TLS fingerprinting.
+
+    Use this to transparently apply TLS fingerprinting to any HTTP client (e.g., requests, httpx).
+    Supports per-request proxy rotation via X-Upstream-Proxy header.
+
+    Example:
+        from httpcloak import LocalProxy
+
+        # Start local proxy with TLS-only mode (pass headers through, only apply TLS fingerprint)
+        proxy = LocalProxy(preset="chrome-143", tls_only=True)
+        print(f"Proxy running on {proxy.proxy_url}")
+
+        # Use with requests
+        import requests
+        response = requests.get("https://example.com", proxies={"https": proxy.proxy_url})
+
+        # Per-request proxy rotation
+        response = requests.get(
+            "https://example.com",
+            proxies={"https": proxy.proxy_url},
+            headers={"X-Upstream-Proxy": "http://user:pass@rotating-proxy.example.com:8080"}
+        )
+
+        proxy.close()
+    """
+
+    def __init__(
+        self,
+        port: int = 0,
+        preset: str = "chrome-143",
+        timeout: int = 30,
+        max_connections: int = 1000,
+        tcp_proxy: Optional[str] = None,
+        udp_proxy: Optional[str] = None,
+        tls_only: bool = False,
+    ):
+        """
+        Create and start a local HTTP proxy server.
+
+        Args:
+            port: Port to listen on (0 = auto-select available port)
+            preset: Browser fingerprint preset (default: "chrome-143")
+            timeout: Request timeout in seconds (default: 30)
+            max_connections: Maximum concurrent connections (default: 1000)
+            tcp_proxy: Default upstream TCP proxy URL (can be overridden per-request)
+            udp_proxy: Default upstream UDP proxy URL (can be overridden per-request)
+            tls_only: TLS-only mode - skip preset HTTP headers, only apply TLS fingerprint.
+                      Use this when your client already provides authentic browser headers.
+        """
+        self._lib = _get_lib()
+        self._handle: int = -1
+
+        config = {
+            "port": port,
+            "preset": preset,
+            "timeout": timeout,
+            "max_connections": max_connections,
+        }
+        if tcp_proxy:
+            config["tcp_proxy"] = tcp_proxy
+        if udp_proxy:
+            config["udp_proxy"] = udp_proxy
+        if tls_only:
+            config["tls_only"] = True
+
+        config_json = json.dumps(config).encode("utf-8")
+        self._handle = self._lib.httpcloak_local_proxy_start(config_json)
+
+        if self._handle < 0:
+            raise HTTPCloakError("Failed to start local proxy")
+
+    @property
+    def port(self) -> int:
+        """Get the port the proxy is listening on."""
+        return self._lib.httpcloak_local_proxy_get_port(self._handle)
+
+    @property
+    def is_running(self) -> bool:
+        """Check if the proxy is currently running."""
+        return self._lib.httpcloak_local_proxy_is_running(self._handle) != 0
+
+    @property
+    def proxy_url(self) -> str:
+        """Get the proxy URL for use with HTTP clients."""
+        return f"http://localhost:{self.port}"
+
+    def get_stats(self) -> Dict[str, Any]:
+        """
+        Get proxy statistics.
+
+        Returns:
+            dict: Statistics including running status, active connections, total requests
+        """
+        result_ptr = self._lib.httpcloak_local_proxy_get_stats(self._handle)
+        result = _ptr_to_string(result_ptr)
+        if result:
+            return json.loads(result)
+        return {}
+
+    def close(self) -> None:
+        """Stop the local proxy server."""
+        if self._handle >= 0:
+            self._lib.httpcloak_local_proxy_stop(self._handle)
+            self._handle = -1
+
+    def __enter__(self):
+        """Context manager support."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager support - automatically close proxy."""
+        self.close()
+        return False
+
+    def __del__(self):
+        """Destructor - ensure proxy is stopped."""
+        self.close()
 
 
 def _get_default_session() -> Session:
