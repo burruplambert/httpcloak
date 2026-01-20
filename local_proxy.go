@@ -38,6 +38,7 @@ type LocalProxy struct {
 	maxConnections int
 	tcpProxy       string // Upstream proxy for TCP connections
 	udpProxy       string // Upstream proxy for UDP connections
+	tlsOnly        bool   // TLS-only mode: skip preset HTTP headers
 
 	// Session for making requests (HTTP forwarding with fingerprinting)
 	session   *Session
@@ -76,6 +77,10 @@ type LocalProxyConfig struct {
 	// Upstream proxy (optional)
 	TCPProxy string
 	UDPProxy string
+
+	// TLSOnly mode: only apply TLS fingerprinting, pass HTTP headers through unchanged.
+	// Useful when the client (e.g., Playwright) already provides authentic browser headers.
+	TLSOnly bool
 }
 
 // LocalProxyOption configures the local proxy
@@ -107,6 +112,15 @@ func WithProxyUpstream(tcpProxy, udpProxy string) LocalProxyOption {
 	return func(c *LocalProxyConfig) {
 		c.TCPProxy = tcpProxy
 		c.UDPProxy = udpProxy
+	}
+}
+
+// WithProxyTLSOnly enables TLS-only mode where only TLS fingerprinting is applied.
+// HTTP headers from the client pass through unchanged - useful when using Playwright
+// or other browsers that already provide authentic headers.
+func WithProxyTLSOnly() LocalProxyOption {
+	return func(c *LocalProxyConfig) {
+		c.TLSOnly = true
 	}
 }
 
@@ -142,6 +156,7 @@ func StartLocalProxy(port int, opts ...LocalProxyOption) (*LocalProxy, error) {
 		maxConnections: config.MaxConnections,
 		tcpProxy:       config.TCPProxy,
 		udpProxy:       config.UDPProxy,
+		tlsOnly:        config.TLSOnly,
 		ctx:            ctx,
 		cancel:         cancel,
 	}
@@ -155,6 +170,9 @@ func StartLocalProxy(port int, opts ...LocalProxyOption) (*LocalProxy, error) {
 	}
 	if config.UDPProxy != "" {
 		sessionOpts = append(sessionOpts, WithSessionUDPProxy(config.UDPProxy))
+	}
+	if config.TLSOnly {
+		sessionOpts = append(sessionOpts, WithTLSOnly())
 	}
 	p.session = NewSession(config.Preset, sessionOpts...)
 
