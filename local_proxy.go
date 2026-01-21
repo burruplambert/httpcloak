@@ -24,6 +24,18 @@ const (
 	// For HTTPS/CONNECT requests, use Proxy-Authorization header instead.
 	HeaderUpstreamProxy = "X-Upstream-Proxy"
 
+	// HeaderTLSOnly is the header name for per-request TLS-only mode override.
+	// When set to "true", TLS fingerprinting is applied but preset HTTP headers are skipped.
+	// When set to "false", normal mode is used (preset headers applied).
+	// If not set, uses the proxy's global TLSOnly setting.
+	HeaderTLSOnly = "X-HTTPCloak-TlsOnly"
+
+	// HeaderSession is the header name for per-request session selection.
+	// When set, the proxy uses the specified session ID to route the request.
+	// Sessions must be registered via RegisterSession() before use.
+	// Example: X-HTTPCloak-Session: my-session-id
+	HeaderSession = "X-HTTPCloak-Session"
+
 	// ProxyAuthScheme is the authentication scheme for upstream proxy selection.
 	// Format: "Proxy-Authorization: HTTPCloak http://user:pass@proxy:8080"
 	// This works for both HTTP and HTTPS (CONNECT) requests since Proxy-Authorization
@@ -58,6 +70,11 @@ type LocalProxy struct {
 	// Session for making requests (HTTP forwarding with fingerprinting)
 	session   *Session
 	sessionMu sync.RWMutex
+
+	// Session registry for per-request session selection
+	// Key: session ID, Value: Session
+	sessionRegistry   map[string]*Session
+	sessionRegistryMu sync.RWMutex
 
 	// Fast HTTP client for plain HTTP forwarding (no fingerprinting overhead)
 	httpClient *http.Client
@@ -181,15 +198,16 @@ func StartLocalProxy(port int, opts ...LocalProxyOption) (*LocalProxy, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	p := &LocalProxy{
-		port:           config.Port,
-		preset:         config.Preset,
-		timeout:        config.Timeout,
-		maxConnections: config.MaxConnections,
-		tcpProxy:       config.TCPProxy,
-		udpProxy:       config.UDPProxy,
-		tlsOnly:        config.TLSOnly,
-		ctx:            ctx,
-		cancel:         cancel,
+		port:            config.Port,
+		preset:          config.Preset,
+		timeout:         config.Timeout,
+		maxConnections:  config.MaxConnections,
+		tcpProxy:        config.TCPProxy,
+		udpProxy:        config.UDPProxy,
+		tlsOnly:         config.TLSOnly,
+		sessionRegistry: make(map[string]*Session),
+		ctx:             ctx,
+		cancel:          cancel,
 	}
 
 	// Create session for HTTP forwarding
@@ -317,14 +335,80 @@ func (p *LocalProxy) IsRunning() bool {
 
 // Stats returns proxy statistics
 func (p *LocalProxy) Stats() map[string]interface{} {
+	p.sessionRegistryMu.RLock()
+	sessionCount := len(p.sessionRegistry)
+	p.sessionRegistryMu.RUnlock()
+
 	return map[string]interface{}{
-		"running":         p.running.Load(),
-		"port":            p.port,
-		"active_conns":    p.activeConns.Load(),
-		"total_requests":  p.totalReqs.Load(),
-		"preset":          p.preset,
-		"max_connections": p.maxConnections,
+		"running":           p.running.Load(),
+		"port":              p.port,
+		"active_conns":      p.activeConns.Load(),
+		"total_requests":    p.totalReqs.Load(),
+		"preset":            p.preset,
+		"max_connections":   p.maxConnections,
+		"registered_sessions": sessionCount,
 	}
+}
+
+// RegisterSession registers a session with the given ID for per-request session selection.
+// The session can then be selected via the X-HTTPCloak-Session header.
+// Returns an error if a session with the same ID already exists.
+//
+// Example:
+//
+//	session := httpcloak.NewSession("chrome-143", httpcloak.WithSessionProxy("..."))
+//	proxy.RegisterSession("session-1", session)
+//	// Client can now use: X-HTTPCloak-Session: session-1
+func (p *LocalProxy) RegisterSession(sessionID string, session *Session) error {
+	p.sessionRegistryMu.Lock()
+	defer p.sessionRegistryMu.Unlock()
+
+	if _, exists := p.sessionRegistry[sessionID]; exists {
+		return fmt.Errorf("session with ID %q already exists", sessionID)
+	}
+	p.sessionRegistry[sessionID] = session
+	return nil
+}
+
+// UnregisterSession removes a session from the registry.
+// The session is NOT closed - caller is responsible for closing it.
+// Returns the session if found, nil otherwise.
+func (p *LocalProxy) UnregisterSession(sessionID string) *Session {
+	p.sessionRegistryMu.Lock()
+	defer p.sessionRegistryMu.Unlock()
+
+	session, exists := p.sessionRegistry[sessionID]
+	if !exists {
+		return nil
+	}
+	delete(p.sessionRegistry, sessionID)
+	return session
+}
+
+// GetSession returns a registered session by ID.
+// Returns nil if the session is not found.
+func (p *LocalProxy) GetSession(sessionID string) *Session {
+	p.sessionRegistryMu.RLock()
+	defer p.sessionRegistryMu.RUnlock()
+	return p.sessionRegistry[sessionID]
+}
+
+// ListSessions returns all registered session IDs.
+func (p *LocalProxy) ListSessions() []string {
+	p.sessionRegistryMu.RLock()
+	defer p.sessionRegistryMu.RUnlock()
+
+	ids := make([]string, 0, len(p.sessionRegistry))
+	for id := range p.sessionRegistry {
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+// extractSessionID extracts the session ID from the X-HTTPCloak-Session header.
+// Returns empty string if the header is not set.
+func (p *LocalProxy) extractSessionID(req *http.Request) string {
+	return req.Header.Get(HeaderSession)
 }
 
 // acceptLoop accepts incoming connections
@@ -468,7 +552,7 @@ func (p *LocalProxy) handleHTTP(clientConn net.Conn, req *http.Request, reader *
 		return
 	}
 
-	// Copy headers (skip hop-by-hop, X-Upstream-Proxy, and Proxy-Authorization with HTTPCloak scheme)
+	// Copy headers (skip hop-by-hop, X-Upstream-Proxy, X-HTTPCloak-*, and Proxy-Authorization with HTTPCloak scheme)
 	for key, values := range req.Header {
 		// Skip hop-by-hop headers
 		if isHopByHopHeader(key) {
@@ -476,6 +560,14 @@ func (p *LocalProxy) handleHTTP(clientConn net.Conn, req *http.Request, reader *
 		}
 		// Skip X-Upstream-Proxy (legacy header for upstream proxy)
 		if strings.EqualFold(key, HeaderUpstreamProxy) {
+			continue
+		}
+		// Skip X-HTTPCloak-TlsOnly (per-request TLS-only mode)
+		if strings.EqualFold(key, HeaderTLSOnly) {
+			continue
+		}
+		// Skip X-HTTPCloak-Session (per-request session selection)
+		if strings.EqualFold(key, HeaderSession) {
 			continue
 		}
 		// Skip Proxy-Authorization if it's our HTTPCloak scheme
@@ -670,6 +762,19 @@ func (p *LocalProxy) extractUpstreamProxy(req *http.Request) string {
 
 	// Fallback to X-Upstream-Proxy header
 	return req.Header.Get(HeaderUpstreamProxy)
+}
+
+// extractTLSOnly extracts the per-request TLS-only mode override.
+// Returns (value, exists):
+//   - ("true", true): Enable TLS-only mode for this request
+//   - ("false", true): Disable TLS-only mode for this request
+//   - ("", false): No override, use proxy's global setting
+func (p *LocalProxy) extractTLSOnly(req *http.Request) (bool, bool) {
+	value := req.Header.Get(HeaderTLSOnly)
+	if value == "" {
+		return false, false // No override
+	}
+	return strings.EqualFold(value, "true"), true
 }
 
 // tunnel performs bidirectional data transfer with large buffers
