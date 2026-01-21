@@ -16,12 +16,19 @@ import (
 	"time"
 
 	"github.com/sardanioss/httpcloak/proxy"
+	"github.com/sardanioss/httpcloak/transport"
 )
 
 const (
-	// HeaderUpstreamProxy is the header name for per-request proxy override.
-	// When set, this proxy is used instead of the configured upstream proxy.
+	// HeaderUpstreamProxy is the header name for per-request proxy override (HTTP only).
+	// For HTTPS/CONNECT requests, use Proxy-Authorization header instead.
 	HeaderUpstreamProxy = "X-Upstream-Proxy"
+
+	// ProxyAuthScheme is the authentication scheme for upstream proxy selection.
+	// Format: "Proxy-Authorization: HTTPCloak http://user:pass@proxy:8080"
+	// This works for both HTTP and HTTPS (CONNECT) requests since Proxy-Authorization
+	// is sent with CONNECT requests by standard HTTP clients.
+	ProxyAuthScheme = "HTTPCloak"
 )
 
 // LocalProxy is an HTTP proxy server that forwards requests through httpcloak
@@ -89,6 +96,13 @@ type LocalProxyConfig struct {
 	// TLSOnly mode: only apply TLS fingerprinting, pass HTTP headers through unchanged.
 	// Useful when the client (e.g., Playwright) already provides authentic browser headers.
 	TLSOnly bool
+
+	// SessionCacheBackend is an optional distributed cache for TLS sessions.
+	// Enables session sharing across multiple LocalProxy instances.
+	SessionCacheBackend transport.SessionCacheBackend
+
+	// SessionCacheErrorCallback is called when backend operations fail.
+	SessionCacheErrorCallback transport.ErrorCallback
 }
 
 // LocalProxyOption configures the local proxy
@@ -129,6 +143,15 @@ func WithProxyUpstream(tcpProxy, udpProxy string) LocalProxyOption {
 func WithProxyTLSOnly() LocalProxyOption {
 	return func(c *LocalProxyConfig) {
 		c.TLSOnly = true
+	}
+}
+
+// WithProxySessionCache sets a distributed TLS session cache backend for the proxy.
+// This enables TLS session ticket sharing across multiple proxy instances.
+func WithProxySessionCache(backend transport.SessionCacheBackend, errorCallback transport.ErrorCallback) LocalProxyOption {
+	return func(c *LocalProxyConfig) {
+		c.SessionCacheBackend = backend
+		c.SessionCacheErrorCallback = errorCallback
 	}
 }
 
@@ -181,6 +204,9 @@ func StartLocalProxy(port int, opts ...LocalProxyOption) (*LocalProxy, error) {
 	}
 	if config.TLSOnly {
 		sessionOpts = append(sessionOpts, WithTLSOnly())
+	}
+	if config.SessionCacheBackend != nil {
+		sessionOpts = append(sessionOpts, WithSessionCache(config.SessionCacheBackend, config.SessionCacheErrorCallback))
 	}
 	p.session = NewSession(config.Preset, sessionOpts...)
 
@@ -361,7 +387,10 @@ func (p *LocalProxy) handleConnection(conn net.Conn) {
 // handleCONNECT handles HTTP CONNECT requests (HTTPS tunneling)
 // Note: For CONNECT, we just tunnel - the client does its own TLS.
 // Fingerprinting only works if an upstream proxy is configured.
-// Supports X-Upstream-Proxy header for per-request proxy override.
+//
+// Supports per-request proxy override via:
+//   - Proxy-Authorization: HTTPCloak http://user:pass@proxy:8080 (recommended for HTTPS)
+//   - X-Upstream-Proxy header (fallback, but only works if client sets it on CONNECT)
 func (p *LocalProxy) handleCONNECT(clientConn net.Conn, req *http.Request) {
 	// Parse target host:port
 	targetHost := req.Host
@@ -383,7 +412,8 @@ func (p *LocalProxy) handleCONNECT(clientConn net.Conn, req *http.Request) {
 	}
 
 	// Check for per-request proxy override
-	proxyOverride := req.Header.Get(HeaderUpstreamProxy)
+	// Priority: Proxy-Authorization (HTTPCloak scheme) > X-Upstream-Proxy header
+	proxyOverride := p.extractUpstreamProxy(req)
 
 	// Connect to target
 	ctx, cancel := context.WithTimeout(p.ctx, p.timeout)
@@ -407,7 +437,10 @@ func (p *LocalProxy) handleCONNECT(clientConn net.Conn, req *http.Request) {
 }
 
 // handleHTTP handles plain HTTP requests using fast direct forwarding.
-// Supports X-Upstream-Proxy header for per-request proxy override.
+//
+// Supports per-request proxy override via:
+//   - Proxy-Authorization: HTTPCloak http://user:pass@proxy:8080 (recommended)
+//   - X-Upstream-Proxy header (legacy, also works for HTTP)
 func (p *LocalProxy) handleHTTP(clientConn net.Conn, req *http.Request, reader *bufio.Reader) {
 	// Build target URL
 	targetURL := req.URL.String()
@@ -422,8 +455,8 @@ func (p *LocalProxy) handleHTTP(clientConn net.Conn, req *http.Request, reader *
 		}
 	}
 
-	// Check for per-request proxy override
-	proxyOverride := req.Header.Get(HeaderUpstreamProxy)
+	// Check for per-request proxy override (checks both Proxy-Authorization and X-Upstream-Proxy)
+	proxyOverride := p.extractUpstreamProxy(req)
 
 	// Create outgoing request
 	ctx, cancel := context.WithTimeout(p.ctx, p.timeout)
@@ -435,10 +468,21 @@ func (p *LocalProxy) handleHTTP(clientConn net.Conn, req *http.Request, reader *
 		return
 	}
 
-	// Copy headers (skip hop-by-hop and X-Upstream-Proxy)
+	// Copy headers (skip hop-by-hop, X-Upstream-Proxy, and Proxy-Authorization with HTTPCloak scheme)
 	for key, values := range req.Header {
-		if isHopByHopHeader(key) || strings.EqualFold(key, HeaderUpstreamProxy) {
+		// Skip hop-by-hop headers
+		if isHopByHopHeader(key) {
 			continue
+		}
+		// Skip X-Upstream-Proxy (legacy header for upstream proxy)
+		if strings.EqualFold(key, HeaderUpstreamProxy) {
+			continue
+		}
+		// Skip Proxy-Authorization if it's our HTTPCloak scheme
+		if strings.EqualFold(key, "Proxy-Authorization") {
+			if len(values) > 0 && strings.HasPrefix(values[0], ProxyAuthScheme+" ") {
+				continue
+			}
 		}
 		for _, value := range values {
 			outReq.Header.Add(key, value)
@@ -602,6 +646,30 @@ func (p *LocalProxy) dialThroughHTTPProxy(ctx context.Context, proxyURL, targetA
 	}
 
 	return conn, nil
+}
+
+// extractUpstreamProxy extracts upstream proxy URL from request headers.
+// Priority: Proxy-Authorization (HTTPCloak scheme) > X-Upstream-Proxy header
+//
+// Supported formats:
+//   - Proxy-Authorization: HTTPCloak http://user:pass@proxy:8080
+//   - X-Upstream-Proxy: http://user:pass@proxy:8080
+func (p *LocalProxy) extractUpstreamProxy(req *http.Request) string {
+	// Check Proxy-Authorization header first (works for CONNECT requests)
+	proxyAuth := req.Header.Get("Proxy-Authorization")
+	if proxyAuth != "" {
+		// Parse "HTTPCloak <proxy-url>" format
+		if strings.HasPrefix(proxyAuth, ProxyAuthScheme+" ") {
+			proxyURL := strings.TrimPrefix(proxyAuth, ProxyAuthScheme+" ")
+			proxyURL = strings.TrimSpace(proxyURL)
+			if proxyURL != "" {
+				return proxyURL
+			}
+		}
+	}
+
+	// Fallback to X-Upstream-Proxy header
+	return req.Header.Get(HeaderUpstreamProxy)
 }
 
 // tunnel performs bidirectional data transfer with large buffers

@@ -27,6 +27,16 @@ var (
 	ErrSessionClosed = errors.New("session is closed")
 )
 
+// SessionOptions contains additional options that can't be expressed in protocol.SessionConfig
+// (e.g., interfaces and callbacks that can't be JSON serialized)
+type SessionOptions struct {
+	// SessionCacheBackend is an optional distributed cache for TLS sessions
+	SessionCacheBackend transport.SessionCacheBackend
+
+	// SessionCacheErrorCallback is called when backend operations fail
+	SessionCacheErrorCallback transport.ErrorCallback
+}
+
 // cacheEntry stores cache validation headers for a URL
 type cacheEntry struct {
 	etag         string // ETag header value
@@ -54,6 +64,11 @@ type Session struct {
 
 // NewSession creates a new session with its own connection pool
 func NewSession(id string, config *protocol.SessionConfig) *Session {
+	return NewSessionWithOptions(id, config, nil)
+}
+
+// NewSessionWithOptions creates a new session with additional options for distributed caching etc.
+func NewSessionWithOptions(id string, config *protocol.SessionConfig, opts *SessionOptions) *Session {
 	if id == "" {
 		id = generateID()
 	}
@@ -70,14 +85,24 @@ func NewSession(id string, config *protocol.SessionConfig) *Session {
 		}
 	}
 
-	// Create transport config with ConnectTo, ECH, TLS-only, and QUIC timeout settings
+	// Create transport config with ConnectTo, ECH, TLS-only, QUIC timeout, and session cache settings
 	var transportConfig *transport.TransportConfig
-	if len(config.ConnectTo) > 0 || config.ECHConfigDomain != "" || config.TLSOnly || config.QuicIdleTimeout > 0 {
+	needsConfig := len(config.ConnectTo) > 0 || config.ECHConfigDomain != "" || config.TLSOnly || config.QuicIdleTimeout > 0
+	if opts != nil && opts.SessionCacheBackend != nil {
+		needsConfig = true
+	}
+
+	if needsConfig {
 		transportConfig = &transport.TransportConfig{
 			ConnectTo:       config.ConnectTo,
 			ECHConfigDomain: config.ECHConfigDomain,
 			TLSOnly:         config.TLSOnly,
 			QuicIdleTimeout: time.Duration(config.QuicIdleTimeout) * time.Second,
+		}
+		// Add session cache backend if provided
+		if opts != nil {
+			transportConfig.SessionCacheBackend = opts.SessionCacheBackend
+			transportConfig.SessionCacheErrorCallback = opts.SessionCacheErrorCallback
 		}
 	}
 

@@ -291,6 +291,10 @@ type sessionConfig struct {
 	echConfigDomain    string            // Domain to fetch ECH config from
 	tlsOnly            bool              // TLS-only mode: skip preset headers, set all manually
 	quicIdleTimeout    time.Duration     // QUIC idle timeout (default: 30s)
+
+	// Distributed session cache
+	sessionCacheBackend       transport.SessionCacheBackend
+	sessionCacheErrorCallback transport.ErrorCallback
 }
 
 // WithSessionProxy sets a proxy for the session
@@ -441,6 +445,16 @@ func WithQuicIdleTimeout(d time.Duration) SessionOption {
 	}
 }
 
+// WithSessionCache sets a distributed TLS session cache backend.
+// This enables TLS session ticket sharing across multiple instances (e.g., via Redis).
+// The errorCallback is optional and will be called when backend operations fail.
+func WithSessionCache(backend transport.SessionCacheBackend, errorCallback transport.ErrorCallback) SessionOption {
+	return func(c *sessionConfig) {
+		c.sessionCacheBackend = backend
+		c.sessionCacheErrorCallback = errorCallback
+	}
+}
+
 // NewSession creates a new persistent session with cookie management
 func NewSession(preset string, opts ...SessionOption) *Session {
 	cfg := &sessionConfig{
@@ -490,7 +504,17 @@ func NewSession(preset string, opts ...SessionOption) *Session {
 		sessionCfg.ForceHTTP3 = true
 	}
 
-	s := session.NewSession("", sessionCfg)
+	// Create session with optional distributed cache
+	var s *session.Session
+	if cfg.sessionCacheBackend != nil {
+		opts := &session.SessionOptions{
+			SessionCacheBackend:       cfg.sessionCacheBackend,
+			SessionCacheErrorCallback: cfg.sessionCacheErrorCallback,
+		}
+		s = session.NewSessionWithOptions("", sessionCfg, opts)
+	} else {
+		s = session.NewSession("", sessionCfg)
+	}
 	return &Session{inner: s}
 }
 
