@@ -191,10 +191,23 @@ func NewHTTP3TransportWithTransportConfig(preset *fingerprint.Preset, dnsCache *
 	crand.Read(seedBytes[:])
 	shuffleSeed := int64(binary.LittleEndian.Uint64(seedBytes[:]))
 
+	// Create session cache - with optional distributed backend
+	var sessionCache *PersistableSessionCache
+	if config != nil && config.SessionCacheBackend != nil {
+		sessionCache = NewPersistableSessionCacheWithBackend(
+			config.SessionCacheBackend,
+			preset.Name,
+			"h3",
+			config.SessionCacheErrorCallback,
+		)
+	} else {
+		sessionCache = NewPersistableSessionCache()
+	}
+
 	t := &HTTP3Transport{
 		preset:         preset,
 		dnsCache:       dnsCache,
-		sessionCache:   NewPersistableSessionCache(), // Cache for 0-RTT resumption
+		sessionCache:   sessionCache,
 		shuffleSeed:    shuffleSeed,
 		config:         config,
 		echConfigCache: make(map[string][]byte), // Cache for ECH configs (for session resumption)
@@ -334,10 +347,23 @@ func NewHTTP3TransportWithConfig(preset *fingerprint.Preset, dnsCache *dns.Cache
 	crand.Read(seedBytes[:])
 	shuffleSeed := int64(binary.LittleEndian.Uint64(seedBytes[:]))
 
+	// Create session cache - with optional distributed backend
+	var sessionCache *PersistableSessionCache
+	if config != nil && config.SessionCacheBackend != nil {
+		sessionCache = NewPersistableSessionCacheWithBackend(
+			config.SessionCacheBackend,
+			preset.Name,
+			"h3",
+			config.SessionCacheErrorCallback,
+		)
+	} else {
+		sessionCache = NewPersistableSessionCache()
+	}
+
 	t := &HTTP3Transport{
 		preset:         preset,
 		dnsCache:       dnsCache,
-		sessionCache:   NewPersistableSessionCache(),
+		sessionCache:   sessionCache,
 		shuffleSeed:    shuffleSeed,
 		proxyConfig:    proxyConfig,
 		config:         config,
@@ -477,10 +503,23 @@ func NewHTTP3TransportWithMASQUE(preset *fingerprint.Preset, dnsCache *dns.Cache
 	crand.Read(seedBytes[:])
 	shuffleSeed := int64(binary.LittleEndian.Uint64(seedBytes[:]))
 
+	// Create session cache - with optional distributed backend
+	var sessionCache *PersistableSessionCache
+	if config != nil && config.SessionCacheBackend != nil {
+		sessionCache = NewPersistableSessionCacheWithBackend(
+			config.SessionCacheBackend,
+			preset.Name,
+			"h3",
+			config.SessionCacheErrorCallback,
+		)
+	} else {
+		sessionCache = NewPersistableSessionCache()
+	}
+
 	t := &HTTP3Transport{
 		preset:         preset,
 		dnsCache:       dnsCache,
-		sessionCache:   NewPersistableSessionCache(),
+		sessionCache:   sessionCache,
 		shuffleSeed:    shuffleSeed,
 		proxyConfig:    proxyConfig,
 		config:         config,

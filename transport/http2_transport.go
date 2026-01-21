@@ -77,13 +77,26 @@ func NewHTTP2TransportWithProxy(preset *fingerprint.Preset, dnsCache *dns.Cache,
 
 // NewHTTP2TransportWithConfig creates a new HTTP/2 transport with proxy and advanced config
 func NewHTTP2TransportWithConfig(preset *fingerprint.Preset, dnsCache *dns.Cache, proxy *ProxyConfig, config *TransportConfig) *HTTP2Transport {
+	// Create session cache - with optional distributed backend
+	var sessionCache *PersistableSessionCache
+	if config != nil && config.SessionCacheBackend != nil {
+		sessionCache = NewPersistableSessionCacheWithBackend(
+			config.SessionCacheBackend,
+			preset.Name,
+			"h2",
+			config.SessionCacheErrorCallback,
+		)
+	} else {
+		sessionCache = NewPersistableSessionCache()
+	}
+
 	t := &HTTP2Transport{
 		preset:         preset,
 		dnsCache:       dnsCache,
 		proxy:          proxy,
 		config:         config,
 		conns:          make(map[string]*persistentConn),
-		sessionCache:   NewPersistableSessionCache(), // Persistable cache for session resumption
+		sessionCache:   sessionCache,
 		maxIdleTime:    90 * time.Second,
 		maxConnAge:     5 * time.Minute,
 		connectTimeout: 30 * time.Second,

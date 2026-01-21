@@ -75,13 +75,26 @@ func NewHTTP1TransportWithProxy(preset *fingerprint.Preset, dnsCache *dns.Cache,
 
 // NewHTTP1TransportWithConfig creates a new HTTP/1.1 transport with proxy and config
 func NewHTTP1TransportWithConfig(preset *fingerprint.Preset, dnsCache *dns.Cache, proxy *ProxyConfig, config *TransportConfig) *HTTP1Transport {
+	// Create session cache - with optional distributed backend
+	var sessionCache *PersistableSessionCache
+	if config != nil && config.SessionCacheBackend != nil {
+		sessionCache = NewPersistableSessionCacheWithBackend(
+			config.SessionCacheBackend,
+			preset.Name,
+			"h1",
+			config.SessionCacheErrorCallback,
+		)
+	} else {
+		sessionCache = NewPersistableSessionCache()
+	}
+
 	t := &HTTP1Transport{
 		preset:              preset,
 		dnsCache:            dnsCache,
 		proxy:               proxy,
 		config:              config,
 		idleConns:           make(map[string][]*http1Conn),
-		sessionCache:        NewPersistableSessionCache(),
+		sessionCache:        sessionCache,
 		maxIdleConnsPerHost: 6, // Browser-like limit
 		maxIdleTime:         90 * time.Second,
 		connectTimeout:      30 * time.Second,

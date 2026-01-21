@@ -128,6 +128,15 @@ type TransportConfig struct {
 
 	// QuicIdleTimeout is the idle timeout for QUIC connections (default: 30s)
 	QuicIdleTimeout time.Duration
+
+	// SessionCacheBackend is an optional distributed cache for TLS sessions.
+	// When set, TLS session tickets will be stored/retrieved from this backend,
+	// enabling session sharing across multiple instances.
+	SessionCacheBackend SessionCacheBackend
+
+	// SessionCacheErrorCallback is called when backend operations fail.
+	// This is optional but recommended for monitoring backend health.
+	SessionCacheErrorCallback ErrorCallback
 }
 
 // Request represents an HTTP request
