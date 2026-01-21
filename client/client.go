@@ -438,12 +438,32 @@ func (r *Request) AddHeader(key, value string) {
 	r.Headers[key] = append(r.Headers[key], value)
 }
 
-// GetHeader returns the first value for the given header key.
+// GetHeader returns the first value for the given header key (case-insensitive).
 func (r *Request) GetHeader(key string) string {
-	if values := r.Headers[key]; len(values) > 0 {
+	if values, ok := getHeaderCaseInsensitive(r.Headers, key); ok && len(values) > 0 {
 		return values[0]
 	}
 	return ""
+}
+
+// getHeaderCaseInsensitive retrieves a header value from a map case-insensitively.
+// Returns the values and whether the header was found.
+func getHeaderCaseInsensitive(headers map[string][]string, key string) ([]string, bool) {
+	if headers == nil {
+		return nil, false
+	}
+	// Try exact match first (most common case)
+	if values, ok := headers[key]; ok {
+		return values, true
+	}
+	// Fall back to case-insensitive search
+	keyLower := strings.ToLower(key)
+	for k, v := range headers {
+		if strings.ToLower(k) == keyLower {
+			return v, true
+		}
+	}
+	return nil, false
 }
 
 // Response represents an HTTP response
@@ -1000,7 +1020,8 @@ func (c *Client) doOnce(ctx context.Context, req *Request, redirectHistory []*Re
 	if req.Headers == nil {
 		req.Headers = make(map[string][]string)
 	}
-	if _, hasHost := req.Headers["Host"]; !hasHost {
+	// Case-insensitive check to avoid duplicate Host headers
+	if _, hasHost := getHeaderCaseInsensitive(req.Headers, "Host"); !hasHost {
 		req.Headers["Host"] = []string{parsedURL.Hostname()}
 	}
 
@@ -1450,7 +1471,7 @@ func applyModeHeaders(httpReq *http.Request, preset *fingerprint.Preset, req *Re
 	// This prevents the "I want JSON but I'm navigating a document" incoherence
 	effectiveMode := req.FetchMode
 	if effectiveMode == FetchModeNavigate {
-		if acceptValues, ok := req.Headers["Accept"]; ok && len(acceptValues) > 0 {
+		if acceptValues, ok := getHeaderCaseInsensitive(req.Headers, "Accept"); ok && len(acceptValues) > 0 {
 			if isAPIAcceptHeader(acceptValues[0]) {
 				effectiveMode = FetchModeCORS
 			}
@@ -1584,7 +1605,7 @@ func applyCORSModeHeaders(httpReq *http.Request, preset *fingerprint.Preset, req
 
 	// CORS headers - THE coherent set for "JavaScript fetch() call"
 	// Use user's Accept if they set one (it's valid for CORS), otherwise default to */*
-	if acceptValues, ok := req.Headers["Accept"]; ok && len(acceptValues) > 0 && acceptValues[0] != "" {
+	if acceptValues, ok := getHeaderCaseInsensitive(req.Headers, "Accept"); ok && len(acceptValues) > 0 && acceptValues[0] != "" {
 		httpReq.Header.Set("Accept", acceptValues[0])
 	} else {
 		httpReq.Header.Set("Accept", "*/*")

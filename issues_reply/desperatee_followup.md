@@ -45,4 +45,25 @@ fmt.Println(resp.Request.Headers)       // Shows Host header
 
 ---
 
+## Additional Fixes (Found During Investigation)
+
+While fixing the Host header issue, I found and fixed several related case-sensitivity bugs:
+
+### 1. Request.GetHeader() was case-sensitive
+```go
+// BEFORE: Would fail if header was set with different case
+req.GetHeader("host")  // Returns "" if set as "Host"
+
+// AFTER: Works regardless of case
+req.GetHeader("host")  // Returns value even if set as "Host"
+```
+
+### 2. Accept header lookups were case-sensitive
+The mode detection (`FetchModeNavigate` vs `FetchModeCORS`) and Accept header override were case-sensitive. Now they work with any case (`"Accept"`, `"accept"`, `"ACCEPT"`).
+
+### 3. Host header duplication prevention
+If you set `"host"` (lowercase) in headers, the library would add another `"Host"` (capitalized) - now it correctly detects existing Host headers case-insensitively.
+
+---
+
 Let me know if you need anything else!
