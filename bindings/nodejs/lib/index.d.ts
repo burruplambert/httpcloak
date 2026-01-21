@@ -59,6 +59,127 @@ export class Response {
   raiseForStatus(): void;
 }
 
+/**
+ * High-performance HTTP Response with zero-copy buffer transfer.
+ *
+ * Use session.getFast() or session.postFast() for maximum download performance.
+ * Call release() when done to return buffers to the pool.
+ */
+export class FastResponse {
+  /** HTTP status code */
+  statusCode: number;
+  /** Response headers */
+  headers: Record<string, string>;
+  /** Raw response body as Buffer */
+  body: Buffer;
+  /** Response body as Buffer (alias for body) */
+  content: Buffer;
+  /** Response body as string */
+  text: string;
+  /** Final URL after redirects */
+  finalUrl: string;
+  /** Final URL after redirects (alias for finalUrl) */
+  url: string;
+  /** Protocol used (http/1.1, h2, h3) */
+  protocol: string;
+  /** Elapsed time in milliseconds */
+  elapsed: number;
+  /** Cookies set by this response */
+  cookies: Cookie[];
+  /** Redirect history */
+  history: RedirectInfo[];
+  /** True if status code < 400 */
+  ok: boolean;
+  /** HTTP status reason phrase (e.g., 'OK', 'Not Found') */
+  reason: string;
+  /** Response encoding from Content-Type header */
+  encoding: string | null;
+
+  /** Parse response body as JSON */
+  json<T = any>(): T;
+
+  /** Raise error if status >= 400 */
+  raiseForStatus(): void;
+
+  /**
+   * Release the underlying buffer back to the pool.
+   * Call this when done with the response to enable buffer reuse.
+   * After calling release(), the body buffer should not be used.
+   */
+  release(): void;
+}
+
+/**
+ * Streaming HTTP Response for downloading large files.
+ *
+ * Use session.getStream() or session.postStream() for streaming downloads.
+ * Supports async iteration with for-await-of loops.
+ *
+ * @example
+ * const stream = session.getStream(url);
+ * for await (const chunk of stream) {
+ *   file.write(chunk);
+ * }
+ * stream.close();
+ */
+export class StreamResponse {
+  /** HTTP status code */
+  statusCode: number;
+  /** Response headers */
+  headers: Record<string, string>;
+  /** Final URL after redirects */
+  finalUrl: string;
+  /** Final URL after redirects (alias for finalUrl) */
+  url: string;
+  /** Protocol used (http/1.1, h2, h3) */
+  protocol: string;
+  /** Content-Length header value, or -1 if unknown */
+  contentLength: number;
+  /** Cookies set by this response */
+  cookies: Cookie[];
+  /** True if status code < 400 */
+  ok: boolean;
+  /** HTTP status reason phrase (e.g., 'OK', 'Not Found') */
+  reason: string;
+
+  /**
+   * Read a chunk of data from the stream.
+   * @param chunkSize Maximum bytes to read (default: 8192)
+   * @returns Chunk of data or null if EOF
+   */
+  readChunk(chunkSize?: number): Buffer | null;
+
+  /**
+   * Read the entire response body as Buffer.
+   * Warning: This defeats the purpose of streaming for large files.
+   */
+  readAll(): Buffer;
+
+  /**
+   * Async generator for iterating over chunks.
+   * @param chunkSize Size of each chunk (default: 8192)
+   */
+  iterate(chunkSize?: number): AsyncGenerator<Buffer, void, unknown>;
+
+  /** Async iterator for for-await-of loops */
+  [Symbol.asyncIterator](): AsyncIterator<Buffer>;
+
+  /** Read the entire response body as string */
+  readonly text: string;
+
+  /** Read the entire response body as Buffer */
+  readonly body: Buffer;
+
+  /** Parse the response body as JSON */
+  json<T = any>(): T;
+
+  /** Close the stream and release resources */
+  close(): void;
+
+  /** Raise error if status >= 400 */
+  raiseForStatus(): void;
+}
+
 export interface SessionOptions {
   /** Browser preset to use (default: "chrome-143") */
   preset?: string;
@@ -238,6 +359,154 @@ export class Session {
 
   /** Get/set the current proxy as a property */
   proxy: string;
+
+  // ===========================================================================
+  // Session Persistence
+  // ===========================================================================
+
+  /**
+   * Save session state to a file.
+   *
+   * This saves cookies, TLS session tickets, and ECH configs.
+   * Use Session.load() to restore the session later.
+   *
+   * @param path - Path to save the session file
+   * @throws {HTTPCloakError} If the file cannot be written
+   *
+   * @example
+   * session.save("session.json");
+   * // Later...
+   * const session = Session.load("session.json");
+   */
+  save(path: string): void;
+
+  /**
+   * Export session state to a JSON string.
+   *
+   * Use Session.unmarshal() to restore the session from the string.
+   * Useful for storing session state in databases or caches.
+   *
+   * @returns JSON string containing session state
+   * @throws {HTTPCloakError} If marshaling fails
+   *
+   * @example
+   * const sessionData = session.marshal();
+   * await redis.set("session:user1", sessionData);
+   */
+  marshal(): string;
+
+  /**
+   * Load a session from a file.
+   *
+   * Restores session state including cookies, TLS session tickets, and ECH configs.
+   * The session uses the same preset that was used when it was saved.
+   *
+   * @param path - Path to the session file
+   * @returns Restored Session object
+   * @throws {HTTPCloakError} If the file cannot be read or is invalid
+   *
+   * @example
+   * const session = Session.load("session.json");
+   * const r = await session.get("https://example.com");
+   */
+  static load(path: string): Session;
+
+  /**
+   * Restore a session from a JSON string.
+   *
+   * @param data - JSON string containing session state (from marshal())
+   * @returns Restored Session object
+   * @throws {HTTPCloakError} If the data is invalid
+   *
+   * @example
+   * const sessionData = await redis.get("session:user1");
+   * const session = Session.unmarshal(sessionData);
+   */
+  static unmarshal(data: string): Session;
+
+  // ===========================================================================
+  // Streaming Methods
+  // ===========================================================================
+
+  /**
+   * Perform a streaming GET request.
+   *
+   * Returns a StreamResponse that can be iterated to read chunks.
+   * Use this for downloading large files without loading them into memory.
+   *
+   * @param url - Request URL
+   * @param options - Request options
+   * @returns StreamResponse for chunked reading
+   *
+   * @example
+   * const stream = session.getStream("https://example.com/large-file.zip");
+   * for await (const chunk of stream) {
+   *   file.write(chunk);
+   * }
+   * stream.close();
+   */
+  getStream(url: string, options?: RequestOptions): StreamResponse;
+
+  /**
+   * Perform a streaming POST request.
+   *
+   * @param url - Request URL
+   * @param options - Request options
+   * @returns StreamResponse for chunked reading
+   */
+  postStream(url: string, options?: RequestOptions): StreamResponse;
+
+  /**
+   * Perform a streaming request with any HTTP method.
+   *
+   * @param method - HTTP method (GET, POST, PUT, etc.)
+   * @param url - Request URL
+   * @param options - Request options
+   * @returns StreamResponse for chunked reading
+   */
+  requestStream(method: string, url: string, options?: RequestOptions): StreamResponse;
+
+  // ===========================================================================
+  // Fast-path Methods (Zero-copy for maximum performance)
+  // ===========================================================================
+
+  /**
+   * Perform a fast GET request with zero-copy buffer transfer.
+   *
+   * This method bypasses JSON serialization and base64 encoding for the response body,
+   * copying data directly from Go's memory to a Node.js Buffer.
+   *
+   * Use this method for downloading large files when you need maximum throughput.
+   * Call response.release() when done to return buffers to the pool.
+   *
+   * @param url - Request URL
+   * @param options - Request options
+   * @returns FastResponse with Buffer body
+   *
+   * @example
+   * const response = session.getFast("https://example.com/large-file.zip");
+   * fs.writeFileSync("file.zip", response.body);
+   * response.release();
+   */
+  getFast(url: string, options?: RequestOptions): FastResponse;
+
+  /**
+   * Perform a fast POST request with zero-copy buffer transfer.
+   *
+   * Use this method for uploading large files when you need maximum throughput.
+   * Call response.release() when done to return buffers to the pool.
+   *
+   * @param url - Request URL
+   * @param options - Request options (body must be Buffer or string)
+   * @returns FastResponse with Buffer body
+   *
+   * @example
+   * const data = fs.readFileSync("large-file.zip");
+   * const response = session.postFast("https://example.com/upload", { body: data });
+   * console.log(`Uploaded, status: ${response.statusCode}`);
+   * response.release();
+   */
+  postFast(url: string, options?: RequestOptions): FastResponse;
 }
 
 export interface LocalProxyOptions {
