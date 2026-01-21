@@ -140,6 +140,17 @@ func NewClient(presetName string, opts ...Option) *Client {
 		h2Manager.GetDNSCache().SetPreferIPv4(true)
 	}
 
+	// Create transport config for TLSOnly and other settings (used by all transports)
+	var transportConfig *transport.TransportConfig
+	if config.TLSOnly || len(config.ConnectTo) > 0 || config.ECHConfigDomain != "" || len(config.ECHConfig) > 0 {
+		transportConfig = &transport.TransportConfig{
+			TLSOnly:         config.TLSOnly,
+			ConnectTo:       config.ConnectTo,
+			ECHConfigDomain: config.ECHConfigDomain,
+			ECHConfig:       config.ECHConfig,
+		}
+	}
+
 	// Only create QUIC manager if H3 is not disabled
 	// HTTP/3 works through SOCKS5 (UDP relay) or MASQUE (CONNECT-UDP) proxies
 	var quicManager *pool.QUICManager
@@ -151,7 +162,7 @@ func NewClient(presetName string, opts ...Option) *Client {
 			// Use dedicated MASQUE transport for MASQUE proxies
 			proxyConfig := &transport.ProxyConfig{URL: udpProxyURL}
 			var err error
-			masqueTransport, err = transport.NewHTTP3TransportWithMASQUE(preset, h2Manager.GetDNSCache(), proxyConfig, nil)
+			masqueTransport, err = transport.NewHTTP3TransportWithMASQUE(preset, h2Manager.GetDNSCache(), proxyConfig, transportConfig)
 			if err != nil {
 				// Fall back to non-H3 if MASQUE transport creation fails
 				masqueTransport = nil
@@ -161,7 +172,7 @@ func NewClient(presetName string, opts ...Option) *Client {
 			// Use SOCKS5 UDP relay transport for HTTP/3
 			proxyConfig := &transport.ProxyConfig{URL: udpProxyURL}
 			var err error
-			socks5H3Transport, err = transport.NewHTTP3TransportWithProxy(preset, h2Manager.GetDNSCache(), proxyConfig)
+			socks5H3Transport, err = transport.NewHTTP3TransportWithConfig(preset, h2Manager.GetDNSCache(), proxyConfig, transportConfig)
 			if err != nil {
 				// Fall back to non-H3 if SOCKS5 transport creation fails
 				socks5H3Transport = nil
@@ -178,7 +189,7 @@ func NewClient(presetName string, opts ...Option) *Client {
 	if tcpProxyURL != "" {
 		tcpProxyConfig = &transport.ProxyConfig{URL: tcpProxyURL}
 	}
-	h1Transport := transport.NewHTTP1TransportWithProxy(preset, h2Manager.GetDNSCache(), tcpProxyConfig)
+	h1Transport := transport.NewHTTP1TransportWithConfig(preset, h2Manager.GetDNSCache(), tcpProxyConfig, transportConfig)
 	h1Transport.SetInsecureSkipVerify(config.InsecureSkipVerify)
 
 	// Propagate InsecureSkipVerify to QUIC manager and proxy transports
@@ -709,9 +720,16 @@ func (c *Client) doOnce(ctx context.Context, req *Request, redirectHistory []*Re
 	// Normalize request (Content-Length: 0 for empty POST/PUT/PATCH, Content-Type detection, etc.)
 	normalizeRequestWithBody(httpReq, bodyBytes)
 
-	// Apply headers based on FetchMode - this sets EVERYTHING correctly
-	// The library is smart: pick a mode, get coherent headers automatically
-	applyModeHeaders(httpReq, c.preset, req, parsedURL, c.getHeaderOrder())
+	// Apply headers based on TLSOnly mode or FetchMode
+	if c.config.TLSOnly {
+		// TLSOnly mode: skip preset headers, only set required Host header
+		// User has full control over HTTP headers
+		applyTLSOnlyHeaders(httpReq, c.preset, req, parsedURL, c.getHeaderOrder())
+	} else {
+		// Normal mode: apply preset headers based on FetchMode
+		// The library is smart: pick a mode, get coherent headers automatically
+		applyModeHeaders(httpReq, c.preset, req, parsedURL, c.getHeaderOrder())
+	}
 
 	// Apply authentication
 	auth := req.Auth
@@ -1361,6 +1379,42 @@ func (c *Client) Stats() map[string]struct {
 	Requests int64
 } {
 	return c.poolManager.Stats()
+}
+
+// applyTLSOnlyHeaders applies minimal headers for TLSOnly mode.
+// In this mode, the preset's TLS fingerprint is applied, but HTTP headers are user-controlled.
+// Only sets the required Host header and applies user's custom headers.
+func applyTLSOnlyHeaders(httpReq *http.Request, preset *fingerprint.Preset, req *Request, parsedURL *url.URL, customHeaderOrder []string) {
+	// Set Host header (required for HTTP)
+	httpReq.Header.Set("Host", parsedURL.Hostname())
+
+	// Apply all user custom headers without any filtering
+	for key, values := range req.Headers {
+		for i, value := range values {
+			if i == 0 {
+				httpReq.Header.Set(key, value)
+			} else {
+				httpReq.Header.Add(key, value)
+			}
+		}
+	}
+
+	// Set header order for HTTP/2 and HTTP/3 fingerprinting
+	// Even in TLSOnly mode, header order matters for fingerprinting
+	if len(customHeaderOrder) > 0 {
+		// Use custom header order
+		httpReq.Header[http.HeaderOrderKey] = customHeaderOrder
+	} else if len(preset.HeaderOrder) > 0 {
+		// Use preset's header order
+		order := make([]string, len(preset.HeaderOrder))
+		for i, hp := range preset.HeaderOrder {
+			order[i] = hp.Key
+		}
+		httpReq.Header[http.HeaderOrderKey] = order
+	}
+
+	// Set pseudo-header order (Chrome uses :method, :authority, :scheme, :path)
+	httpReq.Header[http.PHeaderOrderKey] = []string{":method", ":authority", ":scheme", ":path"}
 }
 
 // applyModeHeaders sets ALL headers correctly based on FetchMode

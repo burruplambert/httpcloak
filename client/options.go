@@ -135,6 +135,14 @@ type ClientConfig struct {
 	// ProtocolHTTP3: Force HTTP/3 only
 	// Per-request ForceProtocol in Request struct takes precedence.
 	ForceProtocol Protocol
+
+	// TLSOnly mode: use TLS fingerprint but skip preset HTTP headers.
+	// When enabled, the preset's TLS fingerprint (JA3/JA4, cipher suites, etc.)
+	// is applied, but the preset's default HTTP headers are NOT added.
+	// You must set all headers manually per-request.
+	// Useful when you need full control over HTTP headers while keeping the TLS fingerprint.
+	// Default: false.
+	TLSOnly bool
 }
 
 // DefaultConfig returns default client configuration
@@ -351,6 +359,17 @@ func WithForceHTTP1() Option {
 func WithForceHTTP3() Option {
 	return func(c *ClientConfig) {
 		c.ForceProtocol = ProtocolHTTP3
+	}
+}
+
+// WithTLSOnly enables TLS-only mode.
+// In this mode, the preset's TLS fingerprint (JA3/JA4, cipher suites, extension order)
+// is applied, but the preset's default HTTP headers are NOT added.
+// You must set all headers manually per-request.
+// Useful when you need full control over HTTP headers while keeping the TLS fingerprint.
+func WithTLSOnly() Option {
+	return func(c *ClientConfig) {
+		c.TLSOnly = true
 	}
 }
 
