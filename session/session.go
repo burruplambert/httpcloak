@@ -119,7 +119,11 @@ func NewSessionWithOptions(id string, config *protocol.SessionConfig, opts *Sess
 	t = transport.NewTransportWithConfig(presetName, proxy, transportConfig)
 
 	// Set protocol preference
-	if config.ForceHTTP3 {
+	if config.ForceHTTP1 {
+		t.SetProtocol(transport.ProtocolHTTP1)
+	} else if config.ForceHTTP2 {
+		t.SetProtocol(transport.ProtocolHTTP2)
+	} else if config.ForceHTTP3 {
 		t.SetProtocol(transport.ProtocolHTTP3)
 	} else if config.DisableHTTP3 {
 		t.SetProtocol(transport.ProtocolHTTP2)

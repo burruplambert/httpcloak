@@ -167,6 +167,8 @@ type SessionConfig struct {
 	// Connection options
 	DisableKeepAlives bool `json:"disableKeepAlives,omitempty"`
 	DisableHTTP3      bool `json:"disableHttp3,omitempty"`
+	ForceHTTP1        bool `json:"forceHttp1,omitempty"`
+	ForceHTTP2        bool `json:"forceHttp2,omitempty"`
 	ForceHTTP3        bool `json:"forceHttp3,omitempty"`
 
 	// Network options

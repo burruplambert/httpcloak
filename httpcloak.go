@@ -497,7 +497,12 @@ func NewSession(preset string, opts ...SessionOption) *Session {
 	}
 
 	// Protocol forcing
-	if cfg.forceHTTP1 || cfg.forceHTTP2 {
+	if cfg.forceHTTP1 {
+		sessionCfg.ForceHTTP1 = true
+		sessionCfg.DisableHTTP3 = true
+	}
+	if cfg.forceHTTP2 {
+		sessionCfg.ForceHTTP2 = true
 		sessionCfg.DisableHTTP3 = true
 	}
 	if cfg.forceHTTP3 {
