@@ -995,6 +995,15 @@ func (c *Client) doOnce(ctx context.Context, req *Request, redirectHistory []*Re
 
 	timing.Total = float64(time.Since(startTime).Milliseconds())
 
+	// Ensure Host is in req.Headers for net/http compatibility
+	// This allows resp.Request.GetHeader("Host") to work as expected
+	if req.Headers == nil {
+		req.Headers = make(map[string][]string)
+	}
+	if _, hasHost := req.Headers["Host"]; !hasHost {
+		req.Headers["Host"] = []string{parsedURL.Hostname()}
+	}
+
 	response := &Response{
 		StatusCode:      resp.StatusCode,
 		Headers:         headers,
