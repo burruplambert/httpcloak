@@ -36,8 +36,11 @@ from .client import (
     FastResponse,
     HTTPCloakError,
     Preset,
+    SessionCacheBackend,
     # Configuration
     configure,
+    configure_session_cache,
+    clear_session_cache,
     # Module-level functions (requests-compatible)
     get,
     post,
@@ -62,7 +65,10 @@ __all__ = [
     "FastResponse",
     "HTTPCloakError",
     "Preset",
+    "SessionCacheBackend",
     "configure",
+    "configure_session_cache",
+    "clear_session_cache",
     "get",
     "post",
     "put",

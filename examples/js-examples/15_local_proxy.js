@@ -10,7 +10,7 @@
  *
  * Features:
  * - TLS-only mode: Pass headers through, only apply TLS fingerprint
- * - Per-request proxy rotation via X-Upstream-Proxy header
+ * - Per-request proxy rotation via Proxy-Authorization header
  * - High-performance streaming with no buffering
  */
 
@@ -84,7 +84,10 @@ async function tlsOnlyMode() {
 async function perRequestProxyRotation() {
   console.log("=== Per-Request Proxy Rotation ===\n");
   console.log(
-    "Use X-Upstream-Proxy header to rotate upstream proxies per-request."
+    "Use Proxy-Authorization header to rotate upstream proxies per-request."
+  );
+  console.log(
+    "This works for BOTH HTTP and HTTPS requests (unlike X-Upstream-Proxy)."
   );
   console.log(
     "Perfect for proxy rotation with services like Bright Data.\n"
@@ -108,13 +111,17 @@ async function perRequestProxyRotation() {
     "socks5://user:pass@socks-proxy.example.com:1080",
   ];
 
-  console.log("Example header usage:");
+  console.log("Header format: Proxy-Authorization: HTTPCloak <proxy-url>");
+  console.log("\nExample usage:");
   for (const upstreamProxy of upstreamProxies) {
-    console.log(`  X-Upstream-Proxy: ${upstreamProxy}`);
+    console.log(`  Proxy-Authorization: HTTPCloak ${upstreamProxy}`);
   }
 
   console.log(
-    "\nThe X-Upstream-Proxy header is stripped before forwarding to the target."
+    "\nThe header is automatically stripped before forwarding to the target."
+  );
+  console.log(
+    "Note: X-Upstream-Proxy header still works for HTTP requests (legacy support)."
   );
 
   proxy.close();
@@ -137,7 +144,7 @@ async function withDefaultUpstreamProxy() {
   console.log(`LocalProxy with default upstream running on ${proxy.proxyUrl}`);
   console.log("All requests will go through the configured upstream proxy.");
   console.log(
-    "Individual requests can override with X-Upstream-Proxy header.\n"
+    "Individual requests can override with Proxy-Authorization header.\n"
   );
 
   proxy.close();
@@ -209,8 +216,8 @@ const { statusCode, headers, body } = await request('https://example.com', {
     // Your custom headers pass through unchanged
     'User-Agent': 'Your-Custom-UA',
     'Accept': 'text/html',
-    // Use X-Upstream-Proxy for per-request proxy rotation
-    'X-Upstream-Proxy': 'http://user:pass@rotating-proxy.brightdata.com:8080'
+    // Use Proxy-Authorization for per-request proxy rotation (works for HTTPS!)
+    'Proxy-Authorization': 'HTTPCloak http://user:pass@rotating-proxy.brightdata.com:8080'
   }
 });
 
@@ -239,7 +246,7 @@ async function main() {
     console.log("  - Transparent TLS fingerprinting for any HTTP client");
     console.log("  - TLS-only mode for Playwright/Puppeteer integration");
     console.log(
-      "  - Per-request proxy rotation via X-Upstream-Proxy header"
+      "  - Per-request proxy rotation via Proxy-Authorization header"
     );
     console.log("  - High-performance streaming (64KB buffers, ~3GB/s)");
     console.log("  - Connection statistics and monitoring");

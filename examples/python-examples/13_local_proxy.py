@@ -11,7 +11,7 @@ fingerprinting to any HTTP client. Perfect for integrating with:
 
 Features:
 - TLS-only mode: Pass headers through, only apply TLS fingerprint
-- Per-request proxy rotation via X-Upstream-Proxy header
+- Per-request proxy rotation via Proxy-Authorization header
 - High-performance streaming with no buffering
 """
 
@@ -83,9 +83,10 @@ def tls_only_mode():
 
 
 def per_request_proxy_rotation():
-    """Use X-Upstream-Proxy header to rotate upstream proxies per-request."""
+    """Use Proxy-Authorization header to rotate upstream proxies per-request."""
     print("=== Per-Request Proxy Rotation ===\n")
-    print("Use X-Upstream-Proxy header to rotate upstream proxies per-request.")
+    print("Use Proxy-Authorization header to rotate upstream proxies per-request.")
+    print("This works for BOTH HTTP and HTTPS requests (unlike X-Upstream-Proxy).")
     print("Perfect for proxy rotation with services like Bright Data.\n")
 
     # Start local proxy without a default upstream proxy
@@ -106,11 +107,13 @@ def per_request_proxy_rotation():
         "socks5://user:pass@socks-proxy.example.com:1080",
     ]
 
-    print("Example header usage:")
+    print("Header format: Proxy-Authorization: HTTPCloak <proxy-url>")
+    print("\nExample usage:")
     for upstream_proxy in upstream_proxies:
-        print(f"  X-Upstream-Proxy: {upstream_proxy}")
+        print(f"  Proxy-Authorization: HTTPCloak {upstream_proxy}")
 
-    print("\nThe X-Upstream-Proxy header is stripped before forwarding to the target.")
+    print("\nThe header is automatically stripped before forwarding to the target.")
+    print("Note: X-Upstream-Proxy header still works for HTTP requests (legacy support).")
 
     proxy.close()
     print()
@@ -132,7 +135,7 @@ def with_default_upstream_proxy():
 
     print(f"LocalProxy with default upstream running on {proxy.proxy_url}")
     print("All requests will go through the configured upstream proxy.")
-    print("Individual requests can override with X-Upstream-Proxy header.\n")
+    print("Individual requests can override with Proxy-Authorization header.\n")
 
     proxy.close()
 
@@ -222,8 +225,8 @@ response = requests.get(
         # Your custom headers pass through unchanged
         "User-Agent": "Your-Custom-UA",
         "Accept": "text/html",
-        # Use X-Upstream-Proxy for per-request proxy rotation
-        "X-Upstream-Proxy": "http://user:pass@rotating-proxy.brightdata.com:8080"
+        # Use Proxy-Authorization for per-request proxy rotation (works for HTTPS!)
+        "Proxy-Authorization": "HTTPCloak http://user:pass@rotating-proxy.brightdata.com:8080"
     }
 )
 
@@ -251,7 +254,7 @@ def main():
         print("LocalProxy Features:")
         print("  - Transparent TLS fingerprinting for any HTTP client")
         print("  - TLS-only mode for Playwright/Puppeteer integration")
-        print("  - Per-request proxy rotation via X-Upstream-Proxy header")
+        print("  - Per-request proxy rotation via Proxy-Authorization header")
         print("  - High-performance streaming (64KB buffers, ~3GB/s)")
         print("  - Connection statistics and monitoring")
         print("  - Context manager support for automatic cleanup")

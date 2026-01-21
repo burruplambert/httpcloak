@@ -687,6 +687,14 @@ function getLibPath() {
 // Define callback proto globally for koffi (must be before getLib)
 const AsyncCallbackProto = koffi.proto("void AsyncCallback(int64 callbackId, str responseJson, str error)");
 
+// Session cache callback prototypes
+const SessionCacheGetProto = koffi.proto("str SessionCacheGet(str key)");
+const SessionCachePutProto = koffi.proto("int SessionCachePut(str key, str valueJson, int64 ttlSeconds)");
+const SessionCacheDeleteProto = koffi.proto("int SessionCacheDelete(str key)");
+const SessionCacheErrorProto = koffi.proto("void SessionCacheError(str operation, str key, str error)");
+const EchCacheGetProto = koffi.proto("str EchCacheGet(str key)");
+const EchCachePutProto = koffi.proto("int EchCachePut(str key, str valueBase64, int64 ttlSeconds)");
+
 // Load the native library
 let lib = null;
 let nativeLibHandle = null;
@@ -754,6 +762,16 @@ function getLib() {
       httpcloak_local_proxy_get_port: nativeLibHandle.func("httpcloak_local_proxy_get_port", "int", ["int64"]),
       httpcloak_local_proxy_is_running: nativeLibHandle.func("httpcloak_local_proxy_is_running", "int", ["int64"]),
       httpcloak_local_proxy_get_stats: nativeLibHandle.func("httpcloak_local_proxy_get_stats", "str", ["int64"]),
+      // Session cache callbacks
+      httpcloak_set_session_cache_callbacks: nativeLibHandle.func("httpcloak_set_session_cache_callbacks", "void", [
+        koffi.pointer(SessionCacheGetProto),
+        koffi.pointer(SessionCachePutProto),
+        koffi.pointer(SessionCacheDeleteProto),
+        koffi.pointer(EchCacheGetProto),
+        koffi.pointer(EchCachePutProto),
+        koffi.pointer(SessionCacheErrorProto),
+      ]),
+      httpcloak_clear_session_cache_callbacks: nativeLibHandle.func("httpcloak_clear_session_cache_callbacks", "void", []),
     };
   }
   return lib;
@@ -2619,6 +2637,257 @@ class LocalProxy {
   }
 }
 
+
+// ============================================================================
+// Distributed Session Cache
+// ============================================================================
+
+// Global session cache callbacks (keep references to prevent GC)
+let _sessionCacheBackend = null;
+let _sessionCacheCallbackPtrs = {};
+
+/**
+ * Distributed TLS session cache backend for sharing sessions across instances.
+ *
+ * This enables TLS session resumption across distributed httpcloak instances
+ * by storing session tickets in an external cache like Redis or Memcached.
+ *
+ * Example with Redis:
+ * ```javascript
+ * const Redis = require('ioredis');
+ * const httpcloak = require('httpcloak');
+ *
+ * const redis = new Redis();
+ *
+ * const cache = new httpcloak.SessionCacheBackend({
+ *   get: (key) => redis.get(key),
+ *   put: (key, value, ttlSeconds) => {
+ *     redis.setex(key, ttlSeconds, value);
+ *     return 0;
+ *   },
+ *   delete: (key) => {
+ *     redis.del(key);
+ *     return 0;
+ *   },
+ *   onError: (operation, key, error) => {
+ *     console.error(`Cache error: ${operation} on ${key}: ${error}`);
+ *   }
+ * });
+ *
+ * cache.register();
+ *
+ * // Now all Session and LocalProxy instances will use this cache
+ * const session = new httpcloak.Session({ preset: 'chrome-143' });
+ * await session.get('https://example.com');  // Session will be cached!
+ * ```
+ *
+ * The cache is used for:
+ * - TLS session tickets (key format: httpcloak:sessions:{preset}:{protocol}:{host}:{port})
+ * - ECH configs for HTTP/3 (key format: httpcloak:ech:{preset}:{host}:{port})
+ *
+ * Session data is JSON with fields: ticket, state, created_at
+ * ECH config data is base64-encoded binary
+ */
+class SessionCacheBackend {
+  /**
+   * Create a session cache backend.
+   *
+   * @param {Object} options Cache configuration
+   * @param {Function} [options.get] Function to get session data: (key: string) => string|null|Promise<string|null>
+   * @param {Function} [options.put] Function to store session: (key: string, value: string, ttlSeconds: number) => number|Promise<number>
+   * @param {Function} [options.delete] Function to delete session: (key: string) => number|Promise<number>
+   * @param {Function} [options.getEch] Function to get ECH config: (key: string) => string|null|Promise<string|null>
+   * @param {Function} [options.putEch] Function to store ECH: (key: string, value: string, ttlSeconds: number) => number|Promise<number>
+   * @param {Function} [options.onError] Error callback: (operation: string, key: string, error: string) => void
+   */
+  constructor(options = {}) {
+    this._get = options.get || null;
+    this._put = options.put || null;
+    this._delete = options.delete || null;
+    this._getEch = options.getEch || null;
+    this._putEch = options.putEch || null;
+    this._onError = options.onError || null;
+    this._registered = false;
+  }
+
+  /**
+   * Register this cache backend globally.
+   *
+   * After registration, all new Session and LocalProxy instances will use
+   * this cache for TLS session storage.
+   */
+  register() {
+    const lib = getLib();
+
+    // Create callback pointers (keep references to prevent GC)
+    // Use no-op callbacks for missing functions to avoid null pointer issues
+    _sessionCacheCallbackPtrs = {};
+
+    // Create get callback (or no-op)
+    const getFn = this._get;
+    _sessionCacheCallbackPtrs.get = koffi.register((key) => {
+      if (!getFn) return null;
+      try {
+        const result = getFn(key);
+        if (result && typeof result.then === 'function') {
+          console.warn('SessionCacheBackend: Async callbacks not fully supported, returning null');
+          return null;
+        }
+        return result || null;
+      } catch (e) {
+        return null;
+      }
+    }, koffi.pointer(SessionCacheGetProto));
+
+    // Create put callback (or no-op)
+    const putFn = this._put;
+    _sessionCacheCallbackPtrs.put = koffi.register((key, value, ttlSeconds) => {
+      if (!putFn) return 0;
+      try {
+        const result = putFn(key, value, Number(ttlSeconds));
+        if (result && typeof result.then === 'function') {
+          return 0;
+        }
+        return result || 0;
+      } catch (e) {
+        return -1;
+      }
+    }, koffi.pointer(SessionCachePutProto));
+
+    // Create delete callback (or no-op)
+    const deleteFn = this._delete;
+    _sessionCacheCallbackPtrs.delete = koffi.register((key) => {
+      if (!deleteFn) return 0;
+      try {
+        const result = deleteFn(key);
+        if (result && typeof result.then === 'function') {
+          return 0;
+        }
+        return result || 0;
+      } catch (e) {
+        return -1;
+      }
+    }, koffi.pointer(SessionCacheDeleteProto));
+
+    // Create ECH get callback (or no-op)
+    const getEchFn = this._getEch;
+    _sessionCacheCallbackPtrs.getEch = koffi.register((key) => {
+      if (!getEchFn) return null;
+      try {
+        const result = getEchFn(key);
+        if (result && typeof result.then === 'function') {
+          return null;
+        }
+        return result || null;
+      } catch (e) {
+        return null;
+      }
+    }, koffi.pointer(EchCacheGetProto));
+
+    // Create ECH put callback (or no-op)
+    const putEchFn = this._putEch;
+    _sessionCacheCallbackPtrs.putEch = koffi.register((key, value, ttlSeconds) => {
+      if (!putEchFn) return 0;
+      try {
+        const result = putEchFn(key, value, Number(ttlSeconds));
+        if (result && typeof result.then === 'function') {
+          return 0;
+        }
+        return result || 0;
+      } catch (e) {
+        return -1;
+      }
+    }, koffi.pointer(EchCachePutProto));
+
+    // Create error callback (or no-op)
+    const errorFn = this._onError;
+    _sessionCacheCallbackPtrs.error = koffi.register((operation, key, error) => {
+      if (!errorFn) return;
+      try {
+        errorFn(operation, key, error);
+      } catch (e) {
+        // Ignore errors in error callback
+      }
+    }, koffi.pointer(SessionCacheErrorProto));
+
+    // Register with library
+    lib.httpcloak_set_session_cache_callbacks(
+      _sessionCacheCallbackPtrs.get,
+      _sessionCacheCallbackPtrs.put,
+      _sessionCacheCallbackPtrs.delete,
+      _sessionCacheCallbackPtrs.getEch,
+      _sessionCacheCallbackPtrs.putEch,
+      _sessionCacheCallbackPtrs.error
+    );
+
+    _sessionCacheBackend = this;
+    this._registered = true;
+  }
+
+  /**
+   * Unregister this cache backend.
+   *
+   * After unregistration, new sessions will not use distributed caching.
+   */
+  unregister() {
+    if (!this._registered) {
+      return;
+    }
+
+    const lib = getLib();
+    lib.httpcloak_clear_session_cache_callbacks();
+
+    _sessionCacheBackend = null;
+    _sessionCacheCallbackPtrs = {};
+    this._registered = false;
+  }
+}
+
+/**
+ * Configure a distributed session cache backend.
+ *
+ * This is a convenience function that creates and registers a SessionCacheBackend.
+ *
+ * @param {Object} options Cache configuration (same as SessionCacheBackend constructor)
+ * @returns {SessionCacheBackend} The registered backend
+ *
+ * Example:
+ * ```javascript
+ * const Redis = require('ioredis');
+ * const httpcloak = require('httpcloak');
+ *
+ * const redis = new Redis();
+ *
+ * httpcloak.configureSessionCache({
+ *   get: (key) => redis.get(key),
+ *   put: (key, value, ttl) => { redis.setex(key, ttl, value); return 0; },
+ *   delete: (key) => { redis.del(key); return 0; },
+ * });
+ *
+ * // Now all sessions will use Redis for TLS session storage
+ * const session = new httpcloak.Session();
+ * await session.get('https://example.com');
+ * ```
+ */
+function configureSessionCache(options) {
+  const backend = new SessionCacheBackend(options);
+  backend.register();
+  return backend;
+}
+
+/**
+ * Clear the distributed session cache backend.
+ *
+ * After calling this, new sessions will not use distributed caching.
+ */
+function clearSessionCache() {
+  const lib = getLib();
+  lib.httpcloak_clear_session_cache_callbacks();
+  _sessionCacheBackend = null;
+  _sessionCacheCallbackPtrs = {};
+}
+
+
 module.exports = {
   // Classes
   Session,
@@ -2629,10 +2898,13 @@ module.exports = {
   Cookie,
   RedirectInfo,
   HTTPCloakError,
+  SessionCacheBackend,
   // Presets
   Preset,
   // Configuration
   configure,
+  configureSessionCache,
+  clearSessionCache,
   // Module-level functions
   get,
   post,

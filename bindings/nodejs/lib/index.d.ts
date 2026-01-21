@@ -377,3 +377,85 @@ export const Preset: {
   IOS_SAFARI_17: string;
   all(): string[];
 };
+
+// ============================================================================
+// Distributed Session Cache
+// ============================================================================
+
+export interface SessionCacheOptions {
+  /**
+   * Function to get session data from cache.
+   * Returns JSON string with session data, or null if not found.
+   */
+  get?: (key: string) => string | null | Promise<string | null>;
+
+  /**
+   * Function to store session data in cache.
+   * Returns 0 on success, non-zero on error.
+   */
+  put?: (key: string, value: string, ttlSeconds: number) => number | Promise<number>;
+
+  /**
+   * Function to delete session data from cache.
+   * Returns 0 on success, non-zero on error.
+   */
+  delete?: (key: string) => number | Promise<number>;
+
+  /**
+   * Function to get ECH config from cache.
+   * Returns base64-encoded config, or null if not found.
+   */
+  getEch?: (key: string) => string | null | Promise<string | null>;
+
+  /**
+   * Function to store ECH config in cache.
+   * Returns 0 on success, non-zero on error.
+   */
+  putEch?: (key: string, value: string, ttlSeconds: number) => number | Promise<number>;
+
+  /**
+   * Error callback for cache operations.
+   */
+  onError?: (operation: string, key: string, error: string) => void;
+}
+
+/**
+ * Distributed TLS session cache backend for sharing sessions across instances.
+ *
+ * Enables TLS session resumption across distributed httpcloak instances
+ * by storing session tickets in an external cache like Redis or Memcached.
+ *
+ * Cache key formats:
+ * - TLS sessions: httpcloak:sessions:{preset}:{protocol}:{host}:{port}
+ * - ECH configs: httpcloak:ech:{preset}:{host}:{port}
+ */
+export class SessionCacheBackend {
+  constructor(options?: SessionCacheOptions);
+
+  /**
+   * Register this cache backend globally.
+   * After registration, all new Session and LocalProxy instances will use
+   * this cache for TLS session storage.
+   */
+  register(): void;
+
+  /**
+   * Unregister this cache backend.
+   * After unregistration, new sessions will not use distributed caching.
+   */
+  unregister(): void;
+}
+
+/**
+ * Configure a distributed session cache backend.
+ *
+ * @param options Cache configuration
+ * @returns The registered SessionCacheBackend instance
+ */
+export function configureSessionCache(options: SessionCacheOptions): SessionCacheBackend;
+
+/**
+ * Clear the distributed session cache backend.
+ * After calling this, new sessions will not use distributed caching.
+ */
+export function clearSessionCache(): void;

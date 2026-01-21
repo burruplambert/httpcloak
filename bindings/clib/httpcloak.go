@@ -6,11 +6,66 @@ package main
 
 typedef void (*async_callback)(int64_t callback_id, const char* response_json, const char* error);
 
+// Session cache callbacks - called by Go to get/put TLS sessions from external cache
+// get: returns JSON string with session data, or NULL if not found
+// put: stores session data, returns 0 on success, non-zero on error
+// delete: removes session, returns 0 on success
+typedef char* (*session_cache_get_callback)(const char* key);
+typedef int (*session_cache_put_callback)(const char* key, const char* value_json, int64_t ttl_seconds);
+typedef int (*session_cache_delete_callback)(const char* key);
+typedef void (*session_cache_error_callback)(const char* operation, const char* key, const char* error);
+
+// ECH config cache callbacks - for HTTP/3 ECH support
+typedef char* (*ech_cache_get_callback)(const char* key);
+typedef int (*ech_cache_put_callback)(const char* key, const char* value_base64, int64_t ttl_seconds);
+
 // Helper function to invoke callback from Go
 static void invoke_callback(async_callback cb, int64_t callback_id, const char* response_json, const char* error) {
     if (cb != NULL) {
         cb(callback_id, response_json, error);
     }
+}
+
+// Helper functions to invoke session cache callbacks
+static char* invoke_cache_get(session_cache_get_callback cb, const char* key) {
+    if (cb != NULL) {
+        return cb(key);
+    }
+    return NULL;
+}
+
+static int invoke_cache_put(session_cache_put_callback cb, const char* key, const char* value_json, int64_t ttl_seconds) {
+    if (cb != NULL) {
+        return cb(key, value_json, ttl_seconds);
+    }
+    return -1;
+}
+
+static void invoke_cache_error(session_cache_error_callback cb, const char* operation, const char* key, const char* error) {
+    if (cb != NULL) {
+        cb(operation, key, error);
+    }
+}
+
+static int invoke_cache_delete(session_cache_delete_callback cb, const char* key) {
+    if (cb != NULL) {
+        return cb(key);
+    }
+    return -1;
+}
+
+static char* invoke_ech_get(ech_cache_get_callback cb, const char* key) {
+    if (cb != NULL) {
+        return cb(key);
+    }
+    return NULL;
+}
+
+static int invoke_ech_put(ech_cache_put_callback cb, const char* key, const char* value_base64, int64_t ttl_seconds) {
+    if (cb != NULL) {
+        return cb(key, value_base64, ttl_seconds);
+    }
+    return -1;
 }
 */
 import "C"
@@ -28,6 +83,7 @@ import (
 
 	"github.com/sardanioss/httpcloak"
 	"github.com/sardanioss/httpcloak/dns"
+	"github.com/sardanioss/httpcloak/transport"
 )
 
 func init() {
@@ -740,6 +796,12 @@ func httpcloak_session_new(configJSON *C.char) C.int64_t {
 	// Handle QUIC idle timeout
 	if config.QuicIdleTimeout > 0 {
 		opts = append(opts, httpcloak.WithQuicIdleTimeout(time.Duration(config.QuicIdleTimeout)*time.Second))
+	}
+
+	// Handle session cache if configured globally
+	backend, errorCallback := getSessionCacheBackend()
+	if backend != nil {
+		opts = append(opts, httpcloak.WithSessionCache(backend, errorCallback))
 	}
 
 	session := httpcloak.NewSession(config.Preset, opts...)
@@ -1514,6 +1576,251 @@ var (
 )
 
 // ============================================================================
+// Session Cache Backend (C Callback Wrapper)
+// ============================================================================
+
+// CSessionCacheBackend wraps C callbacks to implement transport.SessionCacheBackend
+type CSessionCacheBackend struct {
+	getCallback    C.session_cache_get_callback
+	putCallback    C.session_cache_put_callback
+	deleteCallback C.session_cache_delete_callback
+	echGetCallback C.ech_cache_get_callback
+	echPutCallback C.ech_cache_put_callback
+}
+
+// NewCSessionCacheBackend creates a new C callback-backed session cache
+func NewCSessionCacheBackend(
+	getCallback C.session_cache_get_callback,
+	putCallback C.session_cache_put_callback,
+	deleteCallback C.session_cache_delete_callback,
+	echGetCallback C.ech_cache_get_callback,
+	echPutCallback C.ech_cache_put_callback,
+) *CSessionCacheBackend {
+	return &CSessionCacheBackend{
+		getCallback:    getCallback,
+		putCallback:    putCallback,
+		deleteCallback: deleteCallback,
+		echGetCallback: echGetCallback,
+		echPutCallback: echPutCallback,
+	}
+}
+
+// Get retrieves a TLS session from the external cache
+func (c *CSessionCacheBackend) Get(ctx context.Context, key string) (*transport.TLSSessionState, error) {
+	if c.getCallback == nil {
+		return nil, nil
+	}
+
+	keyC := C.CString(key)
+	defer C.free(unsafe.Pointer(keyC))
+
+	resultC := C.invoke_cache_get(c.getCallback, keyC)
+	if resultC == nil {
+		return nil, nil // Not found
+	}
+	// Note: Don't free resultC - it's managed by the callback caller (Python/Node)
+	// We only copy the string data with C.GoString
+
+	resultJSON := C.GoString(resultC)
+	if resultJSON == "" {
+		return nil, nil
+	}
+
+	var session transport.TLSSessionState
+	if err := json.Unmarshal([]byte(resultJSON), &session); err != nil {
+		return nil, fmt.Errorf("decode session: %w", err)
+	}
+
+	return &session, nil
+}
+
+// Put stores a TLS session in the external cache
+func (c *CSessionCacheBackend) Put(ctx context.Context, key string, session *transport.TLSSessionState, ttl time.Duration) error {
+	if c.putCallback == nil {
+		return nil
+	}
+
+	sessionJSON, err := json.Marshal(session)
+	if err != nil {
+		return fmt.Errorf("encode session: %w", err)
+	}
+
+	keyC := C.CString(key)
+	defer C.free(unsafe.Pointer(keyC))
+
+	valueC := C.CString(string(sessionJSON))
+	defer C.free(unsafe.Pointer(valueC))
+
+	ttlSeconds := int64(ttl.Seconds())
+	result := C.invoke_cache_put(c.putCallback, keyC, valueC, C.int64_t(ttlSeconds))
+	if result != 0 {
+		return fmt.Errorf("cache put failed with code %d", result)
+	}
+
+	return nil
+}
+
+// Delete removes a session from the external cache
+func (c *CSessionCacheBackend) Delete(ctx context.Context, key string) error {
+	if c.deleteCallback == nil {
+		return nil
+	}
+
+	keyC := C.CString(key)
+	defer C.free(unsafe.Pointer(keyC))
+
+	result := C.invoke_cache_delete(c.deleteCallback, keyC)
+	if result != 0 {
+		return fmt.Errorf("cache delete failed with code %d", result)
+	}
+
+	return nil
+}
+
+// GetECHConfig retrieves ECH config from the external cache
+func (c *CSessionCacheBackend) GetECHConfig(ctx context.Context, key string) ([]byte, error) {
+	if c.echGetCallback == nil {
+		return nil, nil
+	}
+
+	keyC := C.CString(key)
+	defer C.free(unsafe.Pointer(keyC))
+
+	resultC := C.invoke_ech_get(c.echGetCallback, keyC)
+	if resultC == nil {
+		return nil, nil // Not found
+	}
+	// Note: Don't free resultC - it's managed by the callback caller (Python/Node)
+
+	resultBase64 := C.GoString(resultC)
+	if resultBase64 == "" {
+		return nil, nil
+	}
+
+	// Decode base64
+	data, err := base64.StdEncoding.DecodeString(resultBase64)
+	if err != nil {
+		return nil, fmt.Errorf("decode ech config: %w", err)
+	}
+
+	return data, nil
+}
+
+// PutECHConfig stores ECH config in the external cache
+func (c *CSessionCacheBackend) PutECHConfig(ctx context.Context, key string, config []byte, ttl time.Duration) error {
+	if c.echPutCallback == nil {
+		return nil
+	}
+
+	keyC := C.CString(key)
+	defer C.free(unsafe.Pointer(keyC))
+
+	valueBase64 := base64.StdEncoding.EncodeToString(config)
+	valueC := C.CString(valueBase64)
+	defer C.free(unsafe.Pointer(valueC))
+
+	ttlSeconds := int64(ttl.Seconds())
+	result := C.invoke_ech_put(c.echPutCallback, keyC, valueC, C.int64_t(ttlSeconds))
+	if result != 0 {
+		return fmt.Errorf("ech cache put failed with code %d", result)
+	}
+
+	return nil
+}
+
+// CErrorCallback wraps a C error callback
+type CErrorCallback struct {
+	callback C.session_cache_error_callback
+}
+
+// Call invokes the C error callback
+func (c *CErrorCallback) Call(operation, key string, err error) {
+	if c.callback == nil || err == nil {
+		return
+	}
+
+	opC := C.CString(operation)
+	defer C.free(unsafe.Pointer(opC))
+
+	keyC := C.CString(key)
+	defer C.free(unsafe.Pointer(keyC))
+
+	errC := C.CString(err.Error())
+	defer C.free(unsafe.Pointer(errC))
+
+	C.invoke_cache_error(c.callback, opC, keyC, errC)
+}
+
+// Global session cache callbacks (set via httpcloak_set_session_cache_callbacks)
+var (
+	globalSessionCacheMu      sync.RWMutex
+	globalSessionCacheBackend *CSessionCacheBackend
+	globalSessionCacheError   *CErrorCallback
+)
+
+//export httpcloak_set_session_cache_callbacks
+func httpcloak_set_session_cache_callbacks(
+	getCallback C.session_cache_get_callback,
+	putCallback C.session_cache_put_callback,
+	deleteCallback C.session_cache_delete_callback,
+	echGetCallback C.ech_cache_get_callback,
+	echPutCallback C.ech_cache_put_callback,
+	errorCallback C.session_cache_error_callback,
+) {
+	globalSessionCacheMu.Lock()
+	defer globalSessionCacheMu.Unlock()
+
+	if getCallback == nil && putCallback == nil {
+		// Clear callbacks
+		globalSessionCacheBackend = nil
+		globalSessionCacheError = nil
+		return
+	}
+
+	globalSessionCacheBackend = NewCSessionCacheBackend(
+		getCallback,
+		putCallback,
+		deleteCallback,
+		echGetCallback,
+		echPutCallback,
+	)
+
+	if errorCallback != nil {
+		globalSessionCacheError = &CErrorCallback{callback: errorCallback}
+	} else {
+		globalSessionCacheError = nil
+	}
+}
+
+//export httpcloak_clear_session_cache_callbacks
+func httpcloak_clear_session_cache_callbacks() {
+	globalSessionCacheMu.Lock()
+	defer globalSessionCacheMu.Unlock()
+	globalSessionCacheBackend = nil
+	globalSessionCacheError = nil
+}
+
+// getSessionCacheBackend returns the global session cache backend if configured
+func getSessionCacheBackend() (transport.SessionCacheBackend, transport.ErrorCallback) {
+	globalSessionCacheMu.RLock()
+	defer globalSessionCacheMu.RUnlock()
+
+	if globalSessionCacheBackend == nil {
+		return nil, nil
+	}
+
+	var errorCallback transport.ErrorCallback
+	if globalSessionCacheError != nil {
+		ec := globalSessionCacheError // Capture for closure
+		errorCallback = func(operation, key string, err error) {
+			ec.Call(operation, key, err)
+		}
+	}
+
+	return globalSessionCacheBackend, errorCallback
+}
+
+// ============================================================================
 // Local Proxy Management
 // ============================================================================
 
@@ -1566,6 +1873,12 @@ func httpcloak_local_proxy_start(configJSON *C.char) C.int64_t {
 	}
 	if config.TLSOnly {
 		opts = append(opts, httpcloak.WithProxyTLSOnly())
+	}
+
+	// Handle session cache if configured globally
+	backend, errorCallback := getSessionCacheBackend()
+	if backend != nil {
+		opts = append(opts, httpcloak.WithProxySessionCache(backend, errorCallback))
 	}
 
 	proxy, err := httpcloak.StartLocalProxy(config.Port, opts...)

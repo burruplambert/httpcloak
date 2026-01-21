@@ -709,6 +709,20 @@ def _get_lib():
 # Async callback type: void (*)(int64_t callback_id, const char* response_json, const char* error)
 ASYNC_CALLBACK = CFUNCTYPE(None, c_int64, c_char_p, c_char_p)
 
+# Session cache callback types
+# get: char* (*)(const char* key) - returns JSON string or NULL
+SESSION_CACHE_GET_CALLBACK = CFUNCTYPE(c_char_p, c_char_p)
+# put: int (*)(const char* key, const char* value_json, int64_t ttl_seconds)
+SESSION_CACHE_PUT_CALLBACK = CFUNCTYPE(c_int, c_char_p, c_char_p, c_int64)
+# delete: int (*)(const char* key)
+SESSION_CACHE_DELETE_CALLBACK = CFUNCTYPE(c_int, c_char_p)
+# error: void (*)(const char* operation, const char* key, const char* error)
+SESSION_CACHE_ERROR_CALLBACK = CFUNCTYPE(None, c_char_p, c_char_p, c_char_p)
+# ech_get: char* (*)(const char* key) - returns base64 string or NULL
+ECH_CACHE_GET_CALLBACK = CFUNCTYPE(c_char_p, c_char_p)
+# ech_put: int (*)(const char* key, const char* value_base64, int64_t ttl_seconds)
+ECH_CACHE_PUT_CALLBACK = CFUNCTYPE(c_int, c_char_p, c_char_p, c_int64)
+
 
 class _AsyncCallbackManager:
     """
@@ -925,6 +939,19 @@ def _setup_lib(lib):
     lib.httpcloak_local_proxy_is_running.restype = c_int
     lib.httpcloak_local_proxy_get_stats.argtypes = [c_int64]
     lib.httpcloak_local_proxy_get_stats.restype = c_void_p
+
+    # Session cache callbacks
+    lib.httpcloak_set_session_cache_callbacks.argtypes = [
+        SESSION_CACHE_GET_CALLBACK,
+        SESSION_CACHE_PUT_CALLBACK,
+        SESSION_CACHE_DELETE_CALLBACK,
+        ECH_CACHE_GET_CALLBACK,
+        ECH_CACHE_PUT_CALLBACK,
+        SESSION_CACHE_ERROR_CALLBACK,
+    ]
+    lib.httpcloak_set_session_cache_callbacks.restype = None
+    lib.httpcloak_clear_session_cache_callbacks.argtypes = []
+    lib.httpcloak_clear_session_cache_callbacks.restype = None
 
 
 def _ptr_to_string(ptr) -> Optional[str]:
@@ -2784,6 +2811,370 @@ class LocalProxy:
     def __del__(self):
         """Destructor - ensure proxy is stopped."""
         self.close()
+
+
+# ============================================================================
+# Distributed Session Cache
+# ============================================================================
+
+# Global session cache callbacks (must keep references to prevent GC)
+_session_cache_callbacks: Dict[str, Any] = {}
+_session_cache_lock = Lock()
+
+
+class SessionCacheBackend:
+    """
+    Distributed TLS session cache backend for sharing sessions across instances.
+
+    This enables TLS session resumption across distributed httpcloak instances
+    by storing session tickets in an external cache like Redis or Memcached.
+
+    Example with Redis:
+        import redis
+        import json
+        import httpcloak
+
+        redis_client = redis.Redis()
+
+        def get_session(key: str) -> Optional[str]:
+            data = redis_client.get(key)
+            return data.decode() if data else None
+
+        def put_session(key: str, value: str, ttl_seconds: int) -> int:
+            redis_client.setex(key, ttl_seconds, value)
+            return 0  # Success
+
+        def delete_session(key: str) -> int:
+            redis_client.delete(key)
+            return 0
+
+        def on_error(operation: str, key: str, error: str):
+            print(f"Cache error: {operation} on {key}: {error}")
+
+        # Register the cache backend globally
+        cache = httpcloak.SessionCacheBackend(
+            get=get_session,
+            put=put_session,
+            delete=delete_session,
+            on_error=on_error,
+        )
+        cache.register()
+
+        # Now all Session and LocalProxy instances will use this cache
+        session = httpcloak.Session(preset="chrome-143")
+        session.get("https://example.com")  # Session will be cached!
+
+    The cache is used for:
+    - TLS session tickets (key format: httpcloak:sessions:{preset}:{protocol}:{host}:{port})
+    - ECH configs for HTTP/3 (key format: httpcloak:ech:{preset}:{host}:{port})
+
+    Session data is JSON with fields: ticket, state, created_at
+    ECH config data is base64-encoded binary
+    """
+
+    def __init__(
+        self,
+        get: Optional[callable] = None,
+        put: Optional[callable] = None,
+        delete: Optional[callable] = None,
+        get_ech: Optional[callable] = None,
+        put_ech: Optional[callable] = None,
+        on_error: Optional[callable] = None,
+    ):
+        """
+        Create a session cache backend.
+
+        Args:
+            get: Function to get session data. Signature: (key: str) -> Optional[str]
+                 Returns JSON string with session data, or None if not found.
+            put: Function to store session data. Signature: (key: str, value: str, ttl_seconds: int) -> int
+                 Returns 0 on success, non-zero on error.
+            delete: Function to delete session data. Signature: (key: str) -> int
+                    Returns 0 on success, non-zero on error.
+            get_ech: Function to get ECH config. Signature: (key: str) -> Optional[str]
+                     Returns base64-encoded config, or None if not found.
+            put_ech: Function to store ECH config. Signature: (key: str, value: str, ttl_seconds: int) -> int
+                     Returns 0 on success, non-zero on error.
+            on_error: Function called on cache errors. Signature: (operation: str, key: str, error: str) -> None
+        """
+        self._get = get
+        self._put = put
+        self._delete = delete
+        self._get_ech = get_ech
+        self._put_ech = put_ech
+        self._on_error = on_error
+        self._registered = False
+
+        # C callback wrappers (kept as instance attrs to prevent GC)
+        self._c_get = None
+        self._c_put = None
+        self._c_delete = None
+        self._c_get_ech = None
+        self._c_put_ech = None
+        self._c_error = None
+
+    def _make_get_callback(self):
+        """Create C callback wrapper for get."""
+        get_fn = self._get
+
+        def callback(key_ptr):
+            if get_fn is None:
+                return None
+            try:
+                key = key_ptr.decode("utf-8") if key_ptr else ""
+                result = get_fn(key)
+                if result is None:
+                    return None
+                return result.encode("utf-8")
+            except Exception:
+                return None
+
+        return SESSION_CACHE_GET_CALLBACK(callback)
+
+    def _make_put_callback(self):
+        """Create C callback wrapper for put."""
+        put_fn = self._put
+
+        def callback(key_ptr, value_ptr, ttl_seconds):
+            if put_fn is None:
+                return -1
+            try:
+                key = key_ptr.decode("utf-8") if key_ptr else ""
+                value = value_ptr.decode("utf-8") if value_ptr else ""
+                return put_fn(key, value, int(ttl_seconds))
+            except Exception:
+                return -1
+
+        return SESSION_CACHE_PUT_CALLBACK(callback)
+
+    def _make_delete_callback(self):
+        """Create C callback wrapper for delete."""
+        delete_fn = self._delete
+
+        def callback(key_ptr):
+            if delete_fn is None:
+                return -1
+            try:
+                key = key_ptr.decode("utf-8") if key_ptr else ""
+                return delete_fn(key)
+            except Exception:
+                return -1
+
+        return SESSION_CACHE_DELETE_CALLBACK(callback)
+
+    def _make_get_ech_callback(self):
+        """Create C callback wrapper for ECH get."""
+        get_fn = self._get_ech
+
+        def callback(key_ptr):
+            if get_fn is None:
+                return None
+            try:
+                key = key_ptr.decode("utf-8") if key_ptr else ""
+                result = get_fn(key)
+                if result is None:
+                    return None
+                return result.encode("utf-8")
+            except Exception:
+                return None
+
+        return ECH_CACHE_GET_CALLBACK(callback)
+
+    def _make_put_ech_callback(self):
+        """Create C callback wrapper for ECH put."""
+        put_fn = self._put_ech
+
+        def callback(key_ptr, value_ptr, ttl_seconds):
+            if put_fn is None:
+                return -1
+            try:
+                key = key_ptr.decode("utf-8") if key_ptr else ""
+                value = value_ptr.decode("utf-8") if value_ptr else ""
+                return put_fn(key, value, int(ttl_seconds))
+            except Exception:
+                return -1
+
+        return ECH_CACHE_PUT_CALLBACK(callback)
+
+    def _make_error_callback(self):
+        """Create C callback wrapper for error."""
+        error_fn = self._on_error
+
+        def callback(op_ptr, key_ptr, error_ptr):
+            if error_fn is None:
+                return
+            try:
+                operation = op_ptr.decode("utf-8") if op_ptr else ""
+                key = key_ptr.decode("utf-8") if key_ptr else ""
+                error = error_ptr.decode("utf-8") if error_ptr else ""
+                error_fn(operation, key, error)
+            except Exception:
+                pass
+
+        return SESSION_CACHE_ERROR_CALLBACK(callback)
+
+    def _make_noop_get_callback(self):
+        """Create a no-op get callback that always returns None."""
+        def callback(key_ptr):
+            return None
+        return SESSION_CACHE_GET_CALLBACK(callback)
+
+    def _make_noop_put_callback(self):
+        """Create a no-op put callback that always succeeds."""
+        def callback(key_ptr, value_ptr, ttl_seconds):
+            return 0
+        return SESSION_CACHE_PUT_CALLBACK(callback)
+
+    def _make_noop_delete_callback(self):
+        """Create a no-op delete callback that always succeeds."""
+        def callback(key_ptr):
+            return 0
+        return SESSION_CACHE_DELETE_CALLBACK(callback)
+
+    def _make_noop_ech_get_callback(self):
+        """Create a no-op ECH get callback that always returns None."""
+        def callback(key_ptr):
+            return None
+        return ECH_CACHE_GET_CALLBACK(callback)
+
+    def _make_noop_ech_put_callback(self):
+        """Create a no-op ECH put callback that always succeeds."""
+        def callback(key_ptr, value_ptr, ttl_seconds):
+            return 0
+        return ECH_CACHE_PUT_CALLBACK(callback)
+
+    def _make_noop_error_callback(self):
+        """Create a no-op error callback."""
+        def callback(op_ptr, key_ptr, error_ptr):
+            pass
+        return SESSION_CACHE_ERROR_CALLBACK(callback)
+
+    def register(self):
+        """
+        Register this cache backend globally.
+
+        After registration, all new Session and LocalProxy instances will use
+        this cache for TLS session storage.
+        """
+        global _session_cache_callbacks
+
+        lib = _get_lib()
+
+        with _session_cache_lock:
+            # Create C callbacks (use no-op for missing callbacks to avoid null pointer issues)
+            self._c_get = self._make_get_callback() if self._get else self._make_noop_get_callback()
+            self._c_put = self._make_put_callback() if self._put else self._make_noop_put_callback()
+            self._c_delete = self._make_delete_callback() if self._delete else self._make_noop_delete_callback()
+            self._c_get_ech = self._make_get_ech_callback() if self._get_ech else self._make_noop_ech_get_callback()
+            self._c_put_ech = self._make_put_ech_callback() if self._put_ech else self._make_noop_ech_put_callback()
+            self._c_error = self._make_error_callback() if self._on_error else self._make_noop_error_callback()
+
+            # Register with library
+            lib.httpcloak_set_session_cache_callbacks(
+                self._c_get,
+                self._c_put,
+                self._c_delete,
+                self._c_get_ech,
+                self._c_put_ech,
+                self._c_error,
+            )
+
+            # Store reference to prevent GC
+            _session_cache_callbacks["backend"] = self
+            self._registered = True
+
+    def unregister(self):
+        """
+        Unregister this cache backend.
+
+        After unregistration, new sessions will not use distributed caching.
+        """
+        global _session_cache_callbacks
+
+        if not self._registered:
+            return
+
+        lib = _get_lib()
+
+        with _session_cache_lock:
+            lib.httpcloak_clear_session_cache_callbacks()
+            _session_cache_callbacks.clear()
+            self._registered = False
+
+    def __del__(self):
+        """Destructor - unregister on cleanup."""
+        try:
+            if self._registered:
+                self.unregister()
+        except Exception:
+            pass
+
+
+def configure_session_cache(
+    get: Optional[callable] = None,
+    put: Optional[callable] = None,
+    delete: Optional[callable] = None,
+    get_ech: Optional[callable] = None,
+    put_ech: Optional[callable] = None,
+    on_error: Optional[callable] = None,
+) -> SessionCacheBackend:
+    """
+    Configure a distributed session cache backend.
+
+    This is a convenience function that creates and registers a SessionCacheBackend.
+
+    Args:
+        get: Function to get session data. Signature: (key: str) -> Optional[str]
+        put: Function to store session data. Signature: (key: str, value: str, ttl_seconds: int) -> int
+        delete: Function to delete session data. Signature: (key: str) -> int
+        get_ech: Function to get ECH config. Signature: (key: str) -> Optional[str]
+        put_ech: Function to store ECH config. Signature: (key: str, value: str, ttl_seconds: int) -> int
+        on_error: Function called on cache errors. Signature: (operation: str, key: str, error: str) -> None
+
+    Returns:
+        The registered SessionCacheBackend instance.
+
+    Example:
+        import redis
+        import httpcloak
+
+        r = redis.Redis()
+
+        httpcloak.configure_session_cache(
+            get=lambda key: r.get(key).decode() if r.get(key) else None,
+            put=lambda key, value, ttl: (r.setex(key, ttl, value), 0)[1],
+            delete=lambda key: (r.delete(key), 0)[1],
+        )
+
+        # Now all sessions will use Redis for TLS session storage
+        session = httpcloak.Session()
+        session.get("https://example.com")
+    """
+    backend = SessionCacheBackend(
+        get=get,
+        put=put,
+        delete=delete,
+        get_ech=get_ech,
+        put_ech=put_ech,
+        on_error=on_error,
+    )
+    backend.register()
+    return backend
+
+
+def clear_session_cache():
+    """
+    Clear the distributed session cache backend.
+
+    After calling this, new sessions will not use distributed caching.
+    """
+    global _session_cache_callbacks
+
+    lib = _get_lib()
+
+    with _session_cache_lock:
+        lib.httpcloak_clear_session_cache_callbacks()
+        _session_cache_callbacks.clear()
 
 
 def _get_default_session() -> Session:
