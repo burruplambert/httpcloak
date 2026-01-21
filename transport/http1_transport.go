@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	http "github.com/sardanioss/http"
+	"net/textproto"
 	"net/url"
 	"strings"
 	"sync"
@@ -651,22 +652,9 @@ func (t *HTTP1Transport) writeChunkedBody(w *bufio.Writer, body io.Reader) error
 }
 
 // canonicalHeaderKey converts a header key to canonical form (e.g., "sec-ch-ua" -> "Sec-Ch-Ua").
-// This matches Go's http.CanonicalHeaderKey / textproto.CanonicalMIMEHeaderKey behavior.
+// Uses Go's standard textproto.CanonicalMIMEHeaderKey for exact compatibility with http.Header.
 func canonicalHeaderKey(s string) string {
-	// Convert to lowercase first, then capitalize first letter and letters after hyphens
-	upper := true
-	result := make([]byte, len(s))
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if upper && 'a' <= c && c <= 'z' {
-			c = c - ('a' - 'A')
-		} else if !upper && 'A' <= c && c <= 'Z' {
-			c = c + ('a' - 'A')
-		}
-		result[i] = c
-		upper = c == '-'
-	}
-	return string(result)
+	return textproto.CanonicalMIMEHeaderKey(s)
 }
 
 // writeHeadersInOrder writes headers in a browser-like order
@@ -737,6 +725,11 @@ func (t *HTTP1Transport) writeHeadersInOrder(w *bufio.Writer, req *http.Request,
 				fmt.Fprintf(w, "Transfer-Encoding: chunked\r\n")
 				written[canonicalKey] = true
 			}
+			continue
+		}
+
+		// Skip Host - already written before this function is called
+		if strings.EqualFold(key, "Host") {
 			continue
 		}
 
