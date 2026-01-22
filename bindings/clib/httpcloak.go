@@ -1953,6 +1953,47 @@ func httpcloak_local_proxy_get_stats(handle C.int64_t) *C.char {
 	return C.CString(string(data))
 }
 
+//export httpcloak_local_proxy_register_session
+func httpcloak_local_proxy_register_session(proxyHandle C.int64_t, sessionID *C.char, sessionHandle C.int64_t) *C.char {
+	localProxyMu.RLock()
+	proxy, exists := localProxies[int64(proxyHandle)]
+	localProxyMu.RUnlock()
+
+	if !exists || proxy == nil {
+		return makeErrorJSON(ErrInvalidLocalProxy)
+	}
+
+	session := getSession(sessionHandle)
+	if session == nil {
+		return makeErrorJSON(ErrInvalidSession)
+	}
+
+	id := C.GoString(sessionID)
+	if err := proxy.RegisterSession(id, session); err != nil {
+		return makeErrorJSON(err)
+	}
+
+	return nil // Success
+}
+
+//export httpcloak_local_proxy_unregister_session
+func httpcloak_local_proxy_unregister_session(proxyHandle C.int64_t, sessionID *C.char) C.int {
+	localProxyMu.RLock()
+	proxy, exists := localProxies[int64(proxyHandle)]
+	localProxyMu.RUnlock()
+
+	if !exists || proxy == nil {
+		return 0 // Proxy not found
+	}
+
+	id := C.GoString(sessionID)
+	session := proxy.UnregisterSession(id)
+	if session != nil {
+		return 1 // Successfully unregistered
+	}
+	return 0 // Session not found
+}
+
 // ============================================================================
 // Streaming API
 // ============================================================================

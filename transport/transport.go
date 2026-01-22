@@ -1321,6 +1321,34 @@ func (t *Transport) GetHTTP3Transport() *HTTP3Transport {
 	return t.h3Transport
 }
 
+// SetSessionIdentifier sets a session identifier on all TLS session caches.
+// This is used to isolate TLS sessions when the same host is accessed through
+// different proxies or with different session configurations.
+// The identifier is included in distributed cache keys to prevent session sharing.
+func (t *Transport) SetSessionIdentifier(sessionId string) {
+	if t.h1Transport != nil {
+		if cache := t.h1Transport.GetSessionCache(); cache != nil {
+			if pCache, ok := cache.(*PersistableSessionCache); ok {
+				pCache.SetSessionIdentifier(sessionId)
+			}
+		}
+	}
+	if t.h2Transport != nil {
+		if cache := t.h2Transport.GetSessionCache(); cache != nil {
+			if pCache, ok := cache.(*PersistableSessionCache); ok {
+				pCache.SetSessionIdentifier(sessionId)
+			}
+		}
+	}
+	if t.h3Transport != nil {
+		if cache := t.h3Transport.GetSessionCache(); cache != nil {
+			if pCache, ok := cache.(*PersistableSessionCache); ok {
+				pCache.SetSessionIdentifier(sessionId)
+			}
+		}
+	}
+}
+
 // Helper functions
 
 // applyPresetHeaders applies headers from the preset to the request.

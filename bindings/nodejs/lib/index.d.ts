@@ -563,6 +563,48 @@ export class LocalProxy {
   getStats(): LocalProxyStats;
 
   /**
+   * Register a session with an ID for use with X-HTTPCloak-Session header.
+   * This allows per-request session routing through the proxy.
+   *
+   * When a request is made through the proxy with the `X-HTTPCloak-Session: <sessionId>` header,
+   * the proxy will use the registered session for that request, applying its TLS fingerprint
+   * and cookies.
+   *
+   * @param sessionId - Unique identifier for the session
+   * @param session - The session to register
+   * @throws {HTTPCloakError} If registration fails (e.g., invalid session or proxy not running)
+   *
+   * @example
+   * ```typescript
+   * const proxy = new LocalProxy({ port: 8888 });
+   * const session = new Session({ preset: 'chrome-143' });
+   *
+   * // Register session with ID
+   * proxy.registerSession('user-1', session);
+   *
+   * // Now requests with X-HTTPCloak-Session: user-1 header will use this session
+   * ```
+   */
+  registerSession(sessionId: string, session: Session): void;
+
+  /**
+   * Unregister a session by ID.
+   * After unregistering, the session ID can no longer be used with X-HTTPCloak-Session header.
+   *
+   * @param sessionId - The session ID to unregister
+   * @returns True if the session was found and unregistered, false otherwise
+   *
+   * @example
+   * ```typescript
+   * const wasUnregistered = proxy.unregisterSession('user-1');
+   * if (wasUnregistered) {
+   *   console.log('Session unregistered');
+   * }
+   * ```
+   */
+  unregisterSession(sessionId: string): boolean;
+
+  /**
    * Stop and close the proxy.
    * After closing, the LocalProxy instance cannot be reused.
    */

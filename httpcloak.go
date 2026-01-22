@@ -657,6 +657,13 @@ func (s *Session) GetHeaderOrder() []string {
 	return s.inner.GetHeaderOrder()
 }
 
+// SetSessionIdentifier sets a session identifier for TLS cache key isolation.
+// This is used when the session is registered with a LocalProxy to ensure
+// TLS sessions are isolated per proxy/session configuration in distributed caches.
+func (s *Session) SetSessionIdentifier(sessionId string) {
+	s.inner.SetSessionIdentifier(sessionId)
+}
+
 // Close closes the session and releases resources
 func (s *Session) Close() {
 	s.inner.Close()

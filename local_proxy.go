@@ -366,6 +366,10 @@ func (p *LocalProxy) RegisterSession(sessionID string, session *Session) error {
 	if _, exists := p.sessionRegistry[sessionID]; exists {
 		return fmt.Errorf("session with ID %q already exists", sessionID)
 	}
+
+	// Set session identifier for TLS cache key isolation in distributed caches
+	session.SetSessionIdentifier(sessionID)
+
 	p.sessionRegistry[sessionID] = session
 	return nil
 }
@@ -381,6 +385,10 @@ func (p *LocalProxy) UnregisterSession(sessionID string) *Session {
 	if !exists {
 		return nil
 	}
+
+	// Clear the session identifier (session may be reused elsewhere)
+	session.SetSessionIdentifier("")
+
 	delete(p.sessionRegistry, sessionID)
 	return session
 }

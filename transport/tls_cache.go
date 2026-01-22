@@ -48,6 +48,16 @@ func FormatSessionCacheKey(preset, protocol, host, port string) string {
 	return fmt.Sprintf("%s:%s:%s:%s:%s", CacheKeyPrefixSession, preset, protocol, host, port)
 }
 
+// FormatSessionCacheKeyWithID creates a cache key for TLS sessions that includes a session identifier.
+// This is used when sessions need to be isolated per proxy/session (e.g., different upstream proxies).
+// Format: httpcloak:sessions:{sessionId}:{preset}:{protocol}:{host}:{port}
+func FormatSessionCacheKeyWithID(sessionId, preset, protocol, host, port string) string {
+	if sessionId == "" {
+		return FormatSessionCacheKey(preset, protocol, host, port)
+	}
+	return fmt.Sprintf("%s:%s:%s:%s:%s:%s", CacheKeyPrefixSession, sessionId, preset, protocol, host, port)
+}
+
 // FormatECHCacheKey creates a cache key for ECH configs.
 // Format: httpcloak:ech:{preset}:{host}:{port}
 func FormatECHCacheKey(preset, host, port string) string {
@@ -143,6 +153,7 @@ type PersistableSessionCache struct {
 	backend       SessionCacheBackend
 	preset        string        // Preset name for cache key generation
 	protocol      string        // Protocol identifier (h1, h2, h3)
+	sessionId     string        // Optional session identifier for cache key isolation
 	errorCallback ErrorCallback // Optional callback for backend errors
 }
 
@@ -181,6 +192,24 @@ func (c *PersistableSessionCache) SetBackend(backend SessionCacheBackend, preset
 	c.preset = preset
 	c.protocol = protocol
 	c.errorCallback = errorCallback
+}
+
+// SetSessionIdentifier sets an optional session identifier for cache key isolation.
+// When set, cache keys will include this identifier to prevent TLS session sharing
+// across different proxy configurations (e.g., when using different upstream proxies).
+// This is useful in distributed scenarios where different "sessions" should have
+// isolated TLS session caches even when targeting the same host.
+func (c *PersistableSessionCache) SetSessionIdentifier(sessionId string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.sessionId = sessionId
+}
+
+// GetSessionIdentifier returns the current session identifier.
+func (c *PersistableSessionCache) GetSessionIdentifier() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.sessionId
 }
 
 // SetErrorCallback sets the callback for backend errors.
@@ -238,8 +267,8 @@ func (c *PersistableSessionCache) getFromBackend(sessionKey string) (*tls.Client
 		return nil, nil
 	}
 
-	// Create backend cache key
-	backendKey := FormatSessionCacheKey(c.preset, c.protocol, host, port)
+	// Create backend cache key (includes session ID if set for isolation)
+	backendKey := FormatSessionCacheKeyWithID(c.sessionId, c.preset, c.protocol, host, port)
 
 	// Use background context with timeout for backend operations
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -375,8 +404,8 @@ func (c *PersistableSessionCache) putToBackend(sessionKey string, cs *tls.Client
 		return
 	}
 
-	// Create backend cache key
-	backendKey := FormatSessionCacheKey(c.preset, c.protocol, host, port)
+	// Create backend cache key (includes session ID if set for isolation)
+	backendKey := FormatSessionCacheKeyWithID(c.sessionId, c.preset, c.protocol, host, port)
 
 	// Use background context with timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

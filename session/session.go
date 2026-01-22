@@ -701,6 +701,15 @@ func (s *Session) GetTransport() *transport.Transport {
 	return s.transport
 }
 
+// SetSessionIdentifier sets a session identifier for TLS cache key isolation.
+// This is used when the session is registered with a LocalProxy to ensure
+// TLS sessions are isolated per proxy/session configuration.
+func (s *Session) SetSessionIdentifier(sessionId string) {
+	if s.transport != nil {
+		s.transport.SetSessionIdentifier(sessionId)
+	}
+}
+
 // Stats returns session statistics
 func (s *Session) Stats() SessionStats {
 	s.mu.RLock()

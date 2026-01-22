@@ -762,6 +762,8 @@ function getLib() {
       httpcloak_local_proxy_get_port: nativeLibHandle.func("httpcloak_local_proxy_get_port", "int", ["int64"]),
       httpcloak_local_proxy_is_running: nativeLibHandle.func("httpcloak_local_proxy_is_running", "int", ["int64"]),
       httpcloak_local_proxy_get_stats: nativeLibHandle.func("httpcloak_local_proxy_get_stats", "str", ["int64"]),
+      httpcloak_local_proxy_register_session: nativeLibHandle.func("httpcloak_local_proxy_register_session", "str", ["int64", "str", "int64"]),
+      httpcloak_local_proxy_unregister_session: nativeLibHandle.func("httpcloak_local_proxy_unregister_session", "int", ["int64", "str"]),
       // Session cache callbacks
       httpcloak_set_session_cache_callbacks: nativeLibHandle.func("httpcloak_set_session_cache_callbacks", "void", [
         koffi.pointer(SessionCacheGetProto),
@@ -2624,6 +2626,47 @@ class LocalProxy {
       return JSON.parse(result);
     }
     return {};
+  }
+
+  /**
+   * Register a session with an ID for use with X-HTTPCloak-Session header.
+   * This allows per-request session routing through the proxy.
+   *
+   * @param {string} sessionId - Unique identifier for the session
+   * @param {Session} session - The session to register
+   * @throws {HTTPCloakError} If registration fails
+   */
+  registerSession(sessionId, session) {
+    if (!session || !session._handle) {
+      throw new HTTPCloakError("Invalid session");
+    }
+    const resultPtr = this._lib.httpcloak_local_proxy_register_session(
+      this._handle,
+      sessionId,
+      session._handle
+    );
+    const result = resultToString(resultPtr);
+    if (result) {
+      const data = JSON.parse(result);
+      if (data.error) {
+        throw new HTTPCloakError(data.error);
+      }
+    }
+  }
+
+  /**
+   * Unregister a session by ID.
+   * After unregistering, the session ID can no longer be used with X-HTTPCloak-Session header.
+   *
+   * @param {string} sessionId - The session ID to unregister
+   * @returns {boolean} True if the session was found and unregistered, false otherwise
+   */
+  unregisterSession(sessionId) {
+    const result = this._lib.httpcloak_local_proxy_unregister_session(
+      this._handle,
+      sessionId
+    );
+    return result !== 0;
   }
 
   /**
