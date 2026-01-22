@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/andybalholm/brotli"
+	"github.com/klauspost/compress/zstd"
 	http "github.com/sardanioss/http"
 	"github.com/sardanioss/httpcloak/protocol"
 )
@@ -424,6 +425,12 @@ func setupStreamDecompressor(body io.ReadCloser, encoding string) (io.ReadCloser
 		return &brotliStreamReader{brotli.NewReader(body)}, nil
 	case "deflate":
 		return &deflateStreamReader{flate.NewReader(body)}, nil
+	case "zstd":
+		decoder, err := zstd.NewReader(body)
+		if err != nil {
+			return body, nil
+		}
+		return &zstdStreamReader{decoder: decoder, body: body}, nil
 	default:
 		return body, nil
 	}
@@ -453,4 +460,19 @@ func (d *deflateStreamReader) Read(p []byte) (n int, err error) {
 
 func (d *deflateStreamReader) Close() error {
 	return d.reader.Close()
+}
+
+// zstdStreamReader wraps zstd.Decoder to implement io.ReadCloser
+type zstdStreamReader struct {
+	decoder *zstd.Decoder
+	body    io.ReadCloser
+}
+
+func (z *zstdStreamReader) Read(p []byte) (n int, err error) {
+	return z.decoder.Read(p)
+}
+
+func (z *zstdStreamReader) Close() error {
+	z.decoder.Close()
+	return z.body.Close()
 }
