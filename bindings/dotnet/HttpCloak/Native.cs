@@ -211,6 +211,28 @@ internal static class Native
     [DllImport(LibraryName, EntryPoint = "httpcloak_local_proxy_unregister_session", CallingConvention = CallingConvention.Cdecl)]
     public static extern int LocalProxyUnregisterSession(long proxyHandle, [MarshalAs(UnmanagedType.LPUTF8Str)] string sessionId);
 
+    // Raw response functions for fast-path (zero-copy)
+    [DllImport(LibraryName, EntryPoint = "httpcloak_get_raw", CallingConvention = CallingConvention.Cdecl)]
+    public static extern long GetRaw(long handle, [MarshalAs(UnmanagedType.LPUTF8Str)] string url, [MarshalAs(UnmanagedType.LPUTF8Str)] string? optionsJson);
+
+    [DllImport(LibraryName, EntryPoint = "httpcloak_post_raw", CallingConvention = CallingConvention.Cdecl)]
+    public static extern long PostRaw(long handle, [MarshalAs(UnmanagedType.LPUTF8Str)] string url, IntPtr body, int bodyLen, [MarshalAs(UnmanagedType.LPUTF8Str)] string? optionsJson);
+
+    [DllImport(LibraryName, EntryPoint = "httpcloak_request_raw", CallingConvention = CallingConvention.Cdecl)]
+    public static extern long RequestRaw(long handle, [MarshalAs(UnmanagedType.LPUTF8Str)] string requestJson, IntPtr body, int bodyLen);
+
+    [DllImport(LibraryName, EntryPoint = "httpcloak_response_get_metadata", CallingConvention = CallingConvention.Cdecl)]
+    public static extern IntPtr ResponseGetMetadata(long responseHandle);
+
+    [DllImport(LibraryName, EntryPoint = "httpcloak_response_get_body_len", CallingConvention = CallingConvention.Cdecl)]
+    public static extern int ResponseGetBodyLen(long responseHandle);
+
+    [DllImport(LibraryName, EntryPoint = "httpcloak_response_copy_body_to", CallingConvention = CallingConvention.Cdecl)]
+    public static extern int ResponseCopyBodyTo(long responseHandle, IntPtr buffer, int bufferLen);
+
+    [DllImport(LibraryName, EntryPoint = "httpcloak_response_free", CallingConvention = CallingConvention.Cdecl)]
+    public static extern void ResponseFree(long responseHandle);
+
     /// <summary>
     /// Convert a native string pointer to a managed string and free the native memory.
     /// </summary>

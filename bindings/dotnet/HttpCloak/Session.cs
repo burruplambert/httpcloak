@@ -1265,6 +1265,207 @@ public sealed class Session : IDisposable
         return new Response(response, elapsed);
     }
 
+    private static FastResponse ParseFastResponse(long responseHandle, TimeSpan elapsed = default)
+    {
+        try
+        {
+            // Get metadata
+            IntPtr metaPtr = Native.ResponseGetMetadata(responseHandle);
+            string? metaJson = Native.PtrToStringAndFree(metaPtr);
+
+            if (string.IsNullOrEmpty(metaJson))
+                throw new HttpCloakException("No response metadata received");
+
+            // Check for error
+            if (metaJson.Contains("\"error\""))
+            {
+                var error = JsonSerializer.Deserialize(metaJson, JsonContext.Default.ErrorResponse);
+                if (error?.Error != null)
+                    throw new HttpCloakException(error.Error);
+            }
+
+            var metadata = JsonSerializer.Deserialize(metaJson, JsonContext.Default.FastResponseMetadata);
+            if (metadata == null)
+                throw new HttpCloakException("Failed to parse response metadata");
+
+            // Get body
+            int bodyLen = Native.ResponseGetBodyLen(responseHandle);
+            byte[] content;
+
+            if (bodyLen > 0)
+            {
+                content = new byte[bodyLen];
+                unsafe
+                {
+                    fixed (byte* bufPtr = content)
+                    {
+                        Native.ResponseCopyBodyTo(responseHandle, (IntPtr)bufPtr, bodyLen);
+                    }
+                }
+            }
+            else
+            {
+                content = Array.Empty<byte>();
+            }
+
+            return new FastResponse(metadata, content, elapsed);
+        }
+        finally
+        {
+            Native.ResponseFree(responseHandle);
+        }
+    }
+
+    /// <summary>
+    /// Perform a high-performance GET request with direct byte array response.
+    /// </summary>
+    /// <param name="url">Request URL</param>
+    /// <param name="headers">Custom headers</param>
+    /// <param name="parameters">Query parameters</param>
+    /// <param name="cookies">Cookies to send with this request</param>
+    /// <param name="auth">Basic auth (username, password). If null, uses session Auth.</param>
+    public FastResponse GetFast(string url, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null)
+    {
+        ThrowIfDisposed();
+
+        url = AddParamsToUrl(url, parameters);
+        headers = ApplyAuth(headers, auth);
+        headers = ApplyCookies(headers, cookies);
+
+        var options = new RequestOptions { Headers = headers.Count > 0 ? headers : null };
+        string? optionsJson = headers.Count > 0
+            ? JsonSerializer.Serialize(options, JsonContext.Default.RequestOptions)
+            : null;
+
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        long responseHandle = Native.GetRaw(_handle, url, optionsJson);
+        stopwatch.Stop();
+
+        if (responseHandle < 0)
+            throw new HttpCloakException("Request failed");
+
+        return ParseFastResponse(responseHandle, stopwatch.Elapsed);
+    }
+
+    /// <summary>
+    /// Perform a high-performance POST request with direct byte array response.
+    /// </summary>
+    /// <param name="url">Request URL</param>
+    /// <param name="body">Request body as bytes</param>
+    /// <param name="headers">Custom headers</param>
+    /// <param name="parameters">Query parameters</param>
+    /// <param name="cookies">Cookies to send with this request</param>
+    /// <param name="auth">Basic auth (username, password). If null, uses session Auth.</param>
+    public FastResponse PostFast(string url, byte[]? body = null, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null)
+    {
+        ThrowIfDisposed();
+
+        url = AddParamsToUrl(url, parameters);
+        headers = ApplyAuth(headers, auth);
+        headers = ApplyCookies(headers, cookies);
+
+        var options = new RequestOptions { Headers = headers.Count > 0 ? headers : null };
+        string? optionsJson = headers.Count > 0
+            ? JsonSerializer.Serialize(options, JsonContext.Default.RequestOptions)
+            : null;
+
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        long responseHandle;
+
+        if (body != null && body.Length > 0)
+        {
+            unsafe
+            {
+                fixed (byte* bodyPtr = body)
+                {
+                    responseHandle = Native.PostRaw(_handle, url, (IntPtr)bodyPtr, body.Length, optionsJson);
+                }
+            }
+        }
+        else
+        {
+            responseHandle = Native.PostRaw(_handle, url, IntPtr.Zero, 0, optionsJson);
+        }
+        stopwatch.Stop();
+
+        if (responseHandle < 0)
+            throw new HttpCloakException("Request failed");
+
+        return ParseFastResponse(responseHandle, stopwatch.Elapsed);
+    }
+
+    /// <summary>
+    /// Perform a high-performance custom HTTP request with direct byte array response.
+    /// </summary>
+    /// <param name="method">HTTP method</param>
+    /// <param name="url">Request URL</param>
+    /// <param name="body">Request body as bytes</param>
+    /// <param name="headers">Custom headers</param>
+    /// <param name="parameters">Query parameters</param>
+    /// <param name="cookies">Cookies to send with this request</param>
+    /// <param name="auth">Basic auth (username, password). If null, uses session Auth.</param>
+    /// <param name="timeout">Request timeout in seconds</param>
+    public FastResponse RequestFast(string method, string url, byte[]? body = null, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
+    {
+        ThrowIfDisposed();
+
+        url = AddParamsToUrl(url, parameters);
+        headers = ApplyAuth(headers, auth);
+        headers = ApplyCookies(headers, cookies);
+
+        var request = new RequestConfig
+        {
+            Method = method.ToUpperInvariant(),
+            Url = url,
+            Headers = headers.Count > 0 ? headers : null,
+            Timeout = timeout
+        };
+
+        string requestJson = JsonSerializer.Serialize(request, JsonContext.Default.RequestConfig);
+
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        long responseHandle;
+
+        if (body != null && body.Length > 0)
+        {
+            unsafe
+            {
+                fixed (byte* bodyPtr = body)
+                {
+                    responseHandle = Native.RequestRaw(_handle, requestJson, (IntPtr)bodyPtr, body.Length);
+                }
+            }
+        }
+        else
+        {
+            responseHandle = Native.RequestRaw(_handle, requestJson, IntPtr.Zero, 0);
+        }
+        stopwatch.Stop();
+
+        if (responseHandle < 0)
+            throw new HttpCloakException("Request failed");
+
+        return ParseFastResponse(responseHandle, stopwatch.Elapsed);
+    }
+
+    /// <summary>
+    /// Perform a high-performance PUT request with direct byte array response.
+    /// </summary>
+    public FastResponse PutFast(string url, byte[]? body = null, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
+        => RequestFast("PUT", url, body, headers, parameters, cookies, auth, timeout);
+
+    /// <summary>
+    /// Perform a high-performance DELETE request with direct byte array response.
+    /// </summary>
+    public FastResponse DeleteFast(string url, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
+        => RequestFast("DELETE", url, null, headers, parameters, cookies, auth, timeout);
+
+    /// <summary>
+    /// Perform a high-performance PATCH request with direct byte array response.
+    /// </summary>
+    public FastResponse PatchFast(string url, byte[]? body = null, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
+        => RequestFast("PATCH", url, body, headers, parameters, cookies, auth, timeout);
+
     private void ThrowIfDisposed()
     {
         if (_disposed)
@@ -1431,6 +1632,140 @@ public sealed class Response
 
     /// <summary>Response body as bytes.</summary>
     public byte[] Content => System.Text.Encoding.UTF8.GetBytes(Text);
+
+    /// <summary>Final URL after redirects.</summary>
+    public string Url { get; }
+
+    /// <summary>Protocol used (http/1.1, h2, h3).</summary>
+    public string Protocol { get; }
+
+    /// <summary>True if status code is less than 400.</summary>
+    public bool Ok => StatusCode < 400;
+
+    /// <summary>Time elapsed for the request.</summary>
+    public TimeSpan Elapsed { get; }
+
+    /// <summary>Cookies set by this response.</summary>
+    public List<Cookie> Cookies { get; }
+
+    /// <summary>Redirect history (list of RedirectInfo objects).</summary>
+    public List<RedirectInfo> History { get; }
+
+    /// <summary>HTTP status reason phrase (e.g., "OK", "Not Found").</summary>
+    public string Reason => HttpStatusPhrases.TryGetValue(StatusCode, out var phrase) ? phrase : "Unknown";
+
+    /// <summary>Response encoding from Content-Type header. Null if not specified.</summary>
+    public string? Encoding
+    {
+        get
+        {
+            string? contentType = GetHeader("Content-Type");
+            if (string.IsNullOrEmpty(contentType))
+                return null;
+
+            if (contentType.Contains("charset="))
+            {
+                foreach (var part in contentType.Split(';'))
+                {
+                    var trimmed = part.Trim();
+                    if (trimmed.StartsWith("charset=", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return trimmed.Substring(8).Trim().Trim('"', '\'');
+                    }
+                }
+            }
+            return null;
+        }
+    }
+
+    /// <summary>Parse response body as JSON.</summary>
+    public T? Json<T>() => JsonSerializer.Deserialize<T>(Text);
+
+    /// <summary>Throw if status code indicates an error.</summary>
+    public void RaiseForStatus()
+    {
+        if (!Ok)
+            throw new HttpCloakException($"HTTP {StatusCode}: {Reason}");
+    }
+}
+
+/// <summary>
+/// High-performance HTTP Response with direct byte array access.
+/// Provides better performance for large downloads by avoiding string conversion overhead.
+/// </summary>
+/// <example>
+/// <code>
+/// var response = session.GetFast("https://example.com/large-file.zip");
+/// byte[] data = response.Content;  // Direct access to response bytes
+/// </code>
+/// </example>
+public sealed class FastResponse
+{
+    private static readonly Dictionary<int, string> HttpStatusPhrases = new()
+    {
+        { 100, "Continue" }, { 101, "Switching Protocols" }, { 102, "Processing" },
+        { 200, "OK" }, { 201, "Created" }, { 202, "Accepted" }, { 203, "Non-Authoritative Information" },
+        { 204, "No Content" }, { 205, "Reset Content" }, { 206, "Partial Content" }, { 207, "Multi-Status" },
+        { 300, "Multiple Choices" }, { 301, "Moved Permanently" }, { 302, "Found" }, { 303, "See Other" },
+        { 304, "Not Modified" }, { 305, "Use Proxy" }, { 307, "Temporary Redirect" }, { 308, "Permanent Redirect" },
+        { 400, "Bad Request" }, { 401, "Unauthorized" }, { 402, "Payment Required" }, { 403, "Forbidden" },
+        { 404, "Not Found" }, { 405, "Method Not Allowed" }, { 406, "Not Acceptable" },
+        { 407, "Proxy Authentication Required" }, { 408, "Request Timeout" }, { 409, "Conflict" },
+        { 410, "Gone" }, { 411, "Length Required" }, { 412, "Precondition Failed" },
+        { 413, "Payload Too Large" }, { 414, "URI Too Long" }, { 415, "Unsupported Media Type" },
+        { 416, "Range Not Satisfiable" }, { 417, "Expectation Failed" }, { 418, "I'm a teapot" },
+        { 421, "Misdirected Request" }, { 422, "Unprocessable Entity" }, { 423, "Locked" },
+        { 424, "Failed Dependency" }, { 425, "Too Early" }, { 426, "Upgrade Required" },
+        { 428, "Precondition Required" }, { 429, "Too Many Requests" },
+        { 431, "Request Header Fields Too Large" }, { 451, "Unavailable For Legal Reasons" },
+        { 500, "Internal Server Error" }, { 501, "Not Implemented" }, { 502, "Bad Gateway" },
+        { 503, "Service Unavailable" }, { 504, "Gateway Timeout" }, { 505, "HTTP Version Not Supported" },
+        { 506, "Variant Also Negotiates" }, { 507, "Insufficient Storage" }, { 508, "Loop Detected" },
+        { 510, "Not Extended" }, { 511, "Network Authentication Required" },
+    };
+
+    internal FastResponse(FastResponseMetadata metadata, byte[] content, TimeSpan elapsed = default)
+    {
+        StatusCode = metadata.StatusCode;
+        Headers = metadata.Headers ?? new Dictionary<string, string[]>();
+        Content = content;
+        Url = metadata.FinalUrl ?? "";
+        Protocol = metadata.Protocol ?? "";
+        Elapsed = elapsed;
+
+        // Parse cookies from response
+        Cookies = metadata.Cookies?.Select(c => new Cookie(c.Name ?? "", c.Value ?? "")).ToList()
+            ?? new List<Cookie>();
+
+        // Parse redirect history
+        History = metadata.History?.Select(h => new RedirectInfo(h.StatusCode, h.Url ?? "", h.Headers)).ToList()
+            ?? new List<RedirectInfo>();
+    }
+
+    /// <summary>HTTP status code.</summary>
+    public int StatusCode { get; }
+
+    /// <summary>Response headers (multi-value). Use GetHeader() for single value access.</summary>
+    public Dictionary<string, string[]> Headers { get; }
+
+    /// <summary>Get first value of a header (case-insensitive).</summary>
+    public string? GetHeader(string name)
+    {
+        if (Headers.TryGetValue(name, out var values) && values.Length > 0)
+            return values[0];
+
+        var key = Headers.Keys.FirstOrDefault(k => k.Equals(name, StringComparison.OrdinalIgnoreCase));
+        if (key != null && Headers.TryGetValue(key, out values) && values.Length > 0)
+            return values[0];
+
+        return null;
+    }
+
+    /// <summary>Response body as bytes (direct access, no copy).</summary>
+    public byte[] Content { get; }
+
+    /// <summary>Response body as string (creates a copy).</summary>
+    public string Text => System.Text.Encoding.UTF8.GetString(Content);
 
     /// <summary>Final URL after redirects.</summary>
     public string Url { get; }
@@ -2012,6 +2347,33 @@ internal class ResponseData
     public List<RedirectInfoData>? History { get; set; }
 }
 
+/// <summary>
+/// Metadata for fast/raw responses (excludes body which is handled separately).
+/// </summary>
+internal class FastResponseMetadata
+{
+    [JsonPropertyName("status_code")]
+    public int StatusCode { get; set; }
+
+    [JsonPropertyName("headers")]
+    public Dictionary<string, string[]>? Headers { get; set; }
+
+    [JsonPropertyName("body_len")]
+    public int BodyLen { get; set; }
+
+    [JsonPropertyName("final_url")]
+    public string? FinalUrl { get; set; }
+
+    [JsonPropertyName("protocol")]
+    public string? Protocol { get; set; }
+
+    [JsonPropertyName("cookies")]
+    public List<CookieData>? Cookies { get; set; }
+
+    [JsonPropertyName("history")]
+    public List<RedirectInfoData>? History { get; set; }
+}
+
 internal class ErrorResponse
 {
     [JsonPropertyName("error")]
@@ -2201,6 +2563,7 @@ public sealed class HttpCloakHandler : DelegatingHandler
 [JsonSerializable(typeof(SessionConfig))]
 [JsonSerializable(typeof(RequestConfig))]
 [JsonSerializable(typeof(ResponseData))]
+[JsonSerializable(typeof(FastResponseMetadata))]
 [JsonSerializable(typeof(ErrorResponse))]
 [JsonSerializable(typeof(CookieData))]
 [JsonSerializable(typeof(RedirectInfoData))]

@@ -380,10 +380,15 @@ class FastResponse:
         headers: Response headers
         content: Response body as memoryview (zero-copy, read-only)
         content_bytes: Response body copied to bytes (creates a copy)
+        body: Alias for content_bytes (creates a copy)
         url: Final URL after redirects
         ok: True if status_code < 400
         protocol: Protocol used (http/1.1, h2, h3)
         elapsed: Time elapsed for the request (seconds as float)
+        reason: HTTP status reason phrase
+        encoding: Response encoding (from Content-Type header)
+        cookies: List of cookies set by this response
+        history: List of redirect responses (RedirectInfo objects)
 
     Example:
         # Fast path - process data immediately
@@ -402,13 +407,18 @@ class FastResponse:
         final_url: str,
         protocol: str,
         elapsed: float = 0.0,
+        cookies: Optional[List[Cookie]] = None,
+        history: Optional[List[RedirectInfo]] = None,
     ):
         self.status_code = status_code
         self.headers = headers
         self.content = content_view  # memoryview - zero copy
         self.url = final_url
+        self.final_url = final_url  # Alias
         self.protocol = protocol
         self.elapsed = elapsed
+        self.cookies = cookies or []
+        self.history = history or []
 
     @property
     def ok(self) -> bool:
@@ -416,8 +426,34 @@ class FastResponse:
         return self.status_code < 400
 
     @property
+    def reason(self) -> str:
+        """HTTP status reason phrase (e.g., 'OK', 'Not Found')."""
+        return HTTP_STATUS_PHRASES.get(self.status_code, "Unknown")
+
+    @property
+    def encoding(self) -> Optional[str]:
+        """
+        Response encoding from Content-Type header.
+        Returns None if not specified.
+        """
+        content_type = self.headers.get("content-type", "")
+        if not content_type:
+            content_type = self.headers.get("Content-Type", "")
+        if "charset=" in content_type:
+            for part in content_type.split(";"):
+                part = part.strip()
+                if part.lower().startswith("charset="):
+                    return part.split("=", 1)[1].strip().strip('"\'')
+        return None
+
+    @property
     def content_bytes(self) -> bytes:
         """Get content as bytes (creates a copy)."""
+        return bytes(self.content)
+
+    @property
+    def body(self) -> bytes:
+        """Alias for content_bytes (creates a copy)."""
         return bytes(self.content)
 
     @property
@@ -432,7 +468,7 @@ class FastResponse:
     def raise_for_status(self):
         """Raise HTTPCloakError if status_code >= 400."""
         if not self.ok:
-            raise HTTPCloakError(f"HTTP {self.status_code}")
+            raise HTTPCloakError(f"HTTP {self.status_code}: {self.reason}")
 
 
 class _FastBufferPool:
@@ -533,6 +569,22 @@ class StreamResponse:
     def reason(self) -> str:
         """HTTP status reason phrase."""
         return HTTP_STATUS_PHRASES.get(self.status_code, "Unknown")
+
+    @property
+    def encoding(self) -> Optional[str]:
+        """
+        Response encoding from Content-Type header.
+        Returns None if not specified.
+        """
+        content_type = self.headers.get("content-type", "")
+        if not content_type:
+            content_type = self.headers.get("Content-Type", "")
+        if "charset=" in content_type:
+            for part in content_type.split(";"):
+                part = part.strip()
+                if part.lower().startswith("charset="):
+                    return part.split("=", 1)[1].strip().strip('"\'')
+        return None
 
     def iter_content(self, chunk_size: int = 8192):
         """
@@ -1062,6 +1114,25 @@ def _parse_fast_response(lib, response_handle: int, elapsed: float = 0.0) -> Fas
         if "error" in data:
             raise HTTPCloakError(data["error"])
 
+        # Parse cookies from response
+        cookies = []
+        for cookie_data in data.get("cookies") or []:
+            if isinstance(cookie_data, dict):
+                cookies.append(Cookie(
+                    name=cookie_data.get("name", ""),
+                    value=cookie_data.get("value", ""),
+                ))
+
+        # Parse redirect history
+        history = []
+        for redirect_data in data.get("history") or []:
+            if isinstance(redirect_data, dict):
+                history.append(RedirectInfo(
+                    status_code=redirect_data.get("status_code", 0),
+                    url=redirect_data.get("url", ""),
+                    headers=redirect_data.get("headers") or {},
+                ))
+
         # Get body length
         body_len = lib.httpcloak_response_get_body_len(response_handle)
 
@@ -1088,6 +1159,8 @@ def _parse_fast_response(lib, response_handle: int, elapsed: float = 0.0) -> Fas
             final_url=data.get("final_url", ""),
             protocol=data.get("protocol", ""),
             elapsed=elapsed,
+            cookies=cookies,
+            history=history,
         )
 
     finally:
@@ -2460,6 +2533,192 @@ class Session:
 
         return _parse_fast_response(self._lib, response_handle, elapsed=elapsed)
 
+    def request_fast(
+        self,
+        method: str,
+        url: str,
+        data: Optional[Union[str, bytes, Dict[str, Any]]] = None,
+        json_data: Optional[Dict[str, Any]] = None,
+        params: Optional[Dict[str, Any]] = None,
+        headers: Optional[Dict[str, str]] = None,
+        cookies: Optional[Dict[str, str]] = None,
+        auth: Optional[Tuple[str, str]] = None,
+        timeout: Optional[int] = None,
+    ) -> FastResponse:
+        """
+        High-performance generic HTTP request returning FastResponse with memoryview.
+
+        This method is optimized for maximum speed by:
+        - Using pre-allocated buffer pools (no per-request allocation)
+        - Returning memoryview instead of bytes (zero-copy)
+
+        Args:
+            method: HTTP method (GET, POST, PUT, DELETE, PATCH, etc.)
+            url: Request URL
+            data: Request body (string, bytes, or dict for form data)
+            json_data: JSON body (will be serialized)
+            params: URL query parameters
+            headers: Request headers
+            cookies: Cookies to send with this request
+            auth: Basic auth tuple (username, password)
+            timeout: Request timeout in milliseconds
+
+        Returns:
+            FastResponse with memoryview content
+
+        Example:
+            r = session.request_fast("PUT", "https://api.example.com/resource", json_data={"key": "value"})
+            print(r.status_code, r.text)
+
+        Note:
+            The memoryview in FastResponse.content may be reused by subsequent
+            requests. If you need to keep the data, copy it with bytes(r.content).
+        """
+        # Use request auth if provided, otherwise fall back to session auth
+        effective_auth = auth if auth is not None else self.auth
+
+        url = _add_params_to_url(url, params)
+        merged_headers = self._merge_headers(headers)
+        merged_headers = _apply_auth(merged_headers, effective_auth)
+        merged_headers = self._apply_cookies(merged_headers, cookies)
+
+        # Build body
+        body_bytes = None
+        body_len = 0
+        if json_data is not None:
+            body_bytes = json.dumps(json_data).encode("utf-8")
+            body_len = len(body_bytes)
+            merged_headers["content-type"] = "application/json"
+        elif data is not None:
+            if isinstance(data, dict):
+                body_bytes = urlencode(data).encode("utf-8")
+                body_len = len(body_bytes)
+                merged_headers["content-type"] = "application/x-www-form-urlencoded"
+            elif isinstance(data, str):
+                body_bytes = data.encode("utf-8")
+                body_len = len(body_bytes)
+            else:
+                body_bytes = data
+                body_len = len(body_bytes)
+
+        # Build request config JSON
+        request_config = {
+            "method": method.upper(),
+            "url": url,
+        }
+        if merged_headers:
+            request_config["headers"] = merged_headers
+        if timeout:
+            request_config["timeout"] = timeout
+
+        request_json = json.dumps(request_config).encode("utf-8")
+
+        start_time = time.perf_counter()
+        response_handle = self._lib.httpcloak_request_raw(
+            self._handle,
+            request_json,
+            body_bytes,
+            body_len,
+        )
+        elapsed = time.perf_counter() - start_time
+
+        if response_handle < 0:
+            raise HTTPCloakError("Request failed")
+
+        return _parse_fast_response(self._lib, response_handle, elapsed=elapsed)
+
+    def put_fast(
+        self,
+        url: str,
+        data: Optional[Union[str, bytes, Dict[str, Any]]] = None,
+        json_data: Optional[Dict[str, Any]] = None,
+        params: Optional[Dict[str, Any]] = None,
+        headers: Optional[Dict[str, str]] = None,
+        cookies: Optional[Dict[str, str]] = None,
+        auth: Optional[Tuple[str, str]] = None,
+        timeout: Optional[int] = None,
+    ) -> FastResponse:
+        """
+        High-performance PUT request returning FastResponse with memoryview.
+
+        Args:
+            url: Request URL
+            data: Request body (string, bytes, or dict for form data)
+            json_data: JSON body (will be serialized)
+            params: URL query parameters
+            headers: Request headers
+            cookies: Cookies to send with this request
+            auth: Basic auth tuple (username, password)
+            timeout: Request timeout in milliseconds
+
+        Returns:
+            FastResponse with memoryview content
+        """
+        return self.request_fast(
+            "PUT", url, data=data, json_data=json_data, params=params,
+            headers=headers, cookies=cookies, auth=auth, timeout=timeout,
+        )
+
+    def delete_fast(
+        self,
+        url: str,
+        params: Optional[Dict[str, Any]] = None,
+        headers: Optional[Dict[str, str]] = None,
+        cookies: Optional[Dict[str, str]] = None,
+        auth: Optional[Tuple[str, str]] = None,
+        timeout: Optional[int] = None,
+    ) -> FastResponse:
+        """
+        High-performance DELETE request returning FastResponse with memoryview.
+
+        Args:
+            url: Request URL
+            params: URL query parameters
+            headers: Request headers
+            cookies: Cookies to send with this request
+            auth: Basic auth tuple (username, password)
+            timeout: Request timeout in milliseconds
+
+        Returns:
+            FastResponse with memoryview content
+        """
+        return self.request_fast(
+            "DELETE", url, params=params, headers=headers,
+            cookies=cookies, auth=auth, timeout=timeout,
+        )
+
+    def patch_fast(
+        self,
+        url: str,
+        data: Optional[Union[str, bytes, Dict[str, Any]]] = None,
+        json_data: Optional[Dict[str, Any]] = None,
+        params: Optional[Dict[str, Any]] = None,
+        headers: Optional[Dict[str, str]] = None,
+        cookies: Optional[Dict[str, str]] = None,
+        auth: Optional[Tuple[str, str]] = None,
+        timeout: Optional[int] = None,
+    ) -> FastResponse:
+        """
+        High-performance PATCH request returning FastResponse with memoryview.
+
+        Args:
+            url: Request URL
+            data: Request body (string, bytes, or dict for form data)
+            json_data: JSON body (will be serialized)
+            params: URL query parameters
+            headers: Request headers
+            cookies: Cookies to send with this request
+            auth: Basic auth tuple (username, password)
+            timeout: Request timeout in milliseconds
+
+        Returns:
+            FastResponse with memoryview content
+        """
+        return self.request_fast(
+            "PATCH", url, data=data, json_data=json_data, params=params,
+            headers=headers, cookies=cookies, auth=auth, timeout=timeout,
+        )
+
     def _get_stream(
         self,
         url: str,
@@ -2710,6 +2969,167 @@ class Session:
             protocol=metadata.get("protocol", ""),
             content_length=metadata.get("content_length", -1),
             cookies=cookies_list,
+        )
+
+    def get_stream(
+        self,
+        url: str,
+        params: Optional[Dict[str, Any]] = None,
+        headers: Optional[Dict[str, str]] = None,
+        cookies: Optional[Dict[str, str]] = None,
+        auth: Optional[Tuple[str, str]] = None,
+        timeout: Optional[int] = None,
+    ) -> StreamResponse:
+        """
+        Perform a streaming GET request.
+
+        Args:
+            url: Request URL
+            params: URL query parameters
+            headers: Request headers
+            cookies: Cookies to send with this request
+            auth: Basic auth tuple (username, password)
+            timeout: Request timeout in milliseconds
+
+        Returns:
+            StreamResponse for streaming the response body
+
+        Example:
+            with session.get_stream("https://example.com/large-file") as r:
+                for chunk in r.iter_content(chunk_size=8192):
+                    file.write(chunk)
+        """
+        return self._get_stream(
+            url, params=params, headers=headers,
+            cookies=cookies, auth=auth, timeout=timeout,
+        )
+
+    def put_stream(
+        self,
+        url: str,
+        data: Union[str, bytes, Dict, None] = None,
+        json_data: Optional[Dict] = None,
+        params: Optional[Dict[str, Any]] = None,
+        headers: Optional[Dict[str, str]] = None,
+        cookies: Optional[Dict[str, str]] = None,
+        auth: Optional[Tuple[str, str]] = None,
+        timeout: Optional[int] = None,
+    ) -> StreamResponse:
+        """
+        Perform a streaming PUT request.
+
+        Args:
+            url: Request URL
+            data: Request body (string, bytes, or dict for form data)
+            json_data: JSON body (will be serialized)
+            params: URL query parameters
+            headers: Request headers
+            cookies: Cookies to send with this request
+            auth: Basic auth tuple (username, password)
+            timeout: Request timeout in milliseconds
+
+        Returns:
+            StreamResponse for streaming the response body
+        """
+        url = _add_params_to_url(url, params)
+        merged_headers = self._merge_headers(headers)
+
+        body = None
+        if json_data is not None:
+            body = json.dumps(json_data)
+            merged_headers = merged_headers or {}
+            merged_headers.setdefault("Content-Type", "application/json")
+        elif data is not None:
+            if isinstance(data, dict):
+                body = urlencode(data)
+                merged_headers = merged_headers or {}
+                merged_headers.setdefault("Content-Type", "application/x-www-form-urlencoded")
+            elif isinstance(data, bytes):
+                body = data.decode("utf-8")
+            else:
+                body = data
+
+        return self.request_stream(
+            "PUT", url, data=body, headers=merged_headers,
+            cookies=cookies, auth=auth, timeout=timeout,
+        )
+
+    def delete_stream(
+        self,
+        url: str,
+        params: Optional[Dict[str, Any]] = None,
+        headers: Optional[Dict[str, str]] = None,
+        cookies: Optional[Dict[str, str]] = None,
+        auth: Optional[Tuple[str, str]] = None,
+        timeout: Optional[int] = None,
+    ) -> StreamResponse:
+        """
+        Perform a streaming DELETE request.
+
+        Args:
+            url: Request URL
+            params: URL query parameters
+            headers: Request headers
+            cookies: Cookies to send with this request
+            auth: Basic auth tuple (username, password)
+            timeout: Request timeout in milliseconds
+
+        Returns:
+            StreamResponse for streaming the response body
+        """
+        return self.request_stream(
+            "DELETE", url, params=params, headers=headers,
+            cookies=cookies, auth=auth, timeout=timeout,
+        )
+
+    def patch_stream(
+        self,
+        url: str,
+        data: Union[str, bytes, Dict, None] = None,
+        json_data: Optional[Dict] = None,
+        params: Optional[Dict[str, Any]] = None,
+        headers: Optional[Dict[str, str]] = None,
+        cookies: Optional[Dict[str, str]] = None,
+        auth: Optional[Tuple[str, str]] = None,
+        timeout: Optional[int] = None,
+    ) -> StreamResponse:
+        """
+        Perform a streaming PATCH request.
+
+        Args:
+            url: Request URL
+            data: Request body (string, bytes, or dict for form data)
+            json_data: JSON body (will be serialized)
+            params: URL query parameters
+            headers: Request headers
+            cookies: Cookies to send with this request
+            auth: Basic auth tuple (username, password)
+            timeout: Request timeout in milliseconds
+
+        Returns:
+            StreamResponse for streaming the response body
+        """
+        url = _add_params_to_url(url, params)
+        merged_headers = self._merge_headers(headers)
+
+        body = None
+        if json_data is not None:
+            body = json.dumps(json_data)
+            merged_headers = merged_headers or {}
+            merged_headers.setdefault("Content-Type", "application/json")
+        elif data is not None:
+            if isinstance(data, dict):
+                body = urlencode(data)
+                merged_headers = merged_headers or {}
+                merged_headers.setdefault("Content-Type", "application/x-www-form-urlencoded")
+            elif isinstance(data, bytes):
+                body = data.decode("utf-8")
+            else:
+                body = data
+
+        return self.request_stream(
+            "PATCH", url, data=body, headers=merged_headers,
+            cookies=cookies, auth=auth, timeout=timeout,
         )
 
 

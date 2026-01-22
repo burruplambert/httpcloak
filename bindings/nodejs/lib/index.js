@@ -741,6 +741,7 @@ function getLib() {
       // Raw response functions for fast-path (zero-copy)
       httpcloak_get_raw: nativeLibHandle.func("httpcloak_get_raw", "int64", ["int64", "str", "str"]),
       httpcloak_post_raw: nativeLibHandle.func("httpcloak_post_raw", "int64", ["int64", "str", "void*", "int", "str"]),
+      httpcloak_request_raw: nativeLibHandle.func("httpcloak_request_raw", "int64", ["int64", "str", "void*", "int"]),
       httpcloak_response_get_metadata: nativeLibHandle.func("httpcloak_response_get_metadata", "str", ["int64"]),
       httpcloak_response_get_body_len: nativeLibHandle.func("httpcloak_response_get_body_len", "int", ["int64"]),
       httpcloak_response_copy_body_to: nativeLibHandle.func("httpcloak_response_copy_body_to", "int", ["int64", "void*", "int"]),
@@ -2387,6 +2388,137 @@ class Session {
 
     const elapsed = Date.now() - startTime;
     return new FastResponse(metadata, responseBuffer, elapsed, pooledBuffer);
+  }
+
+  /**
+   * Perform a high-performance generic HTTP request with zero-copy buffer transfer.
+   *
+   * This method is optimized for maximum speed by:
+   * - Using pre-allocated buffer pools (no per-request allocation)
+   * - Returning Buffer views instead of copying (zero-copy)
+   * - Using combined finalize FFI call (1 instead of 3)
+   *
+   * @param {string} method - HTTP method (GET, POST, PUT, DELETE, PATCH, etc.)
+   * @param {string} url - Request URL
+   * @param {Object} [options={}] - Request options
+   * @param {Buffer|string|null} [options.body] - Request body
+   * @param {Object} [options.headers] - Request headers
+   * @param {Object} [options.params] - URL query parameters
+   * @param {Object} [options.cookies] - Cookies to send
+   * @param {Array} [options.auth] - Basic auth [username, password]
+   * @param {number} [options.timeout] - Request timeout in milliseconds
+   * @returns {FastResponse} Fast response object with Buffer body
+   *
+   * Example:
+   *   const response = session.requestFast("PUT", "https://api.example.com/resource", {
+   *     body: JSON.stringify({ key: "value" }),
+   *     headers: { "Content-Type": "application/json" }
+   *   });
+   *   console.log(`Status: ${response.statusCode}`);
+   *   response.release();
+   */
+  requestFast(method, url, options = {}) {
+    let { body = null, headers = null, params = null, cookies = null, auth = null, timeout = null } = options;
+
+    url = addParamsToUrl(url, params);
+    let mergedHeaders = this._mergeHeaders(headers);
+    const effectiveAuth = auth !== null ? auth : this.auth;
+    mergedHeaders = applyAuth(mergedHeaders, effectiveAuth);
+    mergedHeaders = this._applyCookies(mergedHeaders, cookies);
+
+    // Ensure body is a Buffer (or null)
+    if (body !== null) {
+      if (typeof body === "string") {
+        body = Buffer.from(body, "utf8");
+      } else if (!Buffer.isBuffer(body)) {
+        throw new HTTPCloakError("requestFast body must be a Buffer or string");
+      }
+    }
+
+    // Build request config JSON
+    const requestConfig = {
+      method: method.toUpperCase(),
+      url: url,
+    };
+    if (mergedHeaders && Object.keys(mergedHeaders).length > 0) {
+      requestConfig.headers = mergedHeaders;
+    }
+    if (timeout) {
+      requestConfig.timeout = timeout;
+    }
+    const requestJson = JSON.stringify(requestConfig);
+
+    const startTime = Date.now();
+
+    const responseHandle = this._lib.httpcloak_request_raw(
+      this._handle,
+      requestJson,
+      body || Buffer.alloc(0),
+      body ? body.length : 0
+    );
+
+    if (responseHandle === 0 || responseHandle === 0n || responseHandle < 0) {
+      throw new HTTPCloakError("Failed to make request");
+    }
+
+    // Get body length first
+    const bodyLen = this._lib.httpcloak_response_get_body_len(responseHandle);
+    if (bodyLen < 0) {
+      this._lib.httpcloak_response_free(responseHandle);
+      throw new HTTPCloakError("Failed to get response body length");
+    }
+
+    // Acquire pooled buffer for response
+    const pooledBuffer = _bufferPool.acquire(bodyLen);
+
+    // Finalize: copy body + get metadata + free handle
+    const metadataStr = this._lib.httpcloak_response_finalize(responseHandle, pooledBuffer, bodyLen);
+    if (!metadataStr) {
+      _bufferPool.release(pooledBuffer);
+      throw new HTTPCloakError("Failed to finalize response");
+    }
+
+    const metadata = JSON.parse(metadataStr);
+    if (metadata.error) {
+      _bufferPool.release(pooledBuffer);
+      throw new HTTPCloakError(metadata.error);
+    }
+
+    // Create a view of just the used portion
+    const responseBuffer = pooledBuffer.subarray(0, bodyLen);
+
+    const elapsed = Date.now() - startTime;
+    return new FastResponse(metadata, responseBuffer, elapsed, pooledBuffer);
+  }
+
+  /**
+   * Perform a high-performance PUT request with zero-copy buffer transfer.
+   * @param {string} url - Request URL
+   * @param {Object} [options={}] - Request options (body, headers, params, cookies, auth, timeout)
+   * @returns {FastResponse} Fast response object with Buffer body
+   */
+  putFast(url, options = {}) {
+    return this.requestFast("PUT", url, options);
+  }
+
+  /**
+   * Perform a high-performance DELETE request with zero-copy buffer transfer.
+   * @param {string} url - Request URL
+   * @param {Object} [options={}] - Request options (headers, params, cookies, auth, timeout)
+   * @returns {FastResponse} Fast response object with Buffer body
+   */
+  deleteFast(url, options = {}) {
+    return this.requestFast("DELETE", url, options);
+  }
+
+  /**
+   * Perform a high-performance PATCH request with zero-copy buffer transfer.
+   * @param {string} url - Request URL
+   * @param {Object} [options={}] - Request options (body, headers, params, cookies, auth, timeout)
+   * @returns {FastResponse} Fast response object with Buffer body
+   */
+  patchFast(url, options = {}) {
+    return this.requestFast("PATCH", url, options);
   }
 }
 

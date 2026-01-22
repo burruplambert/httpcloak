@@ -519,6 +519,54 @@ export class Session {
    * response.release();
    */
   postFast(url: string, options?: RequestOptions): FastResponse;
+
+  /**
+   * Perform a fast generic HTTP request with zero-copy buffer transfer.
+   *
+   * Use this method for any HTTP method when you need maximum throughput.
+   * Call response.release() when done to return buffers to the pool.
+   *
+   * @param method - HTTP method (GET, POST, PUT, DELETE, PATCH, etc.)
+   * @param url - Request URL
+   * @param options - Request options (body must be Buffer or string)
+   * @returns FastResponse with Buffer body
+   *
+   * @example
+   * const response = session.requestFast("PUT", "https://api.example.com/resource", {
+   *   body: JSON.stringify({ key: "value" }),
+   *   headers: { "Content-Type": "application/json" }
+   * });
+   * console.log(`Status: ${response.statusCode}`);
+   * response.release();
+   */
+  requestFast(method: string, url: string, options?: RequestOptions): FastResponse;
+
+  /**
+   * Perform a fast PUT request with zero-copy buffer transfer.
+   *
+   * @param url - Request URL
+   * @param options - Request options (body, headers, params, cookies, auth, timeout)
+   * @returns FastResponse with Buffer body
+   */
+  putFast(url: string, options?: RequestOptions): FastResponse;
+
+  /**
+   * Perform a fast DELETE request with zero-copy buffer transfer.
+   *
+   * @param url - Request URL
+   * @param options - Request options (headers, params, cookies, auth, timeout)
+   * @returns FastResponse with Buffer body
+   */
+  deleteFast(url: string, options?: RequestOptions): FastResponse;
+
+  /**
+   * Perform a fast PATCH request with zero-copy buffer transfer.
+   *
+   * @param url - Request URL
+   * @param options - Request options (body, headers, params, cookies, auth, timeout)
+   * @returns FastResponse with Buffer body
+   */
+  patchFast(url: string, options?: RequestOptions): FastResponse;
 }
 
 export interface LocalProxyOptions {

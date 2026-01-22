@@ -10,6 +10,12 @@ using HttpCloak.Tests;
 var cmdArgs = Environment.GetCommandLineArgs();
 string testArg = cmdArgs.Length > 1 ? cmdArgs[1] : "";
 
+if (testArg == "handler")
+{
+    await TestHttpCloakHandler.Run();
+    return;
+}
+
 if (testArg == "proxy")
 {
     await LocalProxyTest.RunAsync();
@@ -117,3 +123,7 @@ catch (Exception e)
 Console.WriteLine("\n" + new string('=', 70));
 Console.WriteLine("C# Test Complete");
 Console.WriteLine(new string('=', 70));
+
+// Test fast methods
+Console.WriteLine();
+TestFastMethods.Run();
