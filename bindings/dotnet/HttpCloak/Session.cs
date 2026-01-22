@@ -1761,6 +1761,19 @@ public sealed class FastResponse
         return null;
     }
 
+    /// <summary>Get all values of a header (case-insensitive).</summary>
+    public string[] GetHeaders(string name)
+    {
+        if (Headers.TryGetValue(name, out var values))
+            return values;
+
+        var key = Headers.Keys.FirstOrDefault(k => k.Equals(name, StringComparison.OrdinalIgnoreCase));
+        if (key != null && Headers.TryGetValue(key, out values))
+            return values;
+
+        return Array.Empty<string>();
+    }
+
     /// <summary>Response body as bytes (direct access, no copy).</summary>
     public byte[] Content { get; }
 
