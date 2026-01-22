@@ -641,9 +641,13 @@ func (p *LocalProxy) handleHTTPWithSession(ctx context.Context, clientConn net.C
 	// Write status line
 	fmt.Fprintf(bufWriter, "HTTP/1.1 %d %s\r\n", resp.StatusCode, http.StatusText(resp.StatusCode))
 
-	// Write headers (skip hop-by-hop)
+	// Write headers (skip hop-by-hop and Content-Encoding since body is already decompressed)
 	for key, values := range resp.Headers {
 		if isHopByHopHeader(key) {
+			continue
+		}
+		// Skip Content-Encoding since we already decompressed the body
+		if strings.EqualFold(key, "Content-Encoding") {
 			continue
 		}
 		for _, value := range values {
