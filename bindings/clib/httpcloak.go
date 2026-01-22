@@ -2189,13 +2189,13 @@ func httpcloak_stream_read(streamHandle C.int64_t, bufferSize C.int) *C.char {
 	if err != nil {
 		if err.Error() == "EOF" {
 			// Return empty string to indicate EOF
-			return C.CString("1.5.7")
+			return C.CString("")
 		}
 		return nil
 	}
 
 	// No data and no error - return empty (shouldn't happen normally)
-	return C.CString("1.5.7")
+	return C.CString("")
 }
 
 //export httpcloak_stream_read_raw
