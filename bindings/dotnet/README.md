@@ -422,6 +422,106 @@ catch (HttpRequestException ex)
 }
 ```
 
+## Local Proxy
+
+Use `LocalProxy` to apply TLS fingerprinting to any HTTP client transparently:
+
+```csharp
+using HttpCloak;
+
+// Start local proxy with Chrome fingerprint
+using var proxy = new LocalProxy(preset: "chrome-143");
+Console.WriteLine($"Proxy running on {proxy.ProxyUrl}");
+
+// Configure HttpClient to use the proxy
+var handler = new HttpClientHandler
+{
+    Proxy = proxy.CreateWebProxy()
+};
+using var client = new HttpClient(handler);
+
+// All requests now go through httpcloak with fingerprinting
+var response = await client.GetAsync("https://example.com");
+
+// Per-request upstream proxy rotation via header
+var request = new HttpRequestMessage(HttpMethod.Get, "https://example.com");
+request.Headers.Add("X-Upstream-Proxy", "http://user:pass@rotating-proxy.com:8080");
+var rotatedResponse = await client.SendAsync(request);
+```
+
+### TLS-Only Mode
+
+When your client already provides authentic browser headers, use TLS-only mode:
+
+```csharp
+using HttpCloak;
+
+// Only apply TLS fingerprint, pass headers through
+using var proxy = new LocalProxy(preset: "chrome-143", tlsOnly: true);
+
+var handler = new HttpClientHandler
+{
+    Proxy = proxy.CreateWebProxy()
+};
+using var client = new HttpClient(handler);
+
+// Your client's headers are preserved
+client.DefaultRequestHeaders.Add("User-Agent", "My Custom UA");
+var response = await client.GetAsync("https://example.com");
+```
+
+### Session Registry
+
+Route different requests through different browser fingerprints:
+
+```csharp
+using HttpCloak;
+
+using var proxy = new LocalProxy(preset: "chrome-143");
+
+// Create sessions with different fingerprints
+using var chromeSession = new Session(preset: "chrome-143");
+using var firefoxSession = new Session(preset: "firefox-133");
+
+// Register sessions with the proxy
+proxy.RegisterSession("chrome-user", chromeSession);
+proxy.RegisterSession("firefox-user", firefoxSession);
+
+// Route requests using X-HTTPCloak-Session header
+var handler = new HttpClientHandler { Proxy = proxy.CreateWebProxy() };
+using var client = new HttpClient(handler);
+
+var request = new HttpRequestMessage(HttpMethod.Get, "https://example.com");
+request.Headers.Add("X-HTTPCloak-Session", "firefox-user"); // Uses firefox fingerprint
+var response = await client.SendAsync(request);
+
+// Unregister when done
+proxy.UnregisterSession("chrome-user");
+proxy.UnregisterSession("firefox-user");
+```
+
+### LocalProxy Options
+
+```csharp
+var proxy = new LocalProxy(
+    port: 0,               // Port (0 = auto-select)
+    preset: "chrome-143",  // Browser fingerprint
+    timeout: 30,           // Request timeout in seconds
+    maxConnections: 1000,  // Max concurrent connections
+    tcpProxy: null,        // Default upstream TCP proxy
+    udpProxy: null,        // Default upstream UDP proxy
+    tlsOnly: false         // TLS-only mode
+);
+
+proxy.Port;           // Actual port number
+proxy.ProxyUrl;       // Full proxy URL (http://localhost:port)
+proxy.IsRunning;      // True if proxy is active
+proxy.GetStats();     // Returns LocalProxyStats with request/connection counts
+proxy.CreateWebProxy();   // Creates System.Net.WebProxy instance
+proxy.CreateHandler();    // Creates HttpClientHandler with proxy configured
+proxy.Dispose();      // Stop the proxy
+```
+
 ## Platform Support
 
 - Linux (x64, arm64)
