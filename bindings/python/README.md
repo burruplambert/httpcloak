@@ -24,7 +24,7 @@ print(response.status_code)
 print(response.text)
 
 # POST request with JSON
-response = session.post_json("https://api.example.com/data", {"key": "value"})
+response = session.post("https://api.example.com/data", json={"key": "value"})
 
 # POST request with form data
 response = session.post("https://api.example.com/form", body="field1=value1&field2=value2")
@@ -251,8 +251,8 @@ print(cookies)
 # Access cookies as property
 print(session.cookies)
 
-# Clear a cookie
-session.clear_cookie("session_id")
+# Delete a cookie
+session.delete_cookie("session_id")
 
 # Clear all cookies
 session.clear_cookies()
@@ -364,7 +364,7 @@ with Session(preset="chrome-143") as session:
 
     # POST
     response = session.post("https://example.com", body="data")
-    response = session.post_json("https://example.com", {"key": "value"})
+    response = session.post("https://example.com", json={"key": "value"})
 
     # PUT
     response = session.put("https://example.com", body="data")

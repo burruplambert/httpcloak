@@ -291,8 +291,8 @@ foreach (var cookie in cookies)
     Console.WriteLine($"{cookie.Name}={cookie.Value}");
 }
 
-// Clear a cookie
-session.ClearCookie("session_id");
+// Delete a cookie
+session.DeleteCookie("session_id");
 
 // Clear all cookies
 session.ClearCookies();

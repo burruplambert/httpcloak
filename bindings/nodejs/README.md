@@ -334,8 +334,8 @@ console.log(cookies);
 // Access cookies as property
 console.log(session.cookies);
 
-// Clear a cookie
-session.clearCookie("session_id");
+// Delete a cookie
+session.deleteCookie("session_id");
 
 // Clear all cookies
 session.clearCookies();
