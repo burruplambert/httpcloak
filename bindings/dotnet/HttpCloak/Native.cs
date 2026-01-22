@@ -186,6 +186,9 @@ internal static class Native
     [DllImport(LibraryName, EntryPoint = "httpcloak_session_get_header_order", CallingConvention = CallingConvention.Cdecl)]
     public static extern IntPtr SessionGetHeaderOrder(long handle);
 
+    [DllImport(LibraryName, EntryPoint = "httpcloak_session_set_identifier", CallingConvention = CallingConvention.Cdecl)]
+    public static extern void SessionSetIdentifier(long handle, [MarshalAs(UnmanagedType.LPUTF8Str)] string? sessionId);
+
     // Local proxy functions
     [DllImport(LibraryName, EntryPoint = "httpcloak_local_proxy_start", CallingConvention = CallingConvention.Cdecl)]
     public static extern long LocalProxyStart([MarshalAs(UnmanagedType.LPUTF8Str)] string? configJson);
@@ -201,6 +204,12 @@ internal static class Native
 
     [DllImport(LibraryName, EntryPoint = "httpcloak_local_proxy_get_stats", CallingConvention = CallingConvention.Cdecl)]
     public static extern IntPtr LocalProxyGetStats(long handle);
+
+    [DllImport(LibraryName, EntryPoint = "httpcloak_local_proxy_register_session", CallingConvention = CallingConvention.Cdecl)]
+    public static extern IntPtr LocalProxyRegisterSession(long proxyHandle, [MarshalAs(UnmanagedType.LPUTF8Str)] string sessionId, long sessionHandle);
+
+    [DllImport(LibraryName, EntryPoint = "httpcloak_local_proxy_unregister_session", CallingConvention = CallingConvention.Cdecl)]
+    public static extern int LocalProxyUnregisterSession(long proxyHandle, [MarshalAs(UnmanagedType.LPUTF8Str)] string sessionId);
 
     /// <summary>
     /// Convert a native string pointer to a managed string and free the native memory.

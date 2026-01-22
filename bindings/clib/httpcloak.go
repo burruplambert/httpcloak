@@ -1505,6 +1505,20 @@ func httpcloak_session_get_header_order(handle C.int64_t) *C.char {
 	return C.CString(string(result))
 }
 
+//export httpcloak_session_set_identifier
+func httpcloak_session_set_identifier(handle C.int64_t, sessionId *C.char) {
+	session := getSession(handle)
+	if session == nil {
+		return
+	}
+
+	id := ""
+	if sessionId != nil {
+		id = C.GoString(sessionId)
+	}
+	session.SetSessionIdentifier(id)
+}
+
 // ============================================================================
 // Utility Functions
 // ============================================================================

@@ -136,6 +136,8 @@ public sealed class Session : IDisposable
     /// <param name="maxRedirects">Maximum number of redirects (default: 10)</param>
     /// <param name="retry">Number of retries on failure (default: 0)</param>
     /// <param name="retryOnStatus">HTTP status codes to retry on (default: null, uses [429, 500, 502, 503, 504])</param>
+    /// <param name="retryWaitMin">Minimum wait time between retries in milliseconds (default: 500)</param>
+    /// <param name="retryWaitMax">Maximum wait time between retries in milliseconds (default: 10000)</param>
     /// <param name="preferIpv4">Prefer IPv4 addresses over IPv6 (default: false)</param>
     /// <param name="auth">Default auth (username, password) for all requests</param>
     /// <param name="connectTo">Domain fronting map (requestHost -> connectHost)</param>
@@ -154,6 +156,8 @@ public sealed class Session : IDisposable
         int maxRedirects = 10,
         int retry = 0,
         int[]? retryOnStatus = null,
+        int retryWaitMin = 500,
+        int retryWaitMax = 10000,
         bool preferIpv4 = false,
         (string Username, string Password)? auth = null,
         Dictionary<string, string>? connectTo = null,
@@ -176,6 +180,8 @@ public sealed class Session : IDisposable
             MaxRedirects = maxRedirects,
             Retry = retry,
             RetryOnStatus = retryOnStatus,
+            RetryWaitMin = retryWaitMin,
+            RetryWaitMax = retryWaitMax,
             PreferIpv4 = preferIpv4,
             ConnectTo = connectTo,
             EchConfigDomain = echConfigDomain,
@@ -946,6 +952,23 @@ public sealed class Session : IDisposable
             return System.Text.Json.JsonSerializer.Deserialize<string[]>(result) ?? Array.Empty<string>();
         }
         return Array.Empty<string>();
+    }
+
+    /// <summary>
+    /// Set a session identifier for TLS cache key isolation.
+    /// This is used when the session is registered with a LocalProxy to ensure
+    /// TLS sessions are isolated per proxy/session configuration in distributed caches.
+    /// </summary>
+    /// <param name="sessionId">Unique identifier for this session. Pass null or empty to clear.</param>
+    /// <example>
+    /// <code>
+    /// session.SetSessionIdentifier("user-123");
+    /// </code>
+    /// </example>
+    public void SetSessionIdentifier(string? sessionId)
+    {
+        ThrowIfDisposed();
+        Native.SessionSetIdentifier(_handle, sessionId);
     }
 
     /// <summary>
@@ -1889,6 +1912,14 @@ internal class SessionConfig
     [JsonPropertyName("retry_on_status")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int[]? RetryOnStatus { get; set; }
+
+    [JsonPropertyName("retry_wait_min")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public int RetryWaitMin { get; set; } = 500;
+
+    [JsonPropertyName("retry_wait_max")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public int RetryWaitMax { get; set; } = 10000;
 
     [JsonPropertyName("prefer_ipv4")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]

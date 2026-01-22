@@ -915,6 +915,8 @@ def _setup_lib(lib):
     lib.httpcloak_session_set_header_order.restype = c_void_p
     lib.httpcloak_session_get_header_order.argtypes = [c_int64]
     lib.httpcloak_session_get_header_order.restype = c_void_p
+    lib.httpcloak_session_set_identifier.argtypes = [c_int64, c_char_p]
+    lib.httpcloak_session_set_identifier.restype = None
 
     # Optimized raw response functions (body passed separately from JSON)
     lib.httpcloak_get_raw.argtypes = [c_int64, c_char_p, c_char_p]
@@ -1220,6 +1222,8 @@ class Session:
         max_redirects: Maximum number of redirects to follow (default: 10)
         retry: Number of retries on failure (default: 3, set to 0 to disable)
         retry_on_status: List of status codes to retry on (default: [429, 500, 502, 503, 504])
+        retry_wait_min: Minimum wait time between retries in milliseconds (default: 500)
+        retry_wait_max: Maximum wait time between retries in milliseconds (default: 10000)
         prefer_ipv4: Prefer IPv4 addresses over IPv6 (default: False)
         connect_to: Domain fronting map {request_host: connect_host} - DNS resolves connect_host but SNI/Host uses request_host
         ech_config_domain: Domain to fetch ECH config from (e.g., "cloudflare-ech.com" for any CF domain)
@@ -1266,6 +1270,8 @@ class Session:
         max_redirects: int = 10,
         retry: int = 3,
         retry_on_status: Optional[List[int]] = None,
+        retry_wait_min: int = 500,
+        retry_wait_max: int = 10000,
         prefer_ipv4: bool = False,
         auth: Optional[Tuple[str, str]] = None,
         connect_to: Optional[Dict[str, str]] = None,
@@ -1295,6 +1301,10 @@ class Session:
         config["retry"] = retry
         if retry_on_status:
             config["retry_on_status"] = retry_on_status
+        if retry_wait_min != 500:
+            config["retry_wait_min"] = retry_wait_min
+        if retry_wait_max != 10000:
+            config["retry_wait_max"] = retry_wait_max
         if prefer_ipv4:
             config["prefer_ipv4"] = True
         if connect_to:
@@ -2214,6 +2224,22 @@ class Session:
             return json.loads(result)
         return []
 
+    def set_session_identifier(self, session_id: str) -> None:
+        """
+        Set a session identifier for TLS cache key isolation.
+
+        This is used when the session is registered with a LocalProxy to ensure
+        TLS sessions are isolated per proxy/session configuration in distributed caches.
+
+        Args:
+            session_id: Unique identifier for this session. Pass empty string to clear.
+
+        Example:
+            session.set_session_identifier("user-123")
+        """
+        id_bytes = session_id.encode("utf-8") if session_id else None
+        self._lib.httpcloak_session_set_identifier(self._handle, id_bytes)
+
     # =========================================================================
     # Streaming Methods
     # =========================================================================
@@ -2340,6 +2366,91 @@ class Session:
         response_handle = self._lib.httpcloak_get_raw(
             self._handle,
             url.encode("utf-8"),
+            options_json,
+        )
+        elapsed = time.perf_counter() - start_time
+
+        if response_handle < 0:
+            raise HTTPCloakError("Request failed")
+
+        return _parse_fast_response(self._lib, response_handle, elapsed=elapsed)
+
+    def post_fast(
+        self,
+        url: str,
+        data: Optional[Union[str, bytes, Dict[str, Any]]] = None,
+        json_data: Optional[Dict[str, Any]] = None,
+        headers: Optional[Dict[str, str]] = None,
+        cookies: Optional[Dict[str, str]] = None,
+        auth: Optional[Tuple[str, str]] = None,
+    ) -> FastResponse:
+        """
+        High-performance POST request returning FastResponse with memoryview.
+
+        This method is optimized for maximum speed by:
+        - Using pre-allocated buffer pools (no per-request allocation)
+        - Returning memoryview instead of bytes (zero-copy)
+
+        Args:
+            url: Request URL
+            data: Request body (string, bytes, or dict for form data)
+            json_data: JSON body (will be serialized)
+            headers: Request headers
+            cookies: Cookies to send with this request
+            auth: Basic auth tuple (username, password)
+
+        Returns:
+            FastResponse with memoryview content
+
+        Example:
+            r = session.post_fast("https://api.example.com/upload", data=large_bytes)
+            # r.content is a memoryview - use it directly or copy if needed
+            result = bytes(r.content)  # Creates a copy
+
+        Note:
+            The memoryview in FastResponse.content may be reused by subsequent
+            requests. If you need to keep the data, copy it with bytes(r.content).
+        """
+        # Use request auth if provided, otherwise fall back to session auth
+        effective_auth = auth if auth is not None else self.auth
+
+        merged_headers = self._merge_headers(headers)
+        merged_headers = _apply_auth(merged_headers, effective_auth)
+        merged_headers = self._apply_cookies(merged_headers, cookies)
+
+        # Build body
+        body_bytes = None
+        body_len = 0
+        if json_data is not None:
+            body_bytes = json.dumps(json_data).encode("utf-8")
+            body_len = len(body_bytes)
+            merged_headers["content-type"] = "application/json"
+        elif data is not None:
+            if isinstance(data, dict):
+                # Form data
+                from urllib.parse import urlencode
+                body_bytes = urlencode(data).encode("utf-8")
+                body_len = len(body_bytes)
+                merged_headers["content-type"] = "application/x-www-form-urlencoded"
+            elif isinstance(data, str):
+                body_bytes = data.encode("utf-8")
+                body_len = len(body_bytes)
+            else:
+                body_bytes = data
+                body_len = len(body_bytes)
+
+        # Build options JSON with headers wrapper
+        options = {}
+        if merged_headers:
+            options["headers"] = merged_headers
+        options_json = json.dumps(options).encode("utf-8") if options else None
+
+        start_time = time.perf_counter()
+        response_handle = self._lib.httpcloak_post_raw(
+            self._handle,
+            url.encode("utf-8"),
+            body_bytes,
+            body_len,
             options_json,
         )
         elapsed = time.perf_counter() - start_time

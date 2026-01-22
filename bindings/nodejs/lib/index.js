@@ -1154,6 +1154,8 @@ class Session {
    * @param {number} [options.maxRedirects=10] - Maximum number of redirects to follow
    * @param {number} [options.retry=3] - Number of retries on failure (set to 0 to disable)
    * @param {number[]} [options.retryOnStatus] - Status codes to retry on
+   * @param {number} [options.retryWaitMin=500] - Minimum wait time between retries in milliseconds
+   * @param {number} [options.retryWaitMax=10000] - Maximum wait time between retries in milliseconds
    * @param {Array} [options.auth] - Default auth [username, password] for all requests
    * @param {Object} [options.connectTo] - Domain fronting map {requestHost: connectHost}
    * @param {string} [options.echConfigDomain] - Domain to fetch ECH config from (e.g., "cloudflare-ech.com")
@@ -1173,6 +1175,8 @@ class Session {
       maxRedirects = 10,
       retry = 3,
       retryOnStatus = null,
+      retryWaitMin = 500,
+      retryWaitMax = 10000,
       preferIpv4 = false,
       auth = null,
       connectTo = null,
@@ -1211,6 +1215,12 @@ class Session {
     config.retry = retry;
     if (retryOnStatus) {
       config.retry_on_status = retryOnStatus;
+    }
+    if (retryWaitMin !== 500) {
+      config.retry_wait_min = retryWaitMin;
+    }
+    if (retryWaitMax !== 10000) {
+      config.retry_wait_max = retryWaitMax;
     }
     if (preferIpv4) {
       config.prefer_ipv4 = true;
@@ -1839,6 +1849,21 @@ class Session {
       return JSON.parse(result);
     }
     return [];
+  }
+
+  /**
+   * Set a session identifier for TLS cache key isolation.
+   *
+   * This is used when the session is registered with a LocalProxy to ensure
+   * TLS sessions are isolated per proxy/session configuration in distributed caches.
+   *
+   * @param {string} sessionId - Unique identifier for this session. Pass empty string to clear.
+   *
+   * Example:
+   *   session.setSessionIdentifier("user-123");
+   */
+  setSessionIdentifier(sessionId) {
+    this._lib.httpcloak_session_set_identifier(this._handle, sessionId || null);
   }
 
   /**

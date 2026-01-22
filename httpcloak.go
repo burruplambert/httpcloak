@@ -68,15 +68,16 @@ func WithProxy(proxyURL string) Option {
 // New creates a new HTTP client with the specified browser fingerprint.
 //
 // Available presets:
-//   - "chrome-131" (recommended)
-//   - "chrome-131-windows"
-//   - "chrome-131-macos"
-//   - "chrome-133"
-//   - "chrome-133-windows"
+//   - "chrome-143" (latest, recommended)
+//   - "chrome-143-windows", "chrome-143-linux", "chrome-143-macos"
+//   - "chrome-141", "chrome-133", "chrome-131"
+//   - "ios-chrome-143", "android-chrome-143"
+//   - "firefox-133"
+//   - "safari-18", "ios-safari-17"
 //
 // Example:
 //
-//	client := httpcloak.New("chrome-131")
+//	client := httpcloak.New("chrome-143")
 //	defer client.Close()
 func New(preset string, opts ...Option) *Client {
 	cfg := &clientConfig{

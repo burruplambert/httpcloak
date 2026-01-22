@@ -203,6 +203,10 @@ export interface SessionOptions {
   retry?: number;
   /** Status codes to retry on (default: [429, 500, 502, 503, 504]) */
   retryOnStatus?: number[];
+  /** Minimum wait time between retries in milliseconds (default: 500) */
+  retryWaitMin?: number;
+  /** Maximum wait time between retries in milliseconds (default: 10000) */
+  retryWaitMax?: number;
   /** Prefer IPv4 addresses over IPv6 (default: false) */
   preferIpv4?: boolean;
   /** Default basic auth [username, password] */
@@ -356,6 +360,14 @@ export class Session {
    * @returns Array of header names in current order, or preset's default order
    */
   getHeaderOrder(): string[];
+
+  /**
+   * Set a session identifier for TLS cache key isolation.
+   * This is used when the session is registered with a LocalProxy to ensure
+   * TLS sessions are isolated per proxy/session configuration in distributed caches.
+   * @param sessionId - Unique identifier for this session. Pass empty string to clear.
+   */
+  setSessionIdentifier(sessionId: string): void;
 
   /** Get/set the current proxy as a property */
   proxy: string;
