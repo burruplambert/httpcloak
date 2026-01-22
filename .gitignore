@@ -55,3 +55,4 @@ plans/
 # Test files with credentials
 cmd/test_proxy_switch.go
 debugs/
+issues_reply/
