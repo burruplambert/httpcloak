@@ -1802,7 +1802,8 @@ class Session:
         """
         url = _add_params_to_url(url, params)
         merged_headers = self._merge_headers(headers)
-        merged_headers = _apply_auth(merged_headers, auth)
+        effective_auth = auth if auth is not None else self.auth
+        merged_headers = _apply_auth(merged_headers, effective_auth)
         merged_headers = self._apply_cookies(merged_headers, cookies)
 
         # Get async manager and register this request (each request gets unique ID)
@@ -1862,7 +1863,8 @@ class Session:
             else:
                 body = data
 
-        merged_headers = _apply_auth(merged_headers, auth)
+        effective_auth = auth if auth is not None else self.auth
+        merged_headers = _apply_auth(merged_headers, effective_auth)
         merged_headers = self._apply_cookies(merged_headers, cookies)
 
         # Get async manager and register this request (each request gets unique ID)
@@ -1925,7 +1927,8 @@ class Session:
             else:
                 body = data
 
-        merged_headers = _apply_auth(merged_headers, auth)
+        effective_auth = auth if auth is not None else self.auth
+        merged_headers = _apply_auth(merged_headers, effective_auth)
         merged_headers = self._apply_cookies(merged_headers, cookies)
 
         # Build request config
@@ -2829,7 +2832,8 @@ class Session:
             else:
                 body = data
 
-        merged_headers = _apply_auth(merged_headers, auth)
+        effective_auth = auth if auth is not None else self.auth
+        merged_headers = _apply_auth(merged_headers, effective_auth)
         merged_headers = self._apply_cookies(merged_headers, cookies)
 
         # Build options JSON
@@ -2912,7 +2916,8 @@ class Session:
         """
         url = _add_params_to_url(url, params)
         merged_headers = self._merge_headers(headers)
-        merged_headers = _apply_auth(merged_headers, auth)
+        effective_auth = auth if auth is not None else self.auth
+        merged_headers = _apply_auth(merged_headers, effective_auth)
         merged_headers = self._apply_cookies(merged_headers, cookies)
 
         # Build request config
