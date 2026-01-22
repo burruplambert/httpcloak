@@ -5,6 +5,7 @@ import (
 	"compress/flate"
 	"compress/gzip"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	http "github.com/sardanioss/http"
@@ -760,6 +761,7 @@ func (t *Transport) Do(ctx context.Context, req *Request) (*Response, error) {
 
 // doAuto races HTTP/3 and HTTP/2 in parallel, using whichever succeeds first.
 // This avoids the 5-second HTTP/3 timeout delay when QUIC is blocked.
+// When ALPN negotiates HTTP/1.1 instead of HTTP/2, the TLS connection is reused.
 func (t *Transport) doAuto(ctx context.Context, req *Request) (*Response, error) {
 	host := extractHost(req.URL)
 
@@ -777,7 +779,12 @@ func (t *Transport) doAuto(ctx context.Context, req *Request) (*Response, error)
 			if err == nil {
 				return resp, nil
 			}
-			// H2 failed, try H1
+			// Check if ALPN mismatch - reuse connection for H1
+			var alpnErr *ALPNMismatchError
+			if errors.As(err, &alpnErr) {
+				return t.doHTTP1WithTLSConn(ctx, req, alpnErr)
+			}
+			// H2 failed for other reason, try H1 with new connection
 			return t.doHTTP1(ctx, req)
 		case ProtocolHTTP1:
 			return t.doHTTP1(ctx, req)
@@ -793,7 +800,18 @@ func (t *Transport) doAuto(ctx context.Context, req *Request) (*Response, error)
 			t.protocolSupportMu.Unlock()
 			return resp, nil
 		}
-		// Both failed, try HTTP/1.1
+		// Check if ALPN mismatch from H2 - reuse connection
+		var alpnErr *ALPNMismatchError
+		if errors.As(err, &alpnErr) {
+			resp, err := t.doHTTP1WithTLSConn(ctx, req, alpnErr)
+			if err == nil {
+				t.protocolSupportMu.Lock()
+				t.protocolSupport[host] = ProtocolHTTP1
+				t.protocolSupportMu.Unlock()
+			}
+			return resp, err
+		}
+		// Both failed, try HTTP/1.1 with new connection
 	} else {
 		// No H3 support, just try H2
 		resp, err := t.doHTTP2(ctx, req)
@@ -803,9 +821,20 @@ func (t *Transport) doAuto(ctx context.Context, req *Request) (*Response, error)
 			t.protocolSupportMu.Unlock()
 			return resp, nil
 		}
+		// Check if ALPN mismatch - reuse connection for H1
+		var alpnErr *ALPNMismatchError
+		if errors.As(err, &alpnErr) {
+			resp, err := t.doHTTP1WithTLSConn(ctx, req, alpnErr)
+			if err == nil {
+				t.protocolSupportMu.Lock()
+				t.protocolSupport[host] = ProtocolHTTP1
+				t.protocolSupportMu.Unlock()
+			}
+			return resp, err
+		}
 	}
 
-	// Fallback to HTTP/1.1
+	// Fallback to HTTP/1.1 with new connection
 	resp, err := t.doHTTP1(ctx, req)
 	if err == nil {
 		t.protocolSupportMu.Lock()
@@ -845,6 +874,8 @@ func (t *Transport) raceH3H2(ctx context.Context, req *Request) (*Response, Prot
 
 	// Channel to receive the winning protocol
 	winnerCh := make(chan Protocol, 1)
+	// Channel to receive ALPNMismatchError for connection reuse
+	alpnErrCh := make(chan *ALPNMismatchError, 1)
 	doneCh := make(chan struct{})
 
 	// Race HTTP/3 connection
@@ -866,6 +897,15 @@ func (t *Transport) raceH3H2(ctx context.Context, req *Request) (*Response, Prot
 			case winnerCh <- ProtocolHTTP2:
 			default:
 			}
+		} else {
+			// Check if ALPN negotiated HTTP/1.1 - preserve the connection for reuse
+			var alpnErr *ALPNMismatchError
+			if errors.As(err, &alpnErr) {
+				select {
+				case alpnErrCh <- alpnErr:
+				default:
+				}
+			}
 		}
 	}()
 
@@ -883,16 +923,46 @@ func (t *Transport) raceH3H2(ctx context.Context, req *Request) (*Response, Prot
 	case winningProtocol = <-winnerCh:
 		// We have a winner!
 		cancel() // Cancel the other connection attempt
-	case <-doneCh:
-		// Timeout - no winner, try H2 directly
+		// Close any ALPN mismatch connection that we won't use
+		select {
+		case alpnErr := <-alpnErrCh:
+			alpnErr.TLSConn.Close()
+		default:
+		}
+	case alpnErr := <-alpnErrCh:
+		// ALPN negotiated HTTP/1.1 instead of H2 - reuse the connection
 		cancel()
+		resp, err := t.doHTTP1WithTLSConn(ctx, req, alpnErr)
+		return resp, ProtocolHTTP1, err
+	case <-doneCh:
+		// Timeout - check if we have an ALPN mismatch connection to reuse
+		cancel()
+		select {
+		case alpnErr := <-alpnErrCh:
+			resp, err := t.doHTTP1WithTLSConn(ctx, req, alpnErr)
+			return resp, ProtocolHTTP1, err
+		default:
+		}
+		// No ALPN mismatch, try H2 directly
 		resp, err := t.doHTTP2(ctx, req)
 		if err != nil {
+			// Check for ALPN mismatch
+			var alpnErr *ALPNMismatchError
+			if errors.As(err, &alpnErr) {
+				resp, err := t.doHTTP1WithTLSConn(ctx, req, alpnErr)
+				return resp, ProtocolHTTP1, err
+			}
 			resp, err = t.doHTTP1(ctx, req)
 			return resp, ProtocolHTTP1, err
 		}
 		return resp, ProtocolHTTP2, nil
 	case <-ctx.Done():
+		// Close any ALPN mismatch connection
+		select {
+		case alpnErr := <-alpnErrCh:
+			alpnErr.TLSConn.Close()
+		default:
+		}
 		return nil, ProtocolHTTP2, ctx.Err()
 	}
 
@@ -904,7 +974,13 @@ func (t *Transport) raceH3H2(ctx context.Context, req *Request) (*Response, Prot
 	case ProtocolHTTP2:
 		resp, err := t.doHTTP2(ctx, req)
 		if err != nil {
-			// H2 failed after connect succeeded, try H1
+			// Check for ALPN mismatch - reuse connection
+			var alpnErr *ALPNMismatchError
+			if errors.As(err, &alpnErr) {
+				resp, err := t.doHTTP1WithTLSConn(ctx, req, alpnErr)
+				return resp, ProtocolHTTP1, err
+			}
+			// H2 failed for other reason, try H1 with new connection
 			resp, err = t.doHTTP1(ctx, req)
 			return resp, ProtocolHTTP1, err
 		}
@@ -974,7 +1050,8 @@ func (t *Transport) doHTTP1(ctx context.Context, req *Request) (*Response, error
 	}
 
 	// Set preset headers (with ordering for fingerprinting)
-	applyPresetHeaders(httpReq, t.preset, t.getHeaderOrder(), t.tlsOnly)
+	// Pass "h1" protocol so Chrome presets don't send Priority header on HTTP/1.1
+	applyPresetHeaders(httpReq, t.preset, t.getHeaderOrder(), t.tlsOnly, "h1")
 
 	// Override with custom headers (multi-value support)
 	for key, values := range req.Headers {
@@ -1024,6 +1101,107 @@ func (t *Transport) doHTTP1(ctx context.Context, req *Request) (*Response, error
 		Headers:    headers,
 		Body:       io.NopCloser(bytes.NewReader(body)),
 		FinalURL:   req.URL,
+		Timing:     timing,
+		Protocol:   "h1",
+		bodyBytes:  body,
+		bodyRead:   true,
+	}, nil
+}
+
+// doHTTP1WithTLSConn executes an HTTP/1.1 request using an existing TLS connection.
+// This is used when ALPN negotiation results in HTTP/1.1 instead of HTTP/2,
+// allowing the TLS connection to be reused instead of creating a new one.
+func (t *Transport) doHTTP1WithTLSConn(ctx context.Context, req *Request, alpnErr *ALPNMismatchError) (*Response, error) {
+	startTime := time.Now()
+	timing := &protocol.Timing{}
+
+	parsedURL, err := url.Parse(req.URL)
+	if err != nil {
+		alpnErr.TLSConn.Close()
+		return nil, NewRequestError("parse_url", "", "", "h1", err)
+	}
+
+	host := alpnErr.Host
+	port := alpnErr.Port
+
+	// Set timeout
+	timeout := t.timeout
+	if req.Timeout > 0 {
+		timeout = req.Timeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	// Build HTTP request
+	method := req.Method
+	if method == "" {
+		method = "GET"
+	}
+
+	var bodyReader io.Reader
+	if req.BodyReader != nil {
+		bodyReader = req.BodyReader
+	} else if len(req.Body) > 0 {
+		bodyReader = bytes.NewReader(req.Body)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, method, req.URL, bodyReader)
+	if err != nil {
+		alpnErr.TLSConn.Close()
+		return nil, NewRequestError("create_request", host, port, "h1", err)
+	}
+
+	// Set preset headers - pass "h1" protocol so Chrome presets don't send Priority header
+	applyPresetHeaders(httpReq, t.preset, t.getHeaderOrder(), t.tlsOnly, "h1")
+
+	// Override with custom headers (multi-value support)
+	for key, values := range req.Headers {
+		for _, value := range values {
+			httpReq.Header.Add(key, value)
+		}
+	}
+
+	// Record timing before request
+	reqStart := time.Now()
+
+	// Use the existing TLS connection for the HTTP/1.1 request
+	resp, err := t.h1Transport.RoundTripWithTLSConn(httpReq, alpnErr.TLSConn, host, port)
+	if err != nil {
+		return nil, WrapError("roundtrip", host, port, "h1", err)
+	}
+	defer resp.Body.Close()
+
+	timing.FirstByte = float64(time.Since(reqStart).Milliseconds())
+
+	// Read response body with pre-allocation for known content length
+	body, releaseBody, err := readBodyOptimized(resp.Body, resp.ContentLength)
+	if err != nil {
+		return nil, NewRequestError("read_body", host, port, "h1", err)
+	}
+
+	// Decompress if needed
+	contentEncoding := resp.Header.Get("Content-Encoding")
+	if contentEncoding != "" {
+		decompressed, err := decompress(body, contentEncoding)
+		if err != nil {
+			releaseBody()
+			return nil, NewRequestError("decompress", host, port, "h1", err)
+		}
+		releaseBody()
+		body = decompressed
+		releaseBody = func() {}
+	}
+
+	timing.Total = float64(time.Since(startTime).Milliseconds())
+
+	// Build response headers map
+	headers := buildHeadersMap(resp.Header)
+
+	return &Response{
+		StatusCode: resp.StatusCode,
+		Headers:    headers,
+		Body:       io.NopCloser(bytes.NewReader(body)),
+		FinalURL:   parsedURL.String(),
 		Timing:     timing,
 		Protocol:   "h1",
 		bodyBytes:  body,
@@ -1082,7 +1260,7 @@ func (t *Transport) doHTTP2(ctx context.Context, req *Request) (*Response, error
 	}
 
 	// Set preset headers (with ordering for fingerprinting)
-	applyPresetHeaders(httpReq, t.preset, t.getHeaderOrder(), t.tlsOnly)
+	applyPresetHeaders(httpReq, t.preset, t.getHeaderOrder(), t.tlsOnly, "h2")
 
 	// Override with custom headers (multi-value support)
 	for key, values := range req.Headers {
@@ -1205,7 +1383,7 @@ func (t *Transport) doHTTP3(ctx context.Context, req *Request) (*Response, error
 	}
 
 	// Set preset headers (with ordering for fingerprinting)
-	applyPresetHeaders(httpReq, t.preset, t.getHeaderOrder(), t.tlsOnly)
+	applyPresetHeaders(httpReq, t.preset, t.getHeaderOrder(), t.tlsOnly, "h3")
 
 	// Override with custom headers (multi-value support)
 	for key, values := range req.Headers {
@@ -1355,7 +1533,8 @@ func (t *Transport) SetSessionIdentifier(sessionId string) {
 // Uses ordered headers (HeaderOrder) if available, otherwise falls back to the map.
 // customHeaderOrder overrides preset's default order if provided.
 // If tlsOnly is true, skips applying preset headers but still sets header order for fingerprinting.
-func applyPresetHeaders(httpReq *http.Request, preset *fingerprint.Preset, customHeaderOrder []string, tlsOnly bool) {
+// The protocol parameter ("h1", "h2", "h3") is used for protocol-specific header handling.
+func applyPresetHeaders(httpReq *http.Request, preset *fingerprint.Preset, customHeaderOrder []string, tlsOnly bool, protocol string) {
 	// In TLS-only mode, skip applying preset headers but still set header order
 	if !tlsOnly {
 		if len(preset.HeaderOrder) > 0 {
@@ -1370,6 +1549,14 @@ func applyPresetHeaders(httpReq *http.Request, preset *fingerprint.Preset, custo
 			}
 		}
 		httpReq.Header.Set("User-Agent", preset.UserAgent)
+
+		// Chrome does NOT send Priority header on HTTP/1.1, only on HTTP/2 and HTTP/3.
+		// Some anti-bots (Cloudflare, Datadome, Akamai) check for this and flag requests
+		// that send Priority on H1 as bots.
+		if protocol == "h1" && isChromePreset(preset.Name) {
+			httpReq.Header.Del("Priority")
+			httpReq.Header.Del("priority")
+		}
 	}
 
 	// Set header order for HTTP/2 and HTTP/3 fingerprinting
@@ -1397,6 +1584,11 @@ func applyPresetHeaders(httpReq *http.Request, preset *fingerprint.Preset, custo
 
 	// Set pseudo-header order (Chrome uses :method, :authority, :scheme, :path)
 	httpReq.Header[http.PHeaderOrderKey] = []string{":method", ":authority", ":scheme", ":path"}
+}
+
+// isChromePreset returns true if the preset name indicates a Chrome fingerprint.
+func isChromePreset(name string) bool {
+	return strings.HasPrefix(name, "chrome-") || strings.HasPrefix(name, "Chrome")
 }
 
 func extractHost(urlStr string) string {

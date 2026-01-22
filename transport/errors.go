@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net"
 	"strings"
+
+	utls "github.com/sardanioss/utls"
 )
 
 // Error categories for better error handling
@@ -35,7 +37,28 @@ var (
 
 	// ErrClosed represents errors when transport is closed
 	ErrClosed = errors.New("transport closed")
+
+	// ErrALPNMismatch represents ALPN protocol negotiation mismatch
+	ErrALPNMismatch = errors.New("ALPN mismatch")
 )
+
+// ALPNMismatchError is returned when ALPN negotiates a different protocol than expected.
+// It carries the TLS connection so it can be reused for the negotiated protocol.
+type ALPNMismatchError struct {
+	Expected   string       // Expected protocol (e.g., "h2")
+	Negotiated string       // Actually negotiated protocol (e.g., "http/1.1")
+	TLSConn    *utls.UConn  // The TLS connection (caller should close if not reusing)
+	Host       string       // Target host
+	Port       string       // Target port
+}
+
+func (e *ALPNMismatchError) Error() string {
+	return fmt.Sprintf("ALPN mismatch: expected %s, got %s", e.Expected, e.Negotiated)
+}
+
+func (e *ALPNMismatchError) Unwrap() error {
+	return ErrALPNMismatch
+}
 
 // TransportError provides detailed error information
 type TransportError struct {

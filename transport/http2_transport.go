@@ -359,11 +359,18 @@ func (t *HTTP2Transport) createConn(ctx context.Context, host, port string) (*pe
 		return nil, fmt.Errorf("TLS handshake failed: %w", err)
 	}
 
-	// Verify ALPN negotiated HTTP/2
+	// Check ALPN negotiation result
 	state := tlsConn.ConnectionState()
 	if state.NegotiatedProtocol != "h2" {
-		tlsConn.Close()
-		return nil, fmt.Errorf("server does not support HTTP/2 (got: %s)", state.NegotiatedProtocol)
+		// Return ALPNMismatchError with the TLS connection so caller can reuse it for H1
+		// DO NOT close the connection - caller is responsible for closing or reusing
+		return nil, &ALPNMismatchError{
+			Expected:   "h2",
+			Negotiated: state.NegotiatedProtocol,
+			TLSConn:    tlsConn,
+			Host:       host,
+			Port:       port,
+		}
 	}
 
 	// Build HTTP/2 settings from preset

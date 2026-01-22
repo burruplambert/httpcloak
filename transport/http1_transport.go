@@ -197,6 +197,52 @@ func (t *HTTP1Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return resp, nil
 }
 
+// RoundTripWithTLSConn performs an HTTP/1.1 request using an existing TLS connection.
+// This is used when ALPN negotiation results in HTTP/1.1 instead of HTTP/2,
+// allowing the TLS connection to be reused instead of creating a new one.
+// The connection will be closed after the request (not pooled) since it came from H2 transport.
+func (t *HTTP1Transport) RoundTripWithTLSConn(req *http.Request, tlsConn *utls.UConn, host, port string) (*http.Response, error) {
+	t.closedMu.RLock()
+	if t.closed {
+		t.closedMu.RUnlock()
+		tlsConn.Close()
+		return nil, &TransportError{
+			Op:       "roundtrip_with_conn",
+			Host:     host,
+			Protocol: "h1",
+			Cause:    ErrClosed,
+			Category: ErrClosed,
+		}
+	}
+	t.closedMu.RUnlock()
+
+	// Wrap the existing TLS connection into an http1Conn
+	conn := &http1Conn{
+		host:       host,
+		port:       port,
+		conn:       tlsConn,
+		tlsConn:    tlsConn,
+		createdAt:  time.Now(),
+		lastUsedAt: time.Now(),
+		br:         bufio.NewReaderSize(tlsConn, 64*1024),  // 64KB read buffer
+		bw:         bufio.NewWriterSize(tlsConn, 256*1024), // 256KB write buffer
+	}
+
+	resp, err := t.doRequest(conn, req)
+	if err != nil {
+		conn.close()
+		return nil, WrapError("request", host, port, "h1", err)
+	}
+
+	// Wrap the body to close connection when done (not pooled since it came from H2 attempt)
+	resp.Body = &streamBodyWrapper{
+		body: resp.Body,
+		conn: conn,
+	}
+
+	return resp, nil
+}
+
 // pooledBodyWrapper wraps response body to return connection to pool when done
 type pooledBodyWrapper struct {
 	body      io.ReadCloser
