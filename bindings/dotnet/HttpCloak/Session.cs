@@ -112,6 +112,11 @@ public sealed class Session : IDisposable
     private bool _disposed;
 
     /// <summary>
+    /// Internal handle for use by LocalProxy.RegisterSession.
+    /// </summary>
+    internal long Handle => _handle;
+
+    /// <summary>
     /// Default auth (username, password) for all requests.
     /// Can be overridden per-request.
     /// </summary>
@@ -130,6 +135,7 @@ public sealed class Session : IDisposable
     /// <param name="allowRedirects">Follow redirects (default: true)</param>
     /// <param name="maxRedirects">Maximum number of redirects (default: 10)</param>
     /// <param name="retry">Number of retries on failure (default: 0)</param>
+    /// <param name="retryOnStatus">HTTP status codes to retry on (default: null, uses [429, 500, 502, 503, 504])</param>
     /// <param name="preferIpv4">Prefer IPv4 addresses over IPv6 (default: false)</param>
     /// <param name="auth">Default auth (username, password) for all requests</param>
     /// <param name="connectTo">Domain fronting map (requestHost -> connectHost)</param>
@@ -147,6 +153,7 @@ public sealed class Session : IDisposable
         bool allowRedirects = true,
         int maxRedirects = 10,
         int retry = 0,
+        int[]? retryOnStatus = null,
         bool preferIpv4 = false,
         (string Username, string Password)? auth = null,
         Dictionary<string, string>? connectTo = null,
@@ -168,6 +175,7 @@ public sealed class Session : IDisposable
             AllowRedirects = allowRedirects,
             MaxRedirects = maxRedirects,
             Retry = retry,
+            RetryOnStatus = retryOnStatus,
             PreferIpv4 = preferIpv4,
             ConnectTo = connectTo,
             EchConfigDomain = echConfigDomain,
@@ -1878,6 +1886,10 @@ internal class SessionConfig
     [JsonPropertyName("retry")]
     public int Retry { get; set; }
 
+    [JsonPropertyName("retry_on_status")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int[]? RetryOnStatus { get; set; }
+
     [JsonPropertyName("prefer_ipv4")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool PreferIpv4 { get; set; }
@@ -2022,291 +2034,122 @@ internal class StreamMetadata
 }
 
 /// <summary>
-/// HttpMessageHandler implementation that routes all requests through httpcloak.
+/// HttpMessageHandler implementation that routes all requests through httpcloak via LocalProxy.
 /// Use this with HttpClient to get browser fingerprint impersonation for all requests.
+///
+/// This handler uses LocalProxy internally for TRUE streaming - request and response bodies
+/// are streamed through TCP without being buffered in memory.
 /// </summary>
 /// <example>
 /// <code>
 /// // Create handler with browser fingerprint
-/// var handler = new HttpCloakHandler(preset: "chrome-143");
-/// var client = new HttpClient(handler);
+/// using var handler = new HttpCloakHandler(preset: "chrome-143");
+/// using var client = new HttpClient(handler);
 ///
 /// // All requests now go through httpcloak with TLS fingerprinting
+/// // TRUE streaming - no memory buffering!
 /// var response = await client.GetAsync("https://example.com");
 /// var content = await response.Content.ReadAsStringAsync();
 /// </code>
 /// </example>
-public sealed class HttpCloakHandler : HttpMessageHandler
+public sealed class HttpCloakHandler : DelegatingHandler
 {
-    private readonly Session _session;
+    private readonly LocalProxy _proxy;
+    private readonly bool _ownsProxy;
     private bool _disposed;
 
     /// <summary>
     /// Create a new HttpCloakHandler with the specified options.
+    /// Uses LocalProxy internally for true streaming support.
     /// </summary>
     /// <param name="preset">Browser preset (default: "chrome-143")</param>
-    /// <param name="proxy">Proxy URL (e.g., "http://user:pass@host:port" or "socks5://host:port")</param>
-    /// <param name="tcpProxy">Proxy URL for TCP protocols (HTTP/1.1, HTTP/2)</param>
-    /// <param name="udpProxy">Proxy URL for UDP protocols (HTTP/3 via MASQUE)</param>
+    /// <param name="proxy">Upstream proxy URL (e.g., "http://user:pass@host:port" or "socks5://host:port")</param>
+    /// <param name="tcpProxy">Upstream proxy URL for TCP protocols (HTTP/1.1, HTTP/2)</param>
+    /// <param name="udpProxy">Upstream proxy URL for UDP protocols (HTTP/3 via MASQUE)</param>
     /// <param name="timeout">Request timeout in seconds (default: 30)</param>
-    /// <param name="httpVersion">HTTP version: "auto", "h1", "h2", "h3" (default: "auto")</param>
-    /// <param name="verify">SSL certificate verification (default: true)</param>
-    /// <param name="allowRedirects">Follow redirects (default: true)</param>
-    /// <param name="maxRedirects">Maximum number of redirects (default: 10)</param>
-    /// <param name="retry">Number of retries on failure (default: 0)</param>
-    /// <param name="preferIpv4">Prefer IPv4 addresses over IPv6 (default: false)</param>
-    /// <param name="echConfigDomain">Domain to fetch ECH config from (e.g., "cloudflare-ech.com")</param>
+    /// <param name="maxConnections">Maximum concurrent connections (default: 1000)</param>
     public HttpCloakHandler(
         string preset = "chrome-143",
         string? proxy = null,
         string? tcpProxy = null,
         string? udpProxy = null,
         int timeout = 30,
-        string httpVersion = "auto",
-        bool verify = true,
-        bool allowRedirects = true,
-        int maxRedirects = 10,
-        int retry = 0,
-        bool preferIpv4 = false,
-        string? echConfigDomain = null)
+        int maxConnections = 1000)
     {
-        _session = new Session(
+        _proxy = new LocalProxy(
+            port: 0,
             preset: preset,
-            proxy: proxy,
-            tcpProxy: tcpProxy,
-            udpProxy: udpProxy,
             timeout: timeout,
-            httpVersion: httpVersion,
-            verify: verify,
-            allowRedirects: allowRedirects,
-            maxRedirects: maxRedirects,
-            retry: retry,
-            preferIpv4: preferIpv4,
-            echConfigDomain: echConfigDomain);
+            maxConnections: maxConnections,
+            tcpProxy: tcpProxy ?? proxy,
+            udpProxy: udpProxy ?? proxy);
+        _ownsProxy = true;
+
+        // Set up inner handler to use the local proxy
+        InnerHandler = new HttpClientHandler
+        {
+            Proxy = _proxy.CreateWebProxy(),
+            UseProxy = true
+        };
     }
 
     /// <summary>
-    /// Create a new HttpCloakHandler with an existing Session.
-    /// The Session will NOT be disposed when the handler is disposed.
+    /// Create a new HttpCloakHandler with an existing LocalProxy.
+    /// The LocalProxy will NOT be disposed when the handler is disposed.
     /// </summary>
-    /// <param name="session">Existing Session to use</param>
-    public HttpCloakHandler(Session session)
+    /// <param name="proxy">Existing LocalProxy to use</param>
+    public HttpCloakHandler(LocalProxy proxy)
     {
-        _session = session ?? throw new ArgumentNullException(nameof(session));
-        _ownsSession = false;
+        _proxy = proxy ?? throw new ArgumentNullException(nameof(proxy));
+        _ownsProxy = false;
+
+        // Set up inner handler to use the local proxy
+        InnerHandler = new HttpClientHandler
+        {
+            Proxy = _proxy.CreateWebProxy(),
+            UseProxy = true
+        };
     }
 
-    private readonly bool _ownsSession = true;
+    /// <summary>
+    /// Gets the underlying LocalProxy for advanced configuration.
+    /// </summary>
+    public LocalProxy Proxy => _proxy;
 
     /// <summary>
-    /// Gets the underlying Session for advanced configuration (e.g., cookies, default headers).
+    /// Gets the proxy URL that requests are routed through.
     /// </summary>
-    public Session Session => _session;
+    public string ProxyUrl => _proxy.ProxyUrl;
 
     /// <summary>
-    /// When true, responses are streamed instead of buffered in memory.
-    /// This is more memory efficient for large downloads.
-    /// Default: true
+    /// Gets statistics about the proxy.
     /// </summary>
-    public bool UseStreaming { get; set; } = true;
+    public LocalProxyStats GetStats() => _proxy.GetStats();
 
     /// <inheritdoc/>
-    protected override async Task<HttpResponseMessage> SendAsync(
+    protected override Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage request,
         CancellationToken cancellationToken)
     {
         if (_disposed)
             throw new ObjectDisposedException(nameof(HttpCloakHandler));
-        cancellationToken.ThrowIfCancellationRequested();
 
-        // Extract request details
-        string method = request.Method.Method;
-        string url = request.RequestUri?.ToString() ?? throw new ArgumentException("Request URI is required");
-
-        // Collect all headers (from request + content)
-        var headers = new Dictionary<string, string>();
-
-        // Add request headers
-        foreach (var header in request.Headers)
-        {
-            // Join multiple values with comma (standard HTTP header format)
-            headers[header.Key] = string.Join(", ", header.Value);
-        }
-
-        // Add content headers if present
-        if (request.Content != null)
-        {
-            foreach (var header in request.Content.Headers)
-            {
-                headers[header.Key] = string.Join(", ", header.Value);
-            }
-        }
-
-        // Read request body if present
-        byte[]? bodyBytes = null;
-        string? bodyString = null;
-        if (request.Content != null)
-        {
-            bodyBytes = await request.Content.ReadAsByteArrayAsync(cancellationToken);
-            // Try to interpret as string for streaming mode
-            if (UseStreaming && bodyBytes.Length > 0)
-            {
-                try
-                {
-                    bodyString = System.Text.Encoding.UTF8.GetString(bodyBytes);
-                }
-                catch
-                {
-                    // Binary content - can't use streaming mode for upload
-                    bodyString = null;
-                }
-            }
-        }
-
-        // Determine if we can use streaming
-        bool canStream = UseStreaming && (bodyBytes == null || bodyBytes.Length == 0 || bodyString != null);
-
-        try
-        {
-            if (canStream)
-            {
-                return await SendStreamingAsync(request, method, url, headers, bodyString, cancellationToken);
-            }
-            else
-            {
-                return SendBuffered(request, method, url, headers, bodyBytes);
-            }
-        }
-        catch (HttpCloakException ex)
-        {
-            throw new HttpRequestException(ex.Message, ex);
-        }
+        // Just pass through - LocalProxy handles TLS fingerprinting
+        // HttpClient handles cookies, decompression, redirects natively
+        // TRUE streaming - no memory buffering!
+        return base.SendAsync(request, cancellationToken);
     }
 
-    private async Task<HttpResponseMessage> SendStreamingAsync(
+    /// <inheritdoc/>
+    protected override HttpResponseMessage Send(
         HttpRequestMessage request,
-        string method,
-        string url,
-        Dictionary<string, string> headers,
-        string? body,
         CancellationToken cancellationToken)
     {
-        // Use streaming API - response body is read on-demand
-        StreamResponse streamResponse;
-        try
-        {
-            streamResponse = _session.RequestStream(method, url, body, headers);
-        }
-        catch (HttpCloakException)
-        {
-            // Streaming failed, fall back to buffered
-            byte[]? bodyBytes = body != null ? System.Text.Encoding.UTF8.GetBytes(body) : null;
-            return SendBuffered(request, method, url, headers, bodyBytes);
-        }
+        if (_disposed)
+            throw new ObjectDisposedException(nameof(HttpCloakHandler));
 
-        // Build response with streaming content
-        var httpResponse = new HttpResponseMessage((System.Net.HttpStatusCode)streamResponse.StatusCode)
-        {
-            RequestMessage = request,
-            Version = streamResponse.Protocol switch
-            {
-                "h3" => new Version(3, 0),
-                "h2" => new Version(2, 0),
-                _ => new Version(1, 1)
-            }
-        };
-
-        // Create streaming content that wraps the StreamResponse
-        var contentStream = streamResponse.GetContentStream();
-        httpResponse.Content = new StreamContent(contentStream);
-
-        // Copy response headers
-        foreach (var (key, values) in streamResponse.Headers)
-        {
-            string lowerKey = key.ToLowerInvariant();
-            if (IsContentHeader(lowerKey))
-            {
-                httpResponse.Content.Headers.TryAddWithoutValidation(key, values);
-            }
-            else
-            {
-                httpResponse.Headers.TryAddWithoutValidation(key, values);
-            }
-        }
-
-        return httpResponse;
-    }
-
-    private HttpResponseMessage SendBuffered(
-        HttpRequestMessage request,
-        string method,
-        string url,
-        Dictionary<string, string> headers,
-        byte[]? bodyBytes)
-    {
-        // Make buffered request - entire response is read into memory
-        Response response;
-        if (bodyBytes != null && bodyBytes.Length > 0)
-        {
-            response = _session.RequestBinary(method, url, bodyBytes, headers);
-        }
-        else
-        {
-            response = _session.Request(method, url, null, headers);
-        }
-
-        // Convert to HttpResponseMessage
-        var httpResponse = new HttpResponseMessage((System.Net.HttpStatusCode)response.StatusCode)
-        {
-            RequestMessage = request,
-            Version = response.Protocol switch
-            {
-                "h3" => new Version(3, 0),
-                "h2" => new Version(2, 0),
-                _ => new Version(1, 1)
-            },
-            ReasonPhrase = response.Reason
-        };
-
-        // Set response content
-        httpResponse.Content = new ByteArrayContent(response.Content);
-
-        // Copy response headers
-        foreach (var (key, values) in response.Headers)
-        {
-            string lowerKey = key.ToLowerInvariant();
-            if (IsContentHeader(lowerKey))
-            {
-                httpResponse.Content.Headers.TryAddWithoutValidation(key, values);
-            }
-            else
-            {
-                httpResponse.Headers.TryAddWithoutValidation(key, values);
-            }
-        }
-
-        return httpResponse;
-    }
-
-    /// <summary>
-    /// Determines if a header is a content header (should go on HttpContent.Headers).
-    /// </summary>
-    private static bool IsContentHeader(string headerName)
-    {
-        return headerName switch
-        {
-            "content-type" => true,
-            "content-length" => true,
-            "content-encoding" => true,
-            "content-language" => true,
-            "content-location" => true,
-            "content-md5" => true,
-            "content-range" => true,
-            "content-disposition" => true,
-            "expires" => true,
-            "last-modified" => true,
-            _ => false
-        };
+        // Synchronous version
+        return base.Send(request, cancellationToken);
     }
 
     /// <inheritdoc/>
@@ -2314,9 +2157,9 @@ public sealed class HttpCloakHandler : HttpMessageHandler
     {
         if (!_disposed)
         {
-            if (disposing && _ownsSession)
+            if (disposing && _ownsProxy)
             {
-                _session.Dispose();
+                _proxy.Dispose();
             }
             _disposed = true;
         }

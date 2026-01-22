@@ -677,6 +677,8 @@ export const Preset: {
   CHROME_143_WINDOWS: string;
   CHROME_143_LINUX: string;
   CHROME_143_MACOS: string;
+  CHROME_141: string;
+  CHROME_133: string;
   CHROME_131: string;
   CHROME_131_WINDOWS: string;
   CHROME_131_LINUX: string;
@@ -697,32 +699,37 @@ export interface SessionCacheOptions {
   /**
    * Function to get session data from cache.
    * Returns JSON string with session data, or null if not found.
+   * Note: Must be synchronous - async callbacks are not supported.
    */
-  get?: (key: string) => string | null | Promise<string | null>;
+  get?: (key: string) => string | null;
 
   /**
    * Function to store session data in cache.
    * Returns 0 on success, non-zero on error.
+   * Note: Must be synchronous - async callbacks are not supported.
    */
-  put?: (key: string, value: string, ttlSeconds: number) => number | Promise<number>;
+  put?: (key: string, value: string, ttlSeconds: number) => number;
 
   /**
    * Function to delete session data from cache.
    * Returns 0 on success, non-zero on error.
+   * Note: Must be synchronous - async callbacks are not supported.
    */
-  delete?: (key: string) => number | Promise<number>;
+  delete?: (key: string) => number;
 
   /**
    * Function to get ECH config from cache.
    * Returns base64-encoded config, or null if not found.
+   * Note: Must be synchronous - async callbacks are not supported.
    */
-  getEch?: (key: string) => string | null | Promise<string | null>;
+  getEch?: (key: string) => string | null;
 
   /**
    * Function to store ECH config in cache.
    * Returns 0 on success, non-zero on error.
+   * Note: Must be synchronous - async callbacks are not supported.
    */
-  putEch?: (key: string, value: string, ttlSeconds: number) => number | Promise<number>;
+  putEch?: (key: string, value: string, ttlSeconds: number) => number;
 
   /**
    * Error callback for cache operations.

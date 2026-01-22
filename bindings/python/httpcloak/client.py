@@ -133,7 +133,7 @@ class Preset:
 
     All available presets:
         Desktop Chrome: CHROME_143, CHROME_143_WINDOWS, CHROME_143_LINUX, CHROME_143_MACOS
-                        CHROME_131, CHROME_131_WINDOWS, CHROME_131_LINUX, CHROME_131_MACOS
+                        CHROME_141, CHROME_133, CHROME_131
         Mobile Chrome: IOS_CHROME_143, ANDROID_CHROME_143
         Firefox: FIREFOX_133
         Safari: SAFARI_18, IOS_SAFARI_17
@@ -143,6 +143,12 @@ class Preset:
     CHROME_143_WINDOWS = "chrome-143-windows"
     CHROME_143_LINUX = "chrome-143-linux"
     CHROME_143_MACOS = "chrome-143-macos"
+
+    # Chrome 141
+    CHROME_141 = "chrome-141"
+
+    # Chrome 133
+    CHROME_133 = "chrome-133"
 
     # Chrome 131
     CHROME_131 = "chrome-131"
@@ -166,7 +172,7 @@ class Preset:
         """Return list of all available preset names."""
         return [
             cls.CHROME_143, cls.CHROME_143_WINDOWS, cls.CHROME_143_LINUX, cls.CHROME_143_MACOS,
-            cls.CHROME_131, cls.CHROME_131_WINDOWS, cls.CHROME_131_LINUX, cls.CHROME_131_MACOS,
+            cls.CHROME_141, cls.CHROME_133, cls.CHROME_131,
             cls.IOS_CHROME_143, cls.ANDROID_CHROME_143,
             cls.FIREFOX_133,
             cls.SAFARI_18, cls.IOS_SAFARI_17,
@@ -939,6 +945,10 @@ def _setup_lib(lib):
     lib.httpcloak_local_proxy_is_running.restype = c_int
     lib.httpcloak_local_proxy_get_stats.argtypes = [c_int64]
     lib.httpcloak_local_proxy_get_stats.restype = c_void_p
+    lib.httpcloak_local_proxy_register_session.argtypes = [c_int64, c_char_p, c_int64]
+    lib.httpcloak_local_proxy_register_session.restype = c_void_p
+    lib.httpcloak_local_proxy_unregister_session.argtypes = [c_int64, c_char_p]
+    lib.httpcloak_local_proxy_unregister_session.restype = c_int
 
     # Session cache callbacks
     lib.httpcloak_set_session_cache_callbacks.argtypes = [
@@ -2792,6 +2802,71 @@ class LocalProxy:
         if result:
             return json.loads(result)
         return {}
+
+    def register_session(self, session_id: str, session: "Session") -> None:
+        """
+        Register a session with the proxy for per-request routing.
+
+        Clients can use the X-HTTPCloak-Session header to select which session to use.
+        Each registered session maintains its own cookies, TLS sessions, and proxy config.
+
+        Args:
+            session_id: Unique identifier for this session
+            session: The Session object to register
+
+        Raises:
+            HTTPCloakError: If session_id already exists or registration fails
+
+        Example:
+            proxy = LocalProxy(preset="chrome-143")
+
+            session1 = Session(preset="chrome-143")
+            session2 = Session(preset="firefox-134")
+
+            proxy.register_session("user-1", session1)
+            proxy.register_session("user-2", session2)
+
+            # Clients use X-HTTPCloak-Session header to select:
+            import requests
+            r = requests.get("https://example.com",
+                proxies={"https": proxy.proxy_url},
+                headers={"X-HTTPCloak-Session": "user-1"}
+            )
+        """
+        if not session_id:
+            raise ValueError("session_id cannot be empty")
+        if session is None:
+            raise ValueError("session cannot be None")
+
+        session_id_bytes = session_id.encode("utf-8")
+        error_ptr = self._lib.httpcloak_local_proxy_register_session(
+            self._handle, session_id_bytes, session._handle
+        )
+        error = _ptr_to_string(error_ptr)
+        if error:
+            raise HTTPCloakError(error)
+
+    def unregister_session(self, session_id: str) -> bool:
+        """
+        Unregister a session from the proxy.
+
+        Args:
+            session_id: The session ID to unregister
+
+        Returns:
+            bool: True if the session was found and removed, False otherwise
+
+        Note:
+            This does NOT close the session - you must close it separately.
+        """
+        if not session_id:
+            return False
+
+        session_id_bytes = session_id.encode("utf-8")
+        result = self._lib.httpcloak_local_proxy_unregister_session(
+            self._handle, session_id_bytes
+        )
+        return result == 1
 
     def close(self) -> None:
         """Stop the local proxy server."""

@@ -38,13 +38,15 @@ public sealed class LocalProxy : IDisposable
     /// <param name="maxConnections">Maximum concurrent connections (default: 1000)</param>
     /// <param name="tcpProxy">Upstream TCP proxy URL (optional)</param>
     /// <param name="udpProxy">Upstream UDP proxy URL (optional)</param>
+    /// <param name="tlsOnly">TLS-only mode: skip preset HTTP headers, only apply TLS fingerprint (default: false)</param>
     public LocalProxy(
         int port = 0,
         string preset = "chrome-143",
         int timeout = 30,
         int maxConnections = 1000,
         string? tcpProxy = null,
-        string? udpProxy = null)
+        string? udpProxy = null,
+        bool tlsOnly = false)
     {
         var config = new LocalProxyConfig
         {
@@ -53,7 +55,8 @@ public sealed class LocalProxy : IDisposable
             Timeout = timeout,
             MaxConnections = maxConnections,
             TcpProxy = tcpProxy,
-            UdpProxy = udpProxy
+            UdpProxy = udpProxy,
+            TlsOnly = tlsOnly
         };
 
         string configJson = JsonSerializer.Serialize(config, LocalProxyJsonContext.Default.LocalProxyConfig);
@@ -155,6 +158,62 @@ public sealed class LocalProxy : IDisposable
         }
     }
 
+    /// <summary>
+    /// Registers a session with the proxy for per-request routing.
+    /// Clients can use the X-HTTPCloak-Session header to select which session to use.
+    /// </summary>
+    /// <param name="sessionId">Unique identifier for this session</param>
+    /// <param name="session">The session to register</param>
+    /// <exception cref="ArgumentNullException">If session is null</exception>
+    /// <exception cref="HttpCloakException">If sessionId already exists</exception>
+    /// <example>
+    /// <code>
+    /// var proxy = new LocalProxy(preset: "chrome-143");
+    /// var session1 = new Session(preset: "chrome-143");
+    /// var session2 = new Session(preset: "firefox-134");
+    ///
+    /// proxy.RegisterSession("user-1", session1);
+    /// proxy.RegisterSession("user-2", session2);
+    ///
+    /// // Clients use: X-HTTPCloak-Session: user-1 to route to session1
+    /// </code>
+    /// </example>
+    public void RegisterSession(string sessionId, Session session)
+    {
+        ThrowIfDisposed();
+        ArgumentNullException.ThrowIfNull(session);
+
+        if (string.IsNullOrEmpty(sessionId))
+            throw new ArgumentException("Session ID cannot be null or empty", nameof(sessionId));
+
+        IntPtr errorPtr = Native.LocalProxyRegisterSession(_handle, sessionId, session.Handle);
+        string? error = Native.PtrToStringAndFree(errorPtr);
+
+        if (!string.IsNullOrEmpty(error))
+        {
+            throw new HttpCloakException(error);
+        }
+    }
+
+    /// <summary>
+    /// Unregisters a session from the proxy.
+    /// </summary>
+    /// <param name="sessionId">The session ID to unregister</param>
+    /// <returns>True if the session was found and removed, false otherwise</returns>
+    /// <remarks>
+    /// This does NOT close the session - you must dispose it separately.
+    /// </remarks>
+    public bool UnregisterSession(string sessionId)
+    {
+        ThrowIfDisposed();
+
+        if (string.IsNullOrEmpty(sessionId))
+            return false;
+
+        int result = Native.LocalProxyUnregisterSession(_handle, sessionId);
+        return result == 1;
+    }
+
     private void ThrowIfDisposed()
     {
         if (_disposed)
@@ -205,6 +264,10 @@ internal class LocalProxyConfig
     [JsonPropertyName("udp_proxy")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? UdpProxy { get; set; }
+
+    [JsonPropertyName("tls_only")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool TlsOnly { get; set; }
 }
 
 /// <summary>
