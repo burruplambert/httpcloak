@@ -421,6 +421,104 @@ response = httpcloak.get(
 response = httpcloak.post("https://api.example.com", data={"key": "value"})
 ```
 
+## Local Proxy
+
+Use `LocalProxy` to apply TLS fingerprinting to any HTTP client (requests, httpx, etc.):
+
+```python
+from httpcloak import LocalProxy
+
+# Start local proxy with Chrome fingerprint
+proxy = LocalProxy(preset="chrome-143")
+print(f"Proxy running on {proxy.proxy_url}")
+
+# Use with requests library
+import requests
+response = requests.get("https://example.com", proxies={"https": proxy.proxy_url})
+
+# Per-request upstream proxy rotation
+response = requests.get(
+    "https://example.com",
+    proxies={"https": proxy.proxy_url},
+    headers={"X-Upstream-Proxy": "http://user:pass@rotating-proxy.com:8080"}
+)
+
+proxy.close()
+```
+
+### TLS-Only Mode
+
+When your client already provides authentic browser headers, use TLS-only mode:
+
+```python
+from httpcloak import LocalProxy
+
+# Only apply TLS fingerprint, pass headers through
+proxy = LocalProxy(preset="chrome-143", tls_only=True)
+
+# Your client's headers are preserved
+response = requests.get(
+    "https://example.com",
+    proxies={"https": proxy.proxy_url},
+    headers={"User-Agent": "My Custom UA"}
+)
+
+proxy.close()
+```
+
+### Session Registry
+
+Route different requests through different browser fingerprints:
+
+```python
+from httpcloak import LocalProxy, Session
+
+proxy = LocalProxy(preset="chrome-143")
+
+# Create sessions with different fingerprints
+chrome_session = Session(preset="chrome-143")
+firefox_session = Session(preset="firefox-133")
+
+# Register sessions with the proxy
+proxy.register_session("chrome-user", chrome_session)
+proxy.register_session("firefox-user", firefox_session)
+
+# Route requests using X-HTTPCloak-Session header
+response = requests.get(
+    "https://example.com",
+    proxies={"https": proxy.proxy_url},
+    headers={"X-HTTPCloak-Session": "firefox-user"}  # Uses firefox fingerprint
+)
+
+# Unregister when done
+proxy.unregister_session("chrome-user")
+proxy.unregister_session("firefox-user")
+
+chrome_session.close()
+firefox_session.close()
+proxy.close()
+```
+
+### LocalProxy Options
+
+```python
+proxy = LocalProxy(
+    port=0,              # Port (0 = auto-select)
+    preset="chrome-143", # Browser fingerprint
+    timeout=30,          # Request timeout in seconds
+    max_connections=1000,# Max concurrent connections
+    tcp_proxy=None,      # Default upstream TCP proxy
+    udp_proxy=None,      # Default upstream UDP proxy
+    tls_only=False       # TLS-only mode
+)
+
+proxy.port           # Actual port number
+proxy.proxy_url      # Full proxy URL (http://127.0.0.1:port)
+proxy.is_running     # True if proxy is active
+proxy.get_stats()    # Returns dict with request/connection stats
+proxy.close()        # Stop the proxy
+```
+
 ## Platform Support
 
 - Linux (x64, arm64)
