@@ -508,7 +508,11 @@ async function downloadLargeFile(): Promise<void> {
 
 ## Local Proxy
 
-Use `LocalProxy` to apply TLS fingerprinting to any HTTP client (axios, node-fetch, etc.):
+Use `LocalProxy` to apply TLS fingerprinting to any HTTP client (axios, node-fetch, etc.).
+
+### HTTPS with True Streaming (Recommended)
+
+For HTTPS requests with full fingerprinting AND true streaming (request/response bodies not materialized into memory), use the `X-HTTPCloak-Scheme` header:
 
 ```javascript
 const { LocalProxy } = require("httpcloak");
@@ -518,7 +522,45 @@ const axios = require("axios");
 const proxy = new LocalProxy({ preset: "chrome-143" });
 console.log(`Proxy running on ${proxy.proxyUrl}`);
 
-// Use with axios
+// Use X-HTTPCloak-Scheme header for HTTPS with fingerprinting + streaming
+const response = await axios.get("http://example.com/api", {
+  // Note: http:// URL
+  proxy: {
+    host: "127.0.0.1",
+    port: proxy.port,
+  },
+  headers: {
+    "X-HTTPCloak-Scheme": "https", // Upgrades to HTTPS with fingerprinting
+  },
+});
+
+// This provides:
+// - Full TLS fingerprinting (Chrome/Firefox JA3/JA4)
+// - HTTP/3 support
+// - True streaming (request body NOT materialized into memory)
+// - Header modification capabilities
+
+proxy.close();
+```
+
+**Why use `X-HTTPCloak-Scheme`?**
+
+Standard HTTP proxy clients use CONNECT tunneling for HTTPS, which means the proxy can't inspect or modify the request. The `X-HTTPCloak-Scheme: https` header tells LocalProxy to:
+1. Accept the request as plain HTTP
+2. Upgrade it to HTTPS internally
+3. Apply full TLS fingerprinting
+4. Stream request/response bodies without memory materialization
+
+### Basic Usage
+
+```javascript
+const { LocalProxy } = require("httpcloak");
+const axios = require("axios");
+
+// Start local proxy with Chrome fingerprint
+const proxy = new LocalProxy({ preset: "chrome-143" });
+
+// Standard HTTPS (uses CONNECT tunnel - fingerprinting via upstream proxy only)
 const response = await axios.get("https://example.com", {
   proxy: {
     host: "127.0.0.1",

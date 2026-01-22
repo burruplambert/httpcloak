@@ -36,6 +36,13 @@ const (
 	// Example: X-HTTPCloak-Session: my-session-id
 	HeaderSession = "X-HTTPCloak-Session"
 
+	// HeaderScheme upgrades HTTP requests to HTTPS with TLS fingerprinting.
+	// When set to "https", LocalProxy converts http:// URLs to https:// and uses
+	// Session.DoStream() with full fingerprinting. This allows standard HTTP proxy
+	// clients to get HTTPS fingerprinting without using CONNECT tunneling.
+	// Example: X-HTTPCloak-Scheme: https
+	HeaderScheme = "X-HTTPCloak-Scheme"
+
 	// ProxyAuthScheme is the authentication scheme for upstream proxy selection.
 	// Format: "Proxy-Authorization: HTTPCloak http://user:pass@proxy:8080"
 	// This works for both HTTP and HTTPS (CONNECT) requests since Proxy-Authorization
@@ -528,11 +535,17 @@ func (p *LocalProxy) handleCONNECT(clientConn net.Conn, req *http.Request) {
 	p.tunnel(clientConn, targetConn)
 }
 
-// handleHTTP handles plain HTTP requests using fast direct forwarding.
+// handleHTTP handles HTTP requests with TLS fingerprinting via httpcloak Session.
 //
-// Supports per-request proxy override via:
-//   - Proxy-Authorization: HTTPCloak http://user:pass@proxy:8080 (recommended)
-//   - X-Upstream-Proxy header (legacy, also works for HTTP)
+// For HTTPS targets: Uses Session.DoStream() with full TLS fingerprinting and header handling.
+// For HTTP targets with X-HTTPCloak-Scheme: https: Upgrades to HTTPS with fingerprinting.
+// For HTTP targets: Uses fast direct forwarding (no TLS fingerprinting needed).
+//
+// Supports:
+//   - X-HTTPCloak-Session header for per-request session selection
+//   - X-HTTPCloak-TlsOnly header for per-request TLS-only mode
+//   - X-HTTPCloak-Scheme header to upgrade HTTP to HTTPS with fingerprinting
+//   - Per-request proxy override via registered sessions
 func (p *LocalProxy) handleHTTP(clientConn net.Conn, req *http.Request, reader *bufio.Reader) {
 	// Build target URL
 	targetURL := req.URL.String()
@@ -547,12 +560,109 @@ func (p *LocalProxy) handleHTTP(clientConn net.Conn, req *http.Request, reader *
 		}
 	}
 
-	// Check for per-request proxy override (checks both Proxy-Authorization and X-Upstream-Proxy)
-	proxyOverride := p.extractUpstreamProxy(req)
+	// Check for scheme upgrade header (X-HTTPCloak-Scheme: https)
+	// This allows HTTP proxy clients to get HTTPS fingerprinting without CONNECT
+	schemeOverride := req.Header.Get(HeaderScheme)
+	if strings.EqualFold(schemeOverride, "https") && strings.HasPrefix(targetURL, "http://") {
+		targetURL = "https://" + strings.TrimPrefix(targetURL, "http://")
+	}
 
-	// Create outgoing request
+	// Create context with timeout
 	ctx, cancel := context.WithTimeout(p.ctx, p.timeout)
 	defer cancel()
+
+	// For HTTPS targets, use Session with fingerprinting
+	if strings.HasPrefix(targetURL, "https://") {
+		p.handleHTTPWithSession(ctx, clientConn, req, targetURL)
+		return
+	}
+
+	// For plain HTTP targets, use fast direct forwarding (no fingerprinting needed)
+	p.handleHTTPDirect(ctx, clientConn, req, targetURL)
+}
+
+// handleHTTPWithSession handles requests using httpcloak Session with TLS fingerprinting.
+// This provides full browser fingerprint emulation for HTTPS requests.
+func (p *LocalProxy) handleHTTPWithSession(ctx context.Context, clientConn net.Conn, req *http.Request, targetURL string) {
+	// Select session: registered session > default session
+	session := p.session
+	sessionID := p.extractSessionID(req)
+	if sessionID != "" {
+		if registeredSession := p.GetSession(sessionID); registeredSession != nil {
+			session = registeredSession
+		} else {
+			p.sendError(clientConn, http.StatusBadRequest, fmt.Sprintf("Session not found: %s", sessionID))
+			return
+		}
+	}
+
+	// Build headers map (skip hop-by-hop and internal headers)
+	headers := make(map[string][]string)
+	for key, values := range req.Header {
+		// Skip hop-by-hop headers
+		if isHopByHopHeader(key) {
+			continue
+		}
+		// Skip internal HTTPCloak headers
+		if strings.EqualFold(key, HeaderUpstreamProxy) ||
+			strings.EqualFold(key, HeaderTLSOnly) ||
+			strings.EqualFold(key, HeaderSession) ||
+			strings.EqualFold(key, HeaderScheme) {
+			continue
+		}
+		// Skip Proxy-Authorization with HTTPCloak scheme
+		if strings.EqualFold(key, "Proxy-Authorization") {
+			if len(values) > 0 && strings.HasPrefix(values[0], ProxyAuthScheme+" ") {
+				continue
+			}
+		}
+		headers[key] = values
+	}
+
+	// Build httpcloak request
+	hcReq := &Request{
+		Method:  req.Method,
+		URL:     targetURL,
+		Headers: headers,
+		Body:    req.Body, // Streaming request body
+	}
+
+	// Execute request with fingerprinting
+	resp, err := session.DoStream(ctx, hcReq)
+	if err != nil {
+		p.sendError(clientConn, http.StatusBadGateway, fmt.Sprintf("Request failed: %v", err))
+		return
+	}
+	defer resp.Close()
+
+	// Use buffered writer for better performance
+	bufWriter := bufio.NewWriterSize(clientConn, 64*1024)
+
+	// Write status line
+	fmt.Fprintf(bufWriter, "HTTP/1.1 %d %s\r\n", resp.StatusCode, http.StatusText(resp.StatusCode))
+
+	// Write headers (skip hop-by-hop)
+	for key, values := range resp.Headers {
+		if isHopByHopHeader(key) {
+			continue
+		}
+		for _, value := range values {
+			fmt.Fprintf(bufWriter, "%s: %s\r\n", key, value)
+		}
+	}
+	bufWriter.WriteString("\r\n")
+	bufWriter.Flush()
+
+	// Stream response body
+	buf := make([]byte, 64*1024) // 64KB buffer
+	io.CopyBuffer(clientConn, resp, buf)
+}
+
+// handleHTTPDirect handles plain HTTP requests with fast direct forwarding.
+// No TLS fingerprinting is applied (not needed for plain HTTP).
+func (p *LocalProxy) handleHTTPDirect(ctx context.Context, clientConn net.Conn, req *http.Request, targetURL string) {
+	// Check for per-request proxy override
+	proxyOverride := p.extractUpstreamProxy(req)
 
 	outReq, err := http.NewRequestWithContext(ctx, req.Method, targetURL, req.Body)
 	if err != nil {
@@ -560,25 +670,17 @@ func (p *LocalProxy) handleHTTP(clientConn net.Conn, req *http.Request, reader *
 		return
 	}
 
-	// Copy headers (skip hop-by-hop, X-Upstream-Proxy, X-HTTPCloak-*, and Proxy-Authorization with HTTPCloak scheme)
+	// Copy headers (skip hop-by-hop and internal headers)
 	for key, values := range req.Header {
-		// Skip hop-by-hop headers
 		if isHopByHopHeader(key) {
 			continue
 		}
-		// Skip X-Upstream-Proxy (legacy header for upstream proxy)
-		if strings.EqualFold(key, HeaderUpstreamProxy) {
+		if strings.EqualFold(key, HeaderUpstreamProxy) ||
+			strings.EqualFold(key, HeaderTLSOnly) ||
+			strings.EqualFold(key, HeaderSession) ||
+			strings.EqualFold(key, HeaderScheme) {
 			continue
 		}
-		// Skip X-HTTPCloak-TlsOnly (per-request TLS-only mode)
-		if strings.EqualFold(key, HeaderTLSOnly) {
-			continue
-		}
-		// Skip X-HTTPCloak-Session (per-request session selection)
-		if strings.EqualFold(key, HeaderSession) {
-			continue
-		}
-		// Skip Proxy-Authorization if it's our HTTPCloak scheme
 		if strings.EqualFold(key, "Proxy-Authorization") {
 			if len(values) > 0 && strings.HasPrefix(values[0], ProxyAuthScheme+" ") {
 				continue
@@ -590,7 +692,7 @@ func (p *LocalProxy) handleHTTP(clientConn net.Conn, req *http.Request, reader *
 	}
 	outReq.ContentLength = req.ContentLength
 
-	// Choose HTTP client (use proxy-configured client if override specified)
+	// Choose HTTP client
 	client := p.httpClient
 	if proxyOverride != "" {
 		client = p.createProxyClient(proxyOverride)

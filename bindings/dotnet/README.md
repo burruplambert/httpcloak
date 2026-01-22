@@ -424,7 +424,11 @@ catch (HttpRequestException ex)
 
 ## Local Proxy
 
-Use `LocalProxy` to apply TLS fingerprinting to any HTTP client transparently:
+Use `LocalProxy` to apply TLS fingerprinting to any HTTP client transparently.
+
+### HTTPS with True Streaming (Recommended)
+
+For HTTPS requests with full fingerprinting AND true streaming (request/response bodies not materialized into memory), use the `X-HTTPCloak-Scheme` header:
 
 ```csharp
 using HttpCloak;
@@ -440,7 +444,41 @@ var handler = new HttpClientHandler
 };
 using var client = new HttpClient(handler);
 
-// All requests now go through httpcloak with fingerprinting
+// Use X-HTTPCloak-Scheme header to get HTTPS with fingerprinting + streaming
+var request = new HttpRequestMessage(HttpMethod.Get, "http://example.com/api"); // Note: http://
+request.Headers.Add("X-HTTPCloak-Scheme", "https"); // Upgrades to HTTPS with fingerprinting
+var response = await client.SendAsync(request);
+
+// This provides:
+// - Full TLS fingerprinting (Chrome/Firefox JA3/JA4)
+// - HTTP/3 support
+// - True streaming (request body NOT materialized into memory)
+// - Header modification capabilities
+```
+
+**Why use `X-HTTPCloak-Scheme`?**
+
+Standard HTTP proxy clients (like .NET HttpClient) use CONNECT tunneling for HTTPS, which means the proxy can't inspect or modify the request. The `X-HTTPCloak-Scheme: https` header tells LocalProxy to:
+1. Accept the request as plain HTTP
+2. Upgrade it to HTTPS internally
+3. Apply full TLS fingerprinting
+4. Stream request/response bodies without memory materialization
+
+### Basic Usage
+
+```csharp
+using HttpCloak;
+
+// Start local proxy with Chrome fingerprint
+using var proxy = new LocalProxy(preset: "chrome-143");
+
+var handler = new HttpClientHandler
+{
+    Proxy = proxy.CreateWebProxy()
+};
+using var client = new HttpClient(handler);
+
+// Standard HTTPS (uses CONNECT tunnel - fingerprinting via upstream proxy only)
 var response = await client.GetAsync("https://example.com");
 
 // Per-request upstream proxy rotation via header

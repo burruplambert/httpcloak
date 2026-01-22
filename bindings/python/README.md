@@ -423,17 +423,54 @@ response = httpcloak.post("https://api.example.com", data={"key": "value"})
 
 ## Local Proxy
 
-Use `LocalProxy` to apply TLS fingerprinting to any HTTP client (requests, httpx, etc.):
+Use `LocalProxy` to apply TLS fingerprinting to any HTTP client (requests, httpx, etc.).
+
+### HTTPS with True Streaming (Recommended)
+
+For HTTPS requests with full fingerprinting AND true streaming (request/response bodies not materialized into memory), use the `X-HTTPCloak-Scheme` header:
 
 ```python
 from httpcloak import LocalProxy
+import requests
 
 # Start local proxy with Chrome fingerprint
 proxy = LocalProxy(preset="chrome-143")
 print(f"Proxy running on {proxy.proxy_url}")
 
-# Use with requests library
+# Use X-HTTPCloak-Scheme header for HTTPS with fingerprinting + streaming
+response = requests.get(
+    "http://example.com/api",  # Note: http://
+    proxies={"http": proxy.proxy_url},  # Use http proxy
+    headers={"X-HTTPCloak-Scheme": "https"}  # Upgrades to HTTPS with fingerprinting
+)
+
+# This provides:
+# - Full TLS fingerprinting (Chrome/Firefox JA3/JA4)
+# - HTTP/3 support
+# - True streaming (request body NOT materialized into memory)
+# - Header modification capabilities
+
+proxy.close()
+```
+
+**Why use `X-HTTPCloak-Scheme`?**
+
+Standard HTTP proxy clients use CONNECT tunneling for HTTPS, which means the proxy can't inspect or modify the request. The `X-HTTPCloak-Scheme: https` header tells LocalProxy to:
+1. Accept the request as plain HTTP
+2. Upgrade it to HTTPS internally
+3. Apply full TLS fingerprinting
+4. Stream request/response bodies without memory materialization
+
+### Basic Usage
+
+```python
+from httpcloak import LocalProxy
 import requests
+
+# Start local proxy with Chrome fingerprint
+proxy = LocalProxy(preset="chrome-143")
+
+# Standard HTTPS (uses CONNECT tunnel - fingerprinting via upstream proxy only)
 response = requests.get("https://example.com", proxies={"https": proxy.proxy_url})
 
 # Per-request upstream proxy rotation
