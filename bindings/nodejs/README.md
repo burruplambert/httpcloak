@@ -506,6 +506,111 @@ async function downloadLargeFile(): Promise<void> {
 }
 ```
 
+## Local Proxy
+
+Use `LocalProxy` to apply TLS fingerprinting to any HTTP client (axios, node-fetch, etc.):
+
+```javascript
+const { LocalProxy } = require("httpcloak");
+const axios = require("axios");
+
+// Start local proxy with Chrome fingerprint
+const proxy = new LocalProxy({ preset: "chrome-143" });
+console.log(`Proxy running on ${proxy.proxyUrl}`);
+
+// Use with axios
+const response = await axios.get("https://example.com", {
+  proxy: {
+    host: "127.0.0.1",
+    port: proxy.port,
+  },
+});
+
+// Per-request upstream proxy rotation
+const rotatedResponse = await axios.get("https://example.com", {
+  proxy: {
+    host: "127.0.0.1",
+    port: proxy.port,
+  },
+  headers: {
+    "X-Upstream-Proxy": "http://user:pass@rotating-proxy.com:8080",
+  },
+});
+
+proxy.close();
+```
+
+### TLS-Only Mode
+
+When your client already provides authentic browser headers, use TLS-only mode:
+
+```javascript
+const { LocalProxy } = require("httpcloak");
+
+// Only apply TLS fingerprint, pass headers through
+const proxy = new LocalProxy({ preset: "chrome-143", tlsOnly: true });
+
+// Your client's headers are preserved
+const response = await fetch("https://example.com", {
+  agent: new HttpsProxyAgent(proxy.proxyUrl),
+  headers: { "User-Agent": "My Custom UA" },
+});
+
+proxy.close();
+```
+
+### Session Registry
+
+Route different requests through different browser fingerprints:
+
+```javascript
+const { LocalProxy, Session } = require("httpcloak");
+
+const proxy = new LocalProxy({ preset: "chrome-143" });
+
+// Create sessions with different fingerprints
+const chromeSession = new Session({ preset: "chrome-143" });
+const firefoxSession = new Session({ preset: "firefox-133" });
+
+// Register sessions with the proxy
+proxy.registerSession("chrome-user", chromeSession);
+proxy.registerSession("firefox-user", firefoxSession);
+
+// Route requests using X-HTTPCloak-Session header
+const response = await axios.get("https://example.com", {
+  proxy: { host: "127.0.0.1", port: proxy.port },
+  headers: { "X-HTTPCloak-Session": "firefox-user" }, // Uses firefox fingerprint
+});
+
+// Unregister when done
+proxy.unregisterSession("chrome-user");
+proxy.unregisterSession("firefox-user");
+
+chromeSession.close();
+firefoxSession.close();
+proxy.close();
+```
+
+### LocalProxy Options
+
+```javascript
+const proxy = new LocalProxy({
+  port: 0,              // Port (0 = auto-select)
+  preset: "chrome-143", // Browser fingerprint
+  timeout: 30,          // Request timeout in seconds
+  maxConnections: 1000, // Max concurrent connections
+  tcpProxy: null,       // Default upstream TCP proxy
+  udpProxy: null,       // Default upstream UDP proxy
+  tlsOnly: false,       // TLS-only mode
+});
+
+proxy.port;           // Actual port number
+proxy.proxyUrl;       // Full proxy URL (http://127.0.0.1:port)
+proxy.isRunning;      // True if proxy is active
+proxy.getStats();     // Returns object with request/connection stats
+proxy.close();        // Stop the proxy
+```
+
 ## Platform Support
 
 - Linux (x64, arm64)
