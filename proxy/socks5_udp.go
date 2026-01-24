@@ -248,6 +248,13 @@ func (c *SOCKS5UDPConn) tryEstablish(ctx context.Context) error {
 	// Clear deadline after successful handshake
 	c.tcpConn.SetDeadline(time.Time{})
 
+	// Enable TCP keepalive to prevent proxy from closing the control channel
+	// This is critical for long-lived QUIC/H3 connections through SOCKS5
+	if tcpConn, ok := c.tcpConn.(*net.TCPConn); ok {
+		tcpConn.SetKeepAlive(true)
+		tcpConn.SetKeepAlivePeriod(15 * time.Second)
+	}
+
 	return nil
 }
 
