@@ -105,16 +105,51 @@ const HTTP_STATUS_PHRASES = {
  */
 class Cookie {
   /**
-   * @param {string} name - Cookie name
-   * @param {string} value - Cookie value
+   * @param {Object} data - Cookie data from response
+   * @param {string} data.name - Cookie name
+   * @param {string} data.value - Cookie value
+   * @param {string} [data.domain] - Cookie domain
+   * @param {string} [data.path] - Cookie path
+   * @param {string} [data.expires] - Expiration date (RFC1123 format)
+   * @param {number} [data.max_age] - Max age in seconds
+   * @param {boolean} [data.secure] - Secure flag
+   * @param {boolean} [data.http_only] - HttpOnly flag
+   * @param {string} [data.same_site] - SameSite attribute (Strict, Lax, None)
    */
-  constructor(name, value) {
-    this.name = name;
-    this.value = value;
+  constructor(data) {
+    if (typeof data === 'string') {
+      // Legacy: constructor(name, value)
+      this.name = data;
+      this.value = arguments[1] || "";
+      this.domain = "";
+      this.path = "";
+      this.expires = "";
+      this.maxAge = 0;
+      this.secure = false;
+      this.httpOnly = false;
+      this.sameSite = "";
+    } else {
+      this.name = data.name || "";
+      this.value = data.value || "";
+      this.domain = data.domain || "";
+      this.path = data.path || "";
+      this.expires = data.expires || "";
+      this.maxAge = data.max_age || 0;
+      this.secure = data.secure || false;
+      this.httpOnly = data.http_only || false;
+      this.sameSite = data.same_site || "";
+    }
   }
 
   toString() {
-    return `Cookie(name=${this.name}, value=${this.value})`;
+    let str = `Cookie(name=${this.name}, value=${this.value}`;
+    if (this.domain) str += `, domain=${this.domain}`;
+    if (this.path) str += `, path=${this.path}`;
+    if (this.secure) str += `, secure`;
+    if (this.httpOnly) str += `, httpOnly`;
+    if (this.sameSite) str += `, sameSite=${this.sameSite}`;
+    str += `)`;
+    return str;
   }
 }
 
@@ -156,7 +191,7 @@ class Response {
     this.elapsed = elapsed; // milliseconds
 
     // Parse cookies from response
-    this._cookies = (data.cookies || []).map(c => new Cookie(c.name || "", c.value || ""));
+    this._cookies = (data.cookies || []).map(c => new Cookie(c));
 
     // Parse redirect history
     this._history = (data.history || []).map(h => new RedirectInfo(
@@ -343,7 +378,7 @@ class FastResponse {
     this.elapsed = elapsed;
 
     // Parse cookies from response
-    this._cookies = (metadata.cookies || []).map(c => new Cookie(c.name || "", c.value || ""));
+    this._cookies = (metadata.cookies || []).map(c => new Cookie(c));
 
     // Parse redirect history
     this._history = (metadata.history || []).map(h => new RedirectInfo(
@@ -465,7 +500,7 @@ class StreamResponse {
     this.finalUrl = metadata.final_url || "";
     this.protocol = metadata.protocol || "";
     this.contentLength = metadata.content_length || -1;
-    this._cookies = (metadata.cookies || []).map(c => new Cookie(c.name || "", c.value || ""));
+    this._cookies = (metadata.cookies || []).map(c => new Cookie(c));
     this._closed = false;
   }
 

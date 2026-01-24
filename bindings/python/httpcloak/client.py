@@ -210,14 +210,50 @@ class Cookie:
     Attributes:
         name: Cookie name
         value: Cookie value
+        domain: Cookie domain
+        path: Cookie path
+        expires: Expiration date (RFC1123 format)
+        max_age: Max age in seconds (0 means not set)
+        secure: Secure flag
+        http_only: HttpOnly flag
+        same_site: SameSite attribute (Strict, Lax, None)
     """
 
-    def __init__(self, name: str, value: str):
+    def __init__(
+        self,
+        name: str,
+        value: str,
+        domain: str = "",
+        path: str = "",
+        expires: str = "",
+        max_age: int = 0,
+        secure: bool = False,
+        http_only: bool = False,
+        same_site: str = "",
+    ):
         self.name = name
         self.value = value
+        self.domain = domain
+        self.path = path
+        self.expires = expires
+        self.max_age = max_age
+        self.secure = secure
+        self.http_only = http_only
+        self.same_site = same_site
 
     def __repr__(self):
-        return f"Cookie(name={self.name!r}, value={self.value!r})"
+        parts = [f"name={self.name!r}", f"value={self.value!r}"]
+        if self.domain:
+            parts.append(f"domain={self.domain!r}")
+        if self.path:
+            parts.append(f"path={self.path!r}")
+        if self.secure:
+            parts.append("secure=True")
+        if self.http_only:
+            parts.append("http_only=True")
+        if self.same_site:
+            parts.append(f"same_site={self.same_site!r}")
+        return f"Cookie({', '.join(parts)})"
 
 
 class RedirectInfo:
@@ -340,6 +376,13 @@ class Response:
                 cookies.append(Cookie(
                     name=cookie_data.get("name", ""),
                     value=cookie_data.get("value", ""),
+                    domain=cookie_data.get("domain", ""),
+                    path=cookie_data.get("path", ""),
+                    expires=cookie_data.get("expires", ""),
+                    max_age=cookie_data.get("max_age", 0),
+                    secure=cookie_data.get("secure", False),
+                    http_only=cookie_data.get("http_only", False),
+                    same_site=cookie_data.get("same_site", ""),
                 ))
 
         # Parse redirect history (use `or []` to handle null values)
@@ -1121,6 +1164,13 @@ def _parse_fast_response(lib, response_handle: int, elapsed: float = 0.0) -> Fas
                 cookies.append(Cookie(
                     name=cookie_data.get("name", ""),
                     value=cookie_data.get("value", ""),
+                    domain=cookie_data.get("domain", ""),
+                    path=cookie_data.get("path", ""),
+                    expires=cookie_data.get("expires", ""),
+                    max_age=cookie_data.get("max_age", 0),
+                    secure=cookie_data.get("secure", False),
+                    http_only=cookie_data.get("http_only", False),
+                    same_site=cookie_data.get("same_site", ""),
                 ))
 
         # Parse redirect history

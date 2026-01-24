@@ -53,10 +53,14 @@ type Session struct {
 
 	// Session's own transport with dedicated connection pool
 	transport *transport.Transport
-	cookies   map[string]string
+	cookies   *CookieJar
 
 	// Cache validation headers per URL (for If-None-Match, If-Modified-Since)
 	cacheEntries map[string]*cacheEntry
+
+	// Client hints requested by each host via Accept-CH header
+	// Key: host (e.g., "example.com"), Value: set of requested hint names
+	clientHints map[string]map[string]bool
 
 	mu     sync.RWMutex
 	active bool
@@ -143,8 +147,9 @@ func NewSessionWithOptions(id string, config *protocol.SessionConfig, opts *Sess
 		RequestCount: 0,
 		Config:       config,
 		transport:    t,
-		cookies:      make(map[string]string),
+		cookies:      NewCookieJar(),
 		cacheEntries: make(map[string]*cacheEntry),
+		clientHints:  make(map[string]map[string]bool),
 		active:       true,
 	}
 }
@@ -205,18 +210,19 @@ func (s *Session) requestWithRedirects(ctx context.Context, req *transport.Reque
 		}
 	}
 
+	// Extract host for client hints
+	host := extractHost(req.URL)
+
+	// Parse request URL for cookie matching
+	requestHost := extractHost(req.URL)
+	requestPath := extractPath(req.URL)
+	requestSecure := isSecureURL(req.URL)
+
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		// Add session cookies to request headers BEFORE each attempt
-		// Merge with any existing Cookie header (from per-request cookies)
-		s.mu.RLock()
-		if len(s.cookies) > 0 {
-			sessionCookies := ""
-			for name, value := range s.cookies {
-				if sessionCookies != "" {
-					sessionCookies += "; "
-				}
-				sessionCookies += name + "=" + value
-			}
+		// Use domain/path matching to only send relevant cookies
+		sessionCookies := s.cookies.BuildCookieHeader(requestHost, requestPath, requestSecure)
+		if sessionCookies != "" {
 			// Merge with existing cookies (per-request cookies take precedence for same name)
 			existingCookies := req.Headers["Cookie"]
 			if len(existingCookies) > 0 && existingCookies[0] != "" {
@@ -225,7 +231,9 @@ func (s *Session) requestWithRedirects(ctx context.Context, req *transport.Reque
 				req.Headers["Cookie"] = []string{sessionCookies}
 			}
 		}
-		s.mu.RUnlock()
+
+		// Apply high-entropy client hints if the host requested them via Accept-CH
+		s.applyClientHints(host, req.Headers)
 
 		resp, err = s.transport.Do(ctx, req)
 
@@ -237,7 +245,9 @@ func (s *Session) requestWithRedirects(ctx context.Context, req *transport.Reque
 		// Extract cookies from EVERY response (even 429s, 500s, etc.)
 		// This mimics browser behavior where cookies are stored regardless of status
 		if resp != nil {
-			s.extractCookies(resp.Headers)
+			s.extractCookies(resp.Headers, req.URL)
+			// Also parse Accept-CH from intermediate responses
+			s.parseAcceptCH(host, resp.Headers)
 		}
 
 		// Check if we should retry
@@ -282,7 +292,10 @@ func (s *Session) requestWithRedirects(ctx context.Context, req *transport.Reque
 	}
 
 	// Extract cookies from final response (in case we didn't retry or it's a success)
-	s.extractCookies(resp.Headers)
+	s.extractCookies(resp.Headers, req.URL)
+
+	// Parse Accept-CH header to store requested client hints for this host
+	s.parseAcceptCH(host, resp.Headers)
 
 	// Store cache validation headers from response for future requests
 	s.storeCacheHeaders(req.URL, resp.Headers)
@@ -403,8 +416,9 @@ func (s *Session) Post(ctx context.Context, url string, body []byte, headers map
 	})
 }
 
-// extractCookies extracts cookies from response headers
-func (s *Session) extractCookies(headers map[string][]string) {
+// extractCookies extracts cookies with full metadata from response headers
+// requestURL is the URL that was requested (needed for domain scoping)
+func (s *Session) extractCookies(headers map[string][]string, requestURL string) {
 	// Try both cases - some responses might have different casing
 	setCookies, exists := headers["set-cookie"]
 	if !exists {
@@ -414,31 +428,156 @@ func (s *Session) extractCookies(headers map[string][]string) {
 		return
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	requestHost := extractHost(requestURL)
+	requestSecure := isSecureURL(requestURL)
 
 	// Each Set-Cookie header is now a separate element in the slice
-	for _, cookie := range setCookies {
-		cookie = trim(cookie)
-		if cookie == "" {
+	for _, line := range setCookies {
+		line = trim(line)
+		if line == "" {
 			continue
 		}
 
-		// Get name=value before any semicolon (attributes like path, expires, etc.)
-		idx := indexOf(cookie, ";")
-		if idx != -1 {
-			cookie = cookie[:idx]
+		cookie := &CookieData{}
+
+		// Split by semicolon to get name=value and attributes
+		parts := splitBySemicolon(line)
+		if len(parts) == 0 {
+			continue
 		}
 
-		eqIdx := indexOf(cookie, "=")
-		if eqIdx != -1 {
-			name := trim(cookie[:eqIdx])
-			value := trim(cookie[eqIdx+1:])
-			if name != "" {
-				s.cookies[name] = value
+		// First part is name=value
+		firstPart := trim(parts[0])
+		eqIdx := indexOf(firstPart, "=")
+		if eqIdx == -1 {
+			continue
+		}
+		cookie.Name = trim(firstPart[:eqIdx])
+		cookie.Value = trim(firstPart[eqIdx+1:])
+		if cookie.Name == "" {
+			continue
+		}
+
+		// Parse attributes
+		for i := 1; i < len(parts); i++ {
+			attr := trim(parts[i])
+			if attr == "" {
+				continue
+			}
+
+			attrLower := toLowerASCII(attr)
+
+			// Check for flag attributes (no value)
+			if attrLower == "secure" {
+				cookie.Secure = true
+				continue
+			}
+			if attrLower == "httponly" {
+				cookie.HttpOnly = true
+				continue
+			}
+
+			// Check for key=value attributes
+			attrEqIdx := indexOf(attr, "=")
+			if attrEqIdx == -1 {
+				continue
+			}
+
+			attrName := toLowerASCII(trim(attr[:attrEqIdx]))
+			attrValue := trim(attr[attrEqIdx+1:])
+
+			switch attrName {
+			case "domain":
+				cookie.Domain = attrValue
+			case "path":
+				cookie.Path = attrValue
+			case "expires":
+				// Parse expiration time
+				if t, err := parseHTTPDate(attrValue); err == nil {
+					cookie.Expires = &t
+				}
+			case "max-age":
+				cookie.MaxAge = parseIntSimple(attrValue)
+			case "samesite":
+				// Normalize to capitalized form
+				sameSiteLower := toLowerASCII(attrValue)
+				switch sameSiteLower {
+				case "strict":
+					cookie.SameSite = "Strict"
+				case "lax":
+					cookie.SameSite = "Lax"
+				case "none":
+					cookie.SameSite = "None"
+				default:
+					cookie.SameSite = attrValue
+				}
 			}
 		}
+
+		// Use CookieJar to store with proper domain scoping
+		s.cookies.Set(requestHost, cookie, requestSecure)
 	}
+}
+
+// splitBySemicolon splits a string by semicolon
+func splitBySemicolon(s string) []string {
+	var result []string
+	var current string
+	for i := 0; i < len(s); i++ {
+		if s[i] == ';' {
+			result = append(result, current)
+			current = ""
+		} else {
+			current += string(s[i])
+		}
+	}
+	if current != "" {
+		result = append(result, current)
+	}
+	return result
+}
+
+// parseIntSimple parses an integer from a string, returns 0 on error
+func parseIntSimple(s string) int {
+	result := 0
+	negative := false
+	start := 0
+	if len(s) > 0 && s[0] == '-' {
+		negative = true
+		start = 1
+	}
+	for i := start; i < len(s); i++ {
+		if s[i] >= '0' && s[i] <= '9' {
+			result = result*10 + int(s[i]-'0')
+		} else {
+			break
+		}
+	}
+	if negative {
+		result = -result
+	}
+	return result
+}
+
+// parseHTTPDate parses an HTTP date string (RFC1123 format)
+func parseHTTPDate(s string) (time.Time, error) {
+	// Try RFC1123 format first (most common)
+	if t, err := time.Parse(time.RFC1123, s); err == nil {
+		return t, nil
+	}
+	// Try RFC1123Z (with numeric timezone)
+	if t, err := time.Parse(time.RFC1123Z, s); err == nil {
+		return t, nil
+	}
+	// Try RFC850 (obsolete but still used)
+	if t, err := time.Parse(time.RFC850, s); err == nil {
+		return t, nil
+	}
+	// Try ANSI C format
+	if t, err := time.Parse(time.ANSIC, s); err == nil {
+		return t, nil
+	}
+	return time.Time{}, fmt.Errorf("unable to parse date: %s", s)
 }
 
 // storeCacheHeaders extracts and stores cache validation headers from response
@@ -478,6 +617,213 @@ func (s *Session) storeCacheHeaders(url string, headers map[string][]string) {
 	}
 }
 
+// parseAcceptCH parses the Accept-CH response header and stores the requested client hints
+// for the given host. On subsequent requests to this host, the session will send the
+// high-entropy client hints that were requested.
+func (s *Session) parseAcceptCH(host string, headers map[string][]string) {
+	// Helper to get first value from header (case-insensitive)
+	getHeader := func(key string) string {
+		if values := headers[key]; len(values) > 0 {
+			return values[0]
+		}
+		return ""
+	}
+
+	// Look for Accept-CH header (case-insensitive)
+	acceptCH := getHeader("accept-ch")
+	if acceptCH == "" {
+		acceptCH = getHeader("Accept-CH")
+	}
+	if acceptCH == "" {
+		return
+	}
+
+	// Parse the comma-separated list of hint names
+	hints := make(map[string]bool)
+	for _, hint := range splitByComma(acceptCH) {
+		hint = trim(toLowerASCII(hint))
+		if hint != "" {
+			hints[hint] = true
+		}
+	}
+
+	if len(hints) == 0 {
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.clientHints[host] = hints
+}
+
+// applyClientHints adds high-entropy client hints headers to the request if the host
+// has previously requested them via Accept-CH header
+func (s *Session) applyClientHints(host string, headers map[string][]string) {
+	s.mu.RLock()
+	hints, exists := s.clientHints[host]
+	s.mu.RUnlock()
+
+	if !exists || len(hints) == 0 {
+		return
+	}
+
+	// Get platform info for generating hint values
+	platform := s.getPlatform()
+
+	// Map of hint names to their header names and values
+	// Only add hints that were explicitly requested via Accept-CH
+	hintValues := map[string]struct {
+		header string
+		value  string
+	}{
+		"sec-ch-ua-arch":              {"Sec-Ch-Ua-Arch", platform.Arch},
+		"sec-ch-ua-bitness":           {"Sec-Ch-Ua-Bitness", platform.Bitness},
+		"sec-ch-ua-full-version-list": {"Sec-Ch-Ua-Full-Version-List", platform.FullVersionList},
+		"sec-ch-ua-model":             {"Sec-Ch-Ua-Model", platform.Model},
+		"sec-ch-ua-platform-version":  {"Sec-Ch-Ua-Platform-Version", platform.PlatformVersion},
+		"sec-ch-ua-wow64":             {"Sec-Ch-Ua-Wow64", platform.Wow64},
+	}
+
+	for hintName, hintInfo := range hintValues {
+		if hints[hintName] && hintInfo.value != "" {
+			headers[hintInfo.header] = []string{hintInfo.value}
+		}
+	}
+}
+
+// platformInfo holds platform-specific values for client hints
+type platformInfo struct {
+	Arch            string // e.g., `"x86"`
+	Bitness         string // e.g., `"64"`
+	FullVersionList string // e.g., `"Google Chrome";v="131.0.0.0", ...`
+	Model           string // e.g., `""` for desktop
+	PlatformVersion string // e.g., `"15.0.0"` for macOS, `"10.0.0"` for Windows
+	Wow64           string // e.g., `?0` or `?1`
+}
+
+// getPlatform returns platform info based on the preset being used
+func (s *Session) getPlatform() platformInfo {
+	// Default values for Chrome on Linux x86_64
+	info := platformInfo{
+		Arch:            `"x86"`,
+		Bitness:         `"64"`,
+		Model:           `""`,
+		PlatformVersion: `"6.5.0"`, // Linux kernel version
+		Wow64:           "?0",
+	}
+
+	// Get full version list based on preset
+	presetName := "chrome-131"
+	if s.Config != nil && s.Config.Preset != "" {
+		presetName = s.Config.Preset
+	}
+
+	// Generate full version list based on preset
+	// Format: "Brand";v="full.version", ...
+	if contains(presetName, "chrome-131") {
+		info.FullVersionList = `"Google Chrome";v="131.0.6778.86", "Chromium";v="131.0.6778.86", "Not_A Brand";v="24.0.0.0"`
+	} else if contains(presetName, "chrome-133") {
+		info.FullVersionList = `"Google Chrome";v="133.0.6943.98", "Chromium";v="133.0.6943.98", "Not_A Brand";v="24.0.0.0"`
+	} else if contains(presetName, "chrome-141") {
+		info.FullVersionList = `"Google Chrome";v="141.0.7254.112", "Chromium";v="141.0.7254.112", "Not_A Brand";v="24.0.0.0"`
+	} else if contains(presetName, "chrome-143") {
+		info.FullVersionList = `"Google Chrome";v="143.0.7312.86", "Chromium";v="143.0.7312.86", "Not_A Brand";v="24.0.0.0"`
+	} else {
+		// Default Chrome version
+		info.FullVersionList = `"Google Chrome";v="131.0.6778.86", "Chromium";v="131.0.6778.86", "Not_A Brand";v="24.0.0.0"`
+	}
+
+	// Adjust platform-specific values
+	if contains(presetName, "windows") {
+		info.PlatformVersion = `"15.0.0"` // Windows 11
+	} else if contains(presetName, "macos") {
+		info.PlatformVersion = `"14.5.0"` // macOS Sonoma
+	}
+
+	return info
+}
+
+// Helper functions for client hints
+func splitByComma(s string) []string {
+	var result []string
+	var current string
+	for i := 0; i < len(s); i++ {
+		if s[i] == ',' {
+			result = append(result, current)
+			current = ""
+		} else {
+			current += string(s[i])
+		}
+	}
+	if current != "" {
+		result = append(result, current)
+	}
+	return result
+}
+
+func toLowerASCII(s string) string {
+	result := make([]byte, len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 'A' && c <= 'Z' {
+			c = c + 32
+		}
+		result[i] = c
+	}
+	return string(result)
+}
+
+func contains(s, substr string) bool {
+	return indexOf(s, substr) != -1
+}
+
+// extractHost extracts the host from a URL string
+func extractHost(urlStr string) string {
+	// Remove protocol prefix
+	host := urlStr
+	if idx := indexOf(host, "://"); idx != -1 {
+		host = host[idx+3:]
+	}
+	// Remove path
+	if idx := indexOf(host, "/"); idx != -1 {
+		host = host[:idx]
+	}
+	// Remove port for matching
+	if idx := indexOf(host, ":"); idx != -1 {
+		host = host[:idx]
+	}
+	return host
+}
+
+// extractPath extracts the path from a URL string
+func extractPath(urlStr string) string {
+	// Remove protocol prefix
+	path := urlStr
+	if idx := indexOf(path, "://"); idx != -1 {
+		path = path[idx+3:]
+	}
+	// Find path start
+	if idx := indexOf(path, "/"); idx != -1 {
+		path = path[idx:]
+		// Remove query string
+		if qIdx := indexOf(path, "?"); qIdx != -1 {
+			path = path[:qIdx]
+		}
+		// Remove fragment
+		if fIdx := indexOf(path, "#"); fIdx != -1 {
+			path = path[:fIdx]
+		}
+		return path
+	}
+	return "/"
+}
+
+// isSecureURL returns true if the URL uses HTTPS
+func isSecureURL(urlStr string) bool {
+	return len(urlStr) >= 8 && urlStr[:8] == "https://"
+}
+
 // IsActive returns whether the session is active
 func (s *Session) IsActive() bool {
 	s.mu.RLock()
@@ -507,39 +853,31 @@ func (s *Session) Touch() {
 	s.LastUsed = time.Now()
 }
 
-// GetCookies returns all cookies for this session
+// GetCookies returns all cookies for this session (name -> value)
+// Note: This returns a flat map for backward compatibility. Multiple cookies
+// with the same name from different domains will only show the last one.
 func (s *Session) GetCookies() map[string]string {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	cookies := make(map[string]string)
-	for k, v := range s.cookies {
-		cookies[k] = v
-	}
-	return cookies
+	return s.cookies.GetAll()
 }
 
 // SetCookie sets a cookie for this session
+// Note: This sets a "global" cookie that will be sent to all domains.
+// For domain-specific cookies, use Set-Cookie headers from responses.
 func (s *Session) SetCookie(name, value string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.cookies[name] = value
+	s.cookies.SetSimple(name, value)
 }
 
 // SetCookies sets multiple cookies for this session
+// Note: These are "global" cookies that will be sent to all domains.
 func (s *Session) SetCookies(cookies map[string]string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	for k, v := range cookies {
-		s.cookies[k] = v
+		s.cookies.SetSimple(k, v)
 	}
 }
 
 // ClearCookies removes all cookies from this session
 func (s *Session) ClearCookies() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.cookies = make(map[string]string)
+	s.cookies.Clear()
 }
 
 // ClearCache clears all cached URLs (removes If-None-Match/If-Modified-Since headers)
@@ -727,7 +1065,7 @@ func (s *Session) Stats() SessionStats {
 		LastUsed:        s.LastUsed,
 		RequestCount:    s.RequestCount,
 		Active:          s.active,
-		CookieCount:     len(s.cookies),
+		CookieCount:     s.cookies.Count(),
 		CacheEntryCount: len(s.cacheEntries),
 		Age:             time.Since(s.CreatedAt),
 		IdleTime:        time.Since(s.LastUsed),
@@ -843,15 +1181,12 @@ func (s *Session) RequestStream(ctx context.Context, req *transport.Request) (*S
 		req.Headers = make(map[string][]string)
 	}
 
-	// Add session cookies to request headers
-	if len(s.cookies) > 0 {
-		sessionCookies := ""
-		for name, value := range s.cookies {
-			if sessionCookies != "" {
-				sessionCookies += "; "
-			}
-			sessionCookies += name + "=" + value
-		}
+	// Add session cookies to request headers using proper domain/path matching
+	requestHost := extractHost(req.URL)
+	requestPath := extractPath(req.URL)
+	requestSecure := isSecureURL(req.URL)
+	sessionCookies := s.cookies.BuildCookieHeader(requestHost, requestPath, requestSecure)
+	if sessionCookies != "" {
 		existingCookies := req.Headers["Cookie"]
 		if len(existingCookies) > 0 && existingCookies[0] != "" {
 			req.Headers["Cookie"] = []string{existingCookies[0] + "; " + sessionCookies}
@@ -868,7 +1203,7 @@ func (s *Session) RequestStream(ctx context.Context, req *transport.Request) (*S
 	}
 
 	// Extract cookies from response
-	s.extractCookies(resp.Headers)
+	s.extractCookies(resp.Headers, req.URL)
 
 	return resp, nil
 }
@@ -946,24 +1281,19 @@ func resolveURL(base, ref string) string {
 
 // ==================== Session Persistence ====================
 
-// exportCookies exports all cookies as a slice of CookieState
-func (s *Session) exportCookies() []CookieState {
-	cookies := make([]CookieState, 0, len(s.cookies))
-	for name, value := range s.cookies {
-		cookies = append(cookies, CookieState{
-			Name:  name,
-			Value: value,
-			Path:  "/", // Default path
-		})
-	}
-	return cookies
+// exportCookies exports all cookies in v5 format (domain-keyed)
+func (s *Session) exportCookies() map[string][]CookieState {
+	return s.cookies.Export()
 }
 
-// importCookies imports cookies from a slice of CookieState
-func (s *Session) importCookies(cookies []CookieState) {
-	for _, cookie := range cookies {
-		s.cookies[cookie.Name] = cookie.Value
-	}
+// importCookies imports cookies from v5 format (domain-keyed)
+func (s *Session) importCookies(cookies map[string][]CookieState) {
+	s.cookies.Import(cookies)
+}
+
+// importCookiesV4 imports cookies from v4 format (flat list)
+func (s *Session) importCookiesV4(cookies []CookieState) {
+	s.cookies.ImportV4(cookies)
 }
 
 // exportTLSSessions exports TLS sessions from all transport caches
@@ -1201,7 +1531,12 @@ func UnmarshalSession(data []byte) (*Session, error) {
 		return unmarshalSessionV3(data)
 	}
 
-	// Handle v4+ format (full config)
+	// Handle v4 format (flat cookie list)
+	if versionCheck.Version == 4 {
+		return unmarshalSessionV4(data)
+	}
+
+	// Handle v5 format (domain-keyed cookies)
 	var state SessionState
 	if err := json.Unmarshal(data, &state); err != nil {
 		return nil, fmt.Errorf("failed to parse session data: %w", err)
@@ -1218,7 +1553,7 @@ func UnmarshalSession(data []byte) (*Session, error) {
 	session := NewSession("", config)
 	session.CreatedAt = state.CreatedAt
 
-	// Import cookies
+	// Import cookies (v5 format)
 	session.mu.Lock()
 	session.importCookies(state.Cookies)
 	session.mu.Unlock()
@@ -1230,6 +1565,40 @@ func UnmarshalSession(data []byte) (*Session, error) {
 	// Import TLS sessions
 	if err := session.importTLSSessions(state.TLSSessions); err != nil {
 		// Log but don't fail - cookies are the main thing
+	}
+
+	return session, nil
+}
+
+// unmarshalSessionV4 handles loading v4 format sessions (flat cookie list)
+func unmarshalSessionV4(data []byte) (*Session, error) {
+	var state SessionStateV4
+	if err := json.Unmarshal(data, &state); err != nil {
+		return nil, fmt.Errorf("failed to parse v4 session data: %w", err)
+	}
+
+	// Use the full config from the saved state
+	config := state.Config
+	if config == nil {
+		config = &protocol.SessionConfig{
+			Preset: "chrome-131",
+		}
+	}
+
+	session := NewSession("", config)
+	session.CreatedAt = state.CreatedAt
+
+	// Import cookies from v4 format (flat list)
+	session.mu.Lock()
+	session.importCookiesV4(state.Cookies)
+	session.mu.Unlock()
+
+	// Import ECH configs FIRST
+	session.importECHConfigs(state.ECHConfigs)
+
+	// Import TLS sessions
+	if err := session.importTLSSessions(state.TLSSessions); err != nil {
+		// Log but don't fail
 	}
 
 	return session, nil
@@ -1255,9 +1624,9 @@ func unmarshalSessionV3(data []byte) (*Session, error) {
 	session := NewSession("", config)
 	session.CreatedAt = state.CreatedAt
 
-	// Import cookies
+	// Import cookies from v3 format (flat list, same as v4)
 	session.mu.Lock()
-	session.importCookies(state.Cookies)
+	session.importCookiesV4(state.Cookies)
 	session.mu.Unlock()
 
 	// Import ECH configs
@@ -1300,7 +1669,16 @@ func ValidateSessionFile(path string) error {
 		if state.Preset == "" {
 			return fmt.Errorf("missing preset in session file")
 		}
+	} else if versionCheck.Version == 4 {
+		var state SessionStateV4
+		if err := json.Unmarshal(data, &state); err != nil {
+			return fmt.Errorf("invalid JSON: %w", err)
+		}
+		if state.Config == nil || state.Config.Preset == "" {
+			return fmt.Errorf("missing preset in session file")
+		}
 	} else {
+		// v5+
 		var state SessionState
 		if err := json.Unmarshal(data, &state); err != nil {
 			return fmt.Errorf("invalid JSON: %w", err)

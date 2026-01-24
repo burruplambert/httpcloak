@@ -161,8 +161,15 @@ type RequestConfig struct {
 
 // Cookie represents a parsed cookie from Set-Cookie header
 type Cookie struct {
-	Name  string `json:"name"`
-	Value string `json:"value"`
+	Name     string `json:"name"`
+	Value    string `json:"value"`
+	Domain   string `json:"domain,omitempty"`
+	Path     string `json:"path,omitempty"`
+	Expires  string `json:"expires,omitempty"`  // RFC1123 format or empty
+	MaxAge   int    `json:"max_age,omitempty"`  // seconds, 0 means not set
+	Secure   bool   `json:"secure,omitempty"`
+	HttpOnly bool   `json:"http_only,omitempty"`
+	SameSite string `json:"same_site,omitempty"` // "Strict", "Lax", "None", or empty
 }
 
 // RedirectInfo contains information about a redirect response
@@ -261,23 +268,139 @@ func parseSetCookieHeaders(headers map[string][]string) []Cookie {
 			continue
 		}
 
-		// Get name=value before any semicolon (attributes like path, expires, etc.)
-		semicolonIdx := indexOf(line, ";")
-		if semicolonIdx != -1 {
-			line = line[:semicolonIdx]
+		cookie := Cookie{}
+
+		// Split by semicolon to get name=value and attributes
+		parts := splitBySemicolon(line)
+		if len(parts) == 0 {
+			continue
 		}
 
-		eqIdx := indexOf(line, "=")
-		if eqIdx != -1 {
-			name := trim(line[:eqIdx])
-			value := trim(line[eqIdx+1:])
-			if name != "" {
-				cookies = append(cookies, Cookie{Name: name, Value: value})
+		// First part is name=value
+		firstPart := trim(parts[0])
+		eqIdx := indexOf(firstPart, "=")
+		if eqIdx == -1 {
+			continue
+		}
+		cookie.Name = trim(firstPart[:eqIdx])
+		cookie.Value = trim(firstPart[eqIdx+1:])
+		if cookie.Name == "" {
+			continue
+		}
+
+		// Parse attributes
+		for i := 1; i < len(parts); i++ {
+			attr := trim(parts[i])
+			if attr == "" {
+				continue
+			}
+
+			attrLower := toLower(attr)
+
+			// Check for flag attributes (no value)
+			if attrLower == "secure" {
+				cookie.Secure = true
+				continue
+			}
+			if attrLower == "httponly" {
+				cookie.HttpOnly = true
+				continue
+			}
+
+			// Check for key=value attributes
+			attrEqIdx := indexOf(attr, "=")
+			if attrEqIdx == -1 {
+				continue
+			}
+
+			attrName := toLower(trim(attr[:attrEqIdx]))
+			attrValue := trim(attr[attrEqIdx+1:])
+
+			switch attrName {
+			case "domain":
+				cookie.Domain = attrValue
+			case "path":
+				cookie.Path = attrValue
+			case "expires":
+				cookie.Expires = attrValue
+			case "max-age":
+				cookie.MaxAge = parseInt(attrValue)
+			case "samesite":
+				// Normalize to capitalized form
+				sameSiteLower := toLower(attrValue)
+				switch sameSiteLower {
+				case "strict":
+					cookie.SameSite = "Strict"
+				case "lax":
+					cookie.SameSite = "Lax"
+				case "none":
+					cookie.SameSite = "None"
+				default:
+					cookie.SameSite = attrValue
+				}
 			}
 		}
+
+		cookies = append(cookies, cookie)
 	}
 
 	return cookies
+}
+
+// splitBySemicolon splits a string by semicolon
+func splitBySemicolon(s string) []string {
+	var result []string
+	var current string
+	for i := 0; i < len(s); i++ {
+		if s[i] == ';' {
+			result = append(result, current)
+			current = ""
+		} else {
+			current += string(s[i])
+		}
+	}
+	if current != "" {
+		result = append(result, current)
+	}
+	return result
+}
+
+// toLower converts a string to lowercase (simple ASCII)
+func toLower(s string) string {
+	result := make([]byte, len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 'A' && c <= 'Z' {
+			c = c + 32
+		}
+		result[i] = c
+	}
+	return string(result)
+}
+
+// parseInt parses an integer from a string, returns 0 on error
+func parseInt(s string) int {
+	result := 0
+	negative := false
+	i := 0
+
+	if len(s) > 0 && s[0] == '-' {
+		negative = true
+		i = 1
+	}
+
+	for ; i < len(s); i++ {
+		c := s[i]
+		if c < '0' || c > '9' {
+			break
+		}
+		result = result*10 + int(c-'0')
+	}
+
+	if negative {
+		return -result
+	}
+	return result
 }
 
 // Helper functions for cookie parsing

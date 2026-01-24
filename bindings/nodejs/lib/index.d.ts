@@ -11,6 +11,20 @@ export class Cookie {
   name: string;
   /** Cookie value */
   value: string;
+  /** Cookie domain */
+  domain: string;
+  /** Cookie path */
+  path: string;
+  /** Expiration date (RFC1123 format) */
+  expires: string;
+  /** Max age in seconds (0 means not set) */
+  maxAge: number;
+  /** Secure flag */
+  secure: boolean;
+  /** HttpOnly flag */
+  httpOnly: boolean;
+  /** SameSite attribute (Strict, Lax, None) */
+  sameSite: string;
 }
 
 export class RedirectInfo {
