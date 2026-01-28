@@ -272,12 +272,13 @@ public sealed class Session : IDisposable
         if (timeout != null)
             return Request("GET", url, null, headers, timeout, auth);
 
-        string? headersJson = headers.Count > 0
-            ? JsonSerializer.Serialize(headers, JsonContext.Default.DictionaryStringString)
+        // Wrap headers in RequestOptions as expected by clib
+        string? optionsJson = headers.Count > 0
+            ? JsonSerializer.Serialize(new RequestOptions { Headers = headers }, JsonContext.Default.RequestOptions)
             : null;
 
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-        IntPtr resultPtr = Native.Get(_handle, url, headersJson);
+        IntPtr resultPtr = Native.Get(_handle, url, optionsJson);
         stopwatch.Stop();
 
         return ParseResponse(resultPtr, stopwatch.Elapsed);
@@ -304,12 +305,13 @@ public sealed class Session : IDisposable
         if (timeout != null)
             return Request("POST", url, body, headers, timeout, auth);
 
-        string? headersJson = headers.Count > 0
-            ? JsonSerializer.Serialize(headers, JsonContext.Default.DictionaryStringString)
+        // Wrap headers in RequestOptions as expected by clib
+        string? optionsJson = headers.Count > 0
+            ? JsonSerializer.Serialize(new RequestOptions { Headers = headers }, JsonContext.Default.RequestOptions)
             : null;
 
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-        IntPtr resultPtr = Native.Post(_handle, url, body, headersJson);
+        IntPtr resultPtr = Native.Post(_handle, url, body, optionsJson);
         stopwatch.Stop();
 
         return ParseResponse(resultPtr, stopwatch.Elapsed);
