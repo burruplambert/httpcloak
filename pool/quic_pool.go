@@ -424,11 +424,20 @@ func (p *QUICHostPool) createConn(ctx context.Context) (*QUICConn, error) {
 	// Generate non-zero random 32-bit value (Chrome never sends 0)
 	greaseSettingValue := uint64(1 + rand.Uint32()%(1<<32-1))
 
-	// Chrome-like HTTP/3 additional settings
+	// HTTP/3 QPACK settings - Safari/iOS uses different values than Chrome
+	// Safari/iOS: QPACK_MAX_TABLE_CAPACITY=16383 (0x3fff)
+	// Chrome: QPACK_MAX_TABLE_CAPACITY=65536 (0x10000)
+	qpackMaxTableCapacity := uint64(65536) // Chrome default
+	if p.preset != nil && p.preset.HTTP2Settings.NoRFC7540Priorities {
+		// Safari/iOS uses smaller QPACK table
+		qpackMaxTableCapacity = 16383
+	}
+
+	// HTTP/3 additional settings
 	additionalSettings := map[uint64]uint64{
-		settingQPACKMaxTableCapacity: 65536,             // Chrome's QPACK table capacity
-		settingQPACKBlockedStreams:   100,               // Chrome's blocked streams limit
-		greaseSettingID:              greaseSettingValue, // Random non-zero GREASE value
+		settingQPACKMaxTableCapacity: qpackMaxTableCapacity, // Browser-specific QPACK table capacity
+		settingQPACKBlockedStreams:   100,                   // Both Chrome and Safari use 100
+		greaseSettingID:              greaseSettingValue,    // Random non-zero GREASE value
 	}
 
 	// Order IPs based on preference

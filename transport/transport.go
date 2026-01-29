@@ -1602,8 +1602,13 @@ func applyPresetHeaders(httpReq *http.Request, preset *fingerprint.Preset, custo
 		}
 	}
 
-	// Set pseudo-header order (Chrome uses :method, :authority, :scheme, :path)
-	httpReq.Header[http.PHeaderOrderKey] = []string{":method", ":authority", ":scheme", ":path"}
+	// Set pseudo-header order based on browser type
+	// Safari/iOS uses m,s,p,a; Chrome uses m,a,s,p
+	if preset.HTTP2Settings.NoRFC7540Priorities {
+		httpReq.Header[http.PHeaderOrderKey] = []string{":method", ":scheme", ":path", ":authority"}
+	} else {
+		httpReq.Header[http.PHeaderOrderKey] = []string{":method", ":authority", ":scheme", ":path"}
+	}
 }
 
 // isChromePreset returns true if the preset name indicates a Chrome fingerprint.

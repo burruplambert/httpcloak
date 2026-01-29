@@ -286,12 +286,20 @@ func NewHTTP3TransportWithTransportConfig(preset *fingerprint.Preset, dnsCache *
 	// Generate non-zero random 32-bit value (Chrome never sends 0)
 	greaseSettingValue := uint64(1 + rand.Uint32()%(1<<32-1))
 
-	// Chrome-like HTTP/3 settings
-	// These match what Chrome 143 sends in SETTINGS frame
+	// HTTP/3 QPACK settings - Safari/iOS uses different values than Chrome
+	// Safari/iOS: QPACK_MAX_TABLE_CAPACITY=16383 (0x3fff)
+	// Chrome: QPACK_MAX_TABLE_CAPACITY=65536 (0x10000)
+	qpackMaxTableCapacity := uint64(65536) // Chrome default
+	if t.preset != nil && t.preset.HTTP2Settings.NoRFC7540Priorities {
+		// Safari/iOS uses smaller QPACK table
+		qpackMaxTableCapacity = 16383
+	}
+
+	// HTTP/3 settings - browser-specific QPACK configuration
 	additionalSettings := map[uint64]uint64{
-		settingQPACKMaxTableCapacity: 65536,             // Chrome's QPACK table capacity
-		settingQPACKBlockedStreams:   100,               // Chrome's blocked streams limit
-		greaseSettingID:              greaseSettingValue, // GREASE setting
+		settingQPACKMaxTableCapacity: qpackMaxTableCapacity, // Browser-specific QPACK table capacity
+		settingQPACKBlockedStreams:   100,                   // Both Chrome and Safari use 100
+		greaseSettingID:              greaseSettingValue,    // GREASE setting
 	}
 
 	// Create QUIC transport for direct connections
@@ -460,8 +468,14 @@ func NewHTTP3TransportWithConfig(preset *fingerprint.Preset, dnsCache *dns.Cache
 	greaseSettingID := generateGREASESettingID()
 	greaseSettingValue := uint64(1 + rand.Uint32()%(1<<32-1))
 
+	// HTTP/3 QPACK settings - Safari/iOS uses different values than Chrome
+	qpackMaxTableCapacity := uint64(65536) // Chrome default
+	if t.preset != nil && t.preset.HTTP2Settings.NoRFC7540Priorities {
+		qpackMaxTableCapacity = 16383 // Safari/iOS uses smaller QPACK table
+	}
+
 	additionalSettings := map[uint64]uint64{
-		settingQPACKMaxTableCapacity: 65536,
+		settingQPACKMaxTableCapacity: qpackMaxTableCapacity,
 		settingQPACKBlockedStreams:   100,
 		greaseSettingID:              greaseSettingValue,
 	}
@@ -612,8 +626,14 @@ func NewHTTP3TransportWithMASQUE(preset *fingerprint.Preset, dnsCache *dns.Cache
 	greaseSettingID := generateGREASESettingID()
 	greaseSettingValue := uint64(1 + rand.Uint32()%(1<<32-1))
 
+	// HTTP/3 QPACK settings - Safari/iOS uses different values than Chrome
+	qpackMaxTableCapacityMASQUE := uint64(65536) // Chrome default
+	if t.preset != nil && t.preset.HTTP2Settings.NoRFC7540Priorities {
+		qpackMaxTableCapacityMASQUE = 16383 // Safari/iOS uses smaller QPACK table
+	}
+
 	additionalSettings := map[uint64]uint64{
-		settingQPACKMaxTableCapacity: 65536,
+		settingQPACKMaxTableCapacity: qpackMaxTableCapacityMASQUE,
 		settingQPACKBlockedStreams:   100,
 		greaseSettingID:              greaseSettingValue,
 	}
