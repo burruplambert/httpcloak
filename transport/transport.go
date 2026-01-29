@@ -1054,9 +1054,14 @@ func (t *Transport) doHTTP1(ctx context.Context, req *Request) (*Response, error
 	applyPresetHeaders(httpReq, t.preset, t.getHeaderOrder(), t.tlsOnly, "h1")
 
 	// Override with custom headers (multi-value support)
+	// Use Set for first value to replace preset headers, Add for additional values
 	for key, values := range req.Headers {
-		for _, value := range values {
-			httpReq.Header.Add(key, value)
+		for i, value := range values {
+			if i == 0 {
+				httpReq.Header.Set(key, value)
+			} else {
+				httpReq.Header.Add(key, value)
+			}
 		}
 	}
 
@@ -1155,9 +1160,14 @@ func (t *Transport) doHTTP1WithTLSConn(ctx context.Context, req *Request, alpnEr
 	applyPresetHeaders(httpReq, t.preset, t.getHeaderOrder(), t.tlsOnly, "h1")
 
 	// Override with custom headers (multi-value support)
+	// Use Set for first value to replace preset headers, Add for additional values
 	for key, values := range req.Headers {
-		for _, value := range values {
-			httpReq.Header.Add(key, value)
+		for i, value := range values {
+			if i == 0 {
+				httpReq.Header.Set(key, value)
+			} else {
+				httpReq.Header.Add(key, value)
+			}
 		}
 	}
 
@@ -1263,9 +1273,14 @@ func (t *Transport) doHTTP2(ctx context.Context, req *Request) (*Response, error
 	applyPresetHeaders(httpReq, t.preset, t.getHeaderOrder(), t.tlsOnly, "h2")
 
 	// Override with custom headers (multi-value support)
+	// Use Set for first value to replace preset headers, Add for additional values
 	for key, values := range req.Headers {
-		for _, value := range values {
-			httpReq.Header.Add(key, value)
+		for i, value := range values {
+			if i == 0 {
+				httpReq.Header.Set(key, value)
+			} else {
+				httpReq.Header.Add(key, value)
+			}
 		}
 	}
 
@@ -1386,9 +1401,14 @@ func (t *Transport) doHTTP3(ctx context.Context, req *Request) (*Response, error
 	applyPresetHeaders(httpReq, t.preset, t.getHeaderOrder(), t.tlsOnly, "h3")
 
 	// Override with custom headers (multi-value support)
+	// Use Set for first value to replace preset headers, Add for additional values
 	for key, values := range req.Headers {
-		for _, value := range values {
-			httpReq.Header.Add(key, value)
+		for i, value := range values {
+			if i == 0 {
+				httpReq.Header.Set(key, value)
+			} else {
+				httpReq.Header.Add(key, value)
+			}
 		}
 	}
 
