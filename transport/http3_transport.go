@@ -1107,6 +1107,73 @@ func (t *HTTP3Transport) Close() error {
 	return nil
 }
 
+// Refresh closes all QUIC connections but keeps the TLS session cache intact.
+// This simulates a browser page refresh - new QUIC connections but TLS resumption.
+func (t *HTTP3Transport) Refresh() error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	// Close the current transport (this closes all QUIC connections)
+	if t.transport != nil {
+		t.transport.Close()
+	}
+
+	// Close and recreate quicTransport if it exists (for direct connections)
+	if t.quicTransport != nil && t.socks5Conn == nil && t.masqueConn == nil {
+		t.quicTransport.Close()
+		// Create new UDP socket
+		udpConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
+		if err != nil {
+			udpConn, err = net.ListenUDP("udp6", &net.UDPAddr{IP: net.IPv6zero, Port: 0})
+			if err != nil {
+				return fmt.Errorf("failed to create UDP socket: %w", err)
+			}
+		}
+		t.quicTransport = &quic.Transport{
+			Conn: udpConn,
+		}
+	}
+
+	// Generate GREASE values
+	greaseSettingID := uint64(0x1f*rand.Intn(256)+0x21) | 0x0f0f0f0f00000000
+	greaseSettingValue := uint64(rand.Intn(256))
+
+	// Build additional settings matching original creation
+	additionalSettings := map[uint64]uint64{
+		settingQPACKMaxTableCapacity: 65536,
+		settingQPACKBlockedStreams:   100,
+		greaseSettingID:              greaseSettingValue,
+	}
+	// Add Chrome-specific settings (not sent by Safari/iOS)
+	if t.preset == nil || !t.preset.HTTP2Settings.NoRFC7540Priorities {
+		additionalSettings[settingMaxFieldSectionSize] = 262144
+		additionalSettings[settingH3Datagram] = 1
+	}
+
+	// Determine which dial function to use and recreate transport
+	var dialFunc func(ctx context.Context, addr string, tlsCfg *tls.Config, cfg *quic.Config) (*quic.Conn, error)
+	if t.masqueConn != nil {
+		dialFunc = t.dialQUICWithMASQUE
+	} else if t.socks5Conn != nil {
+		dialFunc = t.dialQUICWithProxy
+	} else {
+		dialFunc = t.dialQUIC
+	}
+
+	// Recreate the transport with same configuration
+	t.transport = &http3.Transport{
+		TLSClientConfig:        t.tlsConfig,
+		QUICConfig:             t.quicConfig,
+		Dial:                   dialFunc,
+		EnableDatagrams:        true,
+		AdditionalSettings:     additionalSettings,
+		MaxResponseHeaderBytes: 262144,
+		SendGreaseFrames:       true,
+	}
+
+	return nil
+}
+
 // GetSessionCache returns the TLS session cache
 func (t *HTTP3Transport) GetSessionCache() tls.ClientSessionCache {
 	return t.sessionCache

@@ -154,19 +154,23 @@ func NewHostPool(host, port string, preset *fingerprint.Preset, dnsCache *dns.Ca
 			cachedPSKSpec = &spec
 		}
 	}
-	return NewHostPoolWithConfig(host, port, preset, dnsCache, false, "", cachedSpec, cachedPSKSpec, shuffleSeed)
+	return NewHostPoolWithConfig(host, port, preset, dnsCache, false, "", cachedSpec, cachedPSKSpec, shuffleSeed, nil)
 }
 
 // NewHostPoolWithConfig creates a pool with TLS and proxy configuration
-func NewHostPoolWithConfig(host, port string, preset *fingerprint.Preset, dnsCache *dns.Cache, insecureSkipVerify bool, proxyURL string, cachedSpec, cachedPSKSpec *utls.ClientHelloSpec, shuffleSeed int64) *HostPool {
+func NewHostPoolWithConfig(host, port string, preset *fingerprint.Preset, dnsCache *dns.Cache, insecureSkipVerify bool, proxyURL string, cachedSpec, cachedPSKSpec *utls.ClientHelloSpec, shuffleSeed int64, sessionCache utls.ClientSessionCache) *HostPool {
+	// Use provided session cache or create a new one for backward compatibility
+	if sessionCache == nil {
+		sessionCache = utls.NewLRUClientSessionCache(32)
+	}
 	pool := &HostPool{
 		host:               host,
 		port:               port,
 		preset:             preset,
 		dnsCache:           dnsCache,
 		connections:        make([]*Conn, 0),
-		sessionCache:       utls.NewLRUClientSessionCache(32), // Cache up to 32 sessions per host
-		maxConns:           0,                                 // 0 = unlimited connections
+		sessionCache:       sessionCache, // Use shared session cache for persistence
+		maxConns:           0,            // 0 = unlimited connections
 		maxIdleTime:        90 * time.Second,
 		maxConnAge:         5 * time.Minute,
 		connectTimeout:     30 * time.Second,
@@ -915,6 +919,10 @@ type Manager struct {
 	cachedPSKSpec *utls.ClientHelloSpec
 	shuffleSeed   int64 // Seed used for extension shuffling
 
+	// Shared session cache for TLS session resumption across all pools
+	// This allows session persistence to work across Save/Load
+	sessionCache utls.ClientSessionCache
+
 	// Background cleanup
 	cleanupInterval time.Duration
 	stopCleanup     chan struct{}
@@ -1007,6 +1015,21 @@ func (m *Manager) SetMaxConnsPerHost(max int) {
 	m.maxConnsPerHost = max
 }
 
+// SetSessionCache sets the shared TLS session cache for all pools
+// This allows session persistence to work across Save/Load
+func (m *Manager) SetSessionCache(cache utls.ClientSessionCache) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.sessionCache = cache
+}
+
+// GetSessionCache returns the shared TLS session cache
+func (m *Manager) GetSessionCache() utls.ClientSessionCache {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.sessionCache
+}
+
 // GetPool returns a pool for the given host, creating one if needed
 func (m *Manager) GetPool(host, port string) (*HostPool, error) {
 	if port == "" {
@@ -1039,7 +1062,7 @@ func (m *Manager) GetPool(host, port string) (*HostPool, error) {
 		return pool, nil
 	}
 
-	pool = NewHostPoolWithConfig(host, port, m.preset, m.dnsCache, m.insecureSkipVerify, m.proxyURL, m.cachedSpec, m.cachedPSKSpec, m.shuffleSeed)
+	pool = NewHostPoolWithConfig(host, port, m.preset, m.dnsCache, m.insecureSkipVerify, m.proxyURL, m.cachedSpec, m.cachedPSKSpec, m.shuffleSeed, m.sessionCache)
 	if m.maxConnsPerHost > 0 {
 		pool.SetMaxConns(m.maxConnsPerHost)
 	}

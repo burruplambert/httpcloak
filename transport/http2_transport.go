@@ -3,20 +3,22 @@ package transport
 import (
 	"bufio"
 	"context"
-	tls "github.com/sardanioss/utls"
+	crand "crypto/rand"
 	"encoding/base64"
+	"encoding/binary"
 	"fmt"
 	"net"
-	http "github.com/sardanioss/http"
 	"net/url"
 	"sync"
 	"time"
 
+	http "github.com/sardanioss/http"
 	"github.com/sardanioss/httpcloak/dns"
 	"github.com/sardanioss/httpcloak/fingerprint"
 	"github.com/sardanioss/httpcloak/proxy"
 	"github.com/sardanioss/net/http2"
 	"github.com/sardanioss/net/http2/hpack"
+	tls "github.com/sardanioss/utls"
 	utls "github.com/sardanioss/utls"
 )
 
@@ -35,10 +37,14 @@ type HTTP2Transport struct {
 	// TLS session resumption cache (shared across connections)
 	sessionCache utls.ClientSessionCache
 
-	// Cached ClientHelloSpec - shuffled once on transport creation, reused for all connections
-	// This matches Chrome's behavior: shuffle TLS extensions once per session, not per connection
-	cachedSpec    *utls.ClientHelloSpec
-	cachedPSKSpec *utls.ClientHelloSpec
+	// Shuffle seed for consistent TLS extension order across all connections
+	// Chrome shuffles extensions once per session, not per connection
+	// Each connection needs a fresh spec (ApplyPreset mutates it), but same seed
+	shuffleSeed int64
+
+	// Cached spec presence flags - indicate if preset supports these specs
+	// We don't cache the actual spec objects as ApplyPreset mutates them
+	hasPSKSpec bool
 
 	// Configuration
 	maxIdleTime        time.Duration
@@ -90,6 +96,16 @@ func NewHTTP2TransportWithConfig(preset *fingerprint.Preset, dnsCache *dns.Cache
 		sessionCache = NewPersistableSessionCache()
 	}
 
+	// Generate random seed for TLS extension shuffling
+	// Chrome shuffles extensions once per session, not per connection
+	// This seed ensures consistent ordering across all connections in this transport
+	var seedBytes [8]byte
+	crand.Read(seedBytes[:])
+	shuffleSeed := int64(binary.LittleEndian.Uint64(seedBytes[:]))
+
+	// Check if PSK spec is available for this preset
+	hasPSKSpec := preset.PSKClientHelloID.Client != ""
+
 	t := &HTTP2Transport{
 		preset:         preset,
 		dnsCache:       dnsCache,
@@ -97,24 +113,12 @@ func NewHTTP2TransportWithConfig(preset *fingerprint.Preset, dnsCache *dns.Cache
 		config:         config,
 		conns:          make(map[string]*persistentConn),
 		sessionCache:   sessionCache,
+		shuffleSeed:    shuffleSeed,
+		hasPSKSpec:     hasPSKSpec,
 		maxIdleTime:    90 * time.Second,
 		maxConnAge:     5 * time.Minute,
 		connectTimeout: 30 * time.Second,
 		stopCleanup:    make(chan struct{}),
-	}
-
-	// Generate and cache ClientHelloSpec once - this includes TLS extension shuffle
-	// Chrome shuffles extensions once at startup, not per connection
-	// This makes our fingerprint consistent within a session like real Chrome
-	if spec, err := utls.UTLSIdToSpec(preset.ClientHelloID); err == nil {
-		t.cachedSpec = &spec
-	}
-
-	// Also cache PSK variant if available
-	if preset.PSKClientHelloID.Client != "" {
-		if spec, err := utls.UTLSIdToSpec(preset.PSKClientHelloID); err == nil {
-			t.cachedPSKSpec = &spec
-		}
 	}
 
 	// Start background cleanup
@@ -286,15 +290,21 @@ func (t *HTTP2Transport) createConn(ctx context.Context, host, port string) (*pe
 		tcpConn.SetKeepAlivePeriod(30 * time.Second)
 	}
 
-	// Determine which cached spec to use:
-	// Always use PSK spec when available - Chrome always includes the PSK extension structure
-	// in ClientHello, it's just empty on first connection and populated on resumption.
-	// This avoids TOCTOU race: checking session cache here but session arriving before handshake.
+	// Generate fresh spec for this connection to avoid race condition
+	// utls's ApplyPreset mutates the spec (clears KeyShares.Data, etc.), so each
+	// connection needs its own copy. Use same shuffleSeed for consistent ordering.
 	var specToUse *utls.ClientHelloSpec
-	if t.cachedPSKSpec != nil {
-		specToUse = t.cachedPSKSpec
-	} else {
-		specToUse = t.cachedSpec
+	if t.hasPSKSpec {
+		// Generate fresh PSK spec for this connection
+		if spec, err := utls.UTLSIdToSpecWithSeed(t.preset.PSKClientHelloID, t.shuffleSeed); err == nil {
+			specToUse = &spec
+		}
+	}
+	if specToUse == nil {
+		// Generate fresh regular spec
+		if spec, err := utls.UTLSIdToSpecWithSeed(t.preset.ClientHelloID, t.shuffleSeed); err == nil {
+			specToUse = &spec
+		}
 	}
 
 	// Fetch ECH config if needed
@@ -329,27 +339,27 @@ func (t *HTTP2Transport) createConn(ctx context.Context, host, port string) (*pe
 
 	// Only enable session cache if we have PSK spec - prevents panic when session
 	// is cached but spec doesn't have PSK extension (TOCTOU race mitigation)
-	if t.cachedPSKSpec != nil {
+	if t.hasPSKSpec {
 		tlsConfig.ClientSessionCache = t.sessionCache
 	}
 
-	// Create UClient with HelloCustom and apply our cached spec
-	// This ensures the TLS extension order is consistent across all connections
+	// Create UClient with HelloCustom and apply our fresh spec
+	// This ensures the TLS extension order is consistent across all connections (same seed)
 	var tlsConn *utls.UConn
 	if specToUse != nil {
-		// Use cached spec - extension order is preserved from transport creation
+		// Use fresh spec - extension order is consistent from shuffle seed
 		tlsConn = utls.UClient(rawConn, tlsConfig, utls.HelloCustom)
 		if err := tlsConn.ApplyPreset(specToUse); err != nil {
 			rawConn.Close()
 			return nil, fmt.Errorf("failed to apply TLS preset: %w", err)
 		}
 	} else {
-		// Fallback to ClientHelloID if spec caching failed
+		// Fallback to ClientHelloID if spec generation failed
 		tlsConn = utls.UClient(rawConn, tlsConfig, t.preset.ClientHelloID)
 	}
 
 	// Set session cache for TLS resumption (only if PSK spec available)
-	if t.cachedPSKSpec != nil {
+	if t.hasPSKSpec {
 		tlsConn.SetSessionCache(t.sessionCache)
 	}
 
@@ -644,6 +654,24 @@ func (t *HTTP2Transport) Close() {
 		go conn.close()
 	}
 	t.conns = nil
+}
+
+// Refresh closes all connections but keeps the TLS session cache intact.
+// This simulates a browser page refresh - new TCP connections but TLS resumption.
+func (t *HTTP2Transport) Refresh() {
+	t.connsMu.Lock()
+	defer t.connsMu.Unlock()
+
+	if t.closed {
+		return
+	}
+
+	// Close all connections
+	for _, conn := range t.conns {
+		go conn.close()
+	}
+	// Reset the map but keep session cache
+	t.conns = make(map[string]*persistentConn)
 }
 
 // GetSessionCache returns the TLS session cache

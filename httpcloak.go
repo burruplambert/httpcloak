@@ -670,6 +670,13 @@ func (s *Session) Close() {
 	s.inner.Close()
 }
 
+// Refresh closes all connections but keeps TLS session caches and cookies intact.
+// This simulates a browser page refresh - new TCP/QUIC connections but TLS resumption.
+// Useful for resetting connection state without losing session tickets or cookies.
+func (s *Session) Refresh() {
+	s.inner.Refresh()
+}
+
 // Save exports session state (cookies, TLS sessions) to a file
 func (s *Session) Save(path string) error {
 	return s.inner.Save(path)

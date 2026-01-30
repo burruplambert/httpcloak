@@ -1483,6 +1483,15 @@ func (t *Transport) Close() {
 	t.h3Transport.Close()
 }
 
+// Refresh closes all connections but keeps TLS session caches intact.
+// This simulates a browser page refresh - new TCP/QUIC connections but TLS resumption.
+// Useful for resetting connection state without losing session tickets.
+func (t *Transport) Refresh() {
+	t.h1Transport.Refresh()
+	t.h2Transport.Refresh()
+	t.h3Transport.Refresh()
+}
+
 // Stats returns transport statistics
 func (t *Transport) Stats() map[string]interface{} {
 	return map[string]interface{}{

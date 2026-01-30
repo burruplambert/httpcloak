@@ -967,6 +967,29 @@ func (t *HTTP1Transport) Close() {
 	t.idleConnsMu.Unlock()
 }
 
+// Refresh closes all connections but keeps the TLS session cache intact.
+// This simulates a browser page refresh - new TCP connections but TLS resumption.
+func (t *HTTP1Transport) Refresh() {
+	t.closedMu.RLock()
+	if t.closed {
+		t.closedMu.RUnlock()
+		return
+	}
+	t.closedMu.RUnlock()
+
+	t.idleConnsMu.Lock()
+	defer t.idleConnsMu.Unlock()
+
+	// Close all idle connections
+	for _, conns := range t.idleConns {
+		for _, conn := range conns {
+			go conn.close()
+		}
+	}
+	// Reset the map but keep session cache
+	t.idleConns = make(map[string][]*http1Conn)
+}
+
 // SetProxy changes the proxy configuration and closes all existing connections
 // HTTP/1.1 connections are short-lived, but we close idle ones for cleanliness
 func (t *HTTP1Transport) SetProxy(proxy *ProxyConfig) {

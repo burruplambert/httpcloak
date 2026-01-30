@@ -132,7 +132,7 @@ func Chrome133() *Preset {
 			StreamWeight:           256,
 			StreamExclusive:        true,
 		},
-		SupportHTTP3: true,
+		SupportHTTP3: false, // Legacy preset, no proper QUIC fingerprint
 	}
 }
 
@@ -187,7 +187,7 @@ func Chrome141() *Preset {
 			StreamWeight:           256,
 			StreamExclusive:        true,
 		},
-		SupportHTTP3: true,
+		SupportHTTP3: false, // Legacy preset, no proper QUIC fingerprint
 	}
 }
 
@@ -229,7 +229,7 @@ func Firefox133() *Preset {
 			StreamWeight:           42,
 			StreamExclusive:        false,
 		},
-		SupportHTTP3: true,
+		SupportHTTP3: false, // No Firefox QUIC fingerprint in utls
 	}
 }
 

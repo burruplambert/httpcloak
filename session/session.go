@@ -846,6 +846,22 @@ func (s *Session) Close() {
 	}
 }
 
+// Refresh closes all connections but keeps TLS session caches and cookies intact.
+// This simulates a browser page refresh - new TCP/QUIC connections but TLS resumption.
+// Useful for resetting connection state without losing session tickets or cookies.
+func (s *Session) Refresh() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.active {
+		return
+	}
+
+	if s.transport != nil {
+		s.transport.Refresh()
+	}
+}
+
 // Touch updates the last used timestamp
 func (s *Session) Touch() {
 	s.mu.Lock()
