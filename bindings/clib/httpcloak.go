@@ -7,6 +7,7 @@ package main
 typedef void (*async_callback)(int64_t callback_id, const char* response_json, const char* error);
 
 // Session cache callbacks - called by Go to get/put TLS sessions from external cache
+// SYNC mode: returns result immediately
 // get: returns JSON string with session data, or NULL if not found
 // put: stores session data, returns 0 on success, non-zero on error
 // delete: removes session, returns 0 on success
@@ -19,6 +20,13 @@ typedef void (*session_cache_error_callback)(const char* operation, const char* 
 typedef char* (*ech_cache_get_callback)(const char* key);
 typedef int (*ech_cache_put_callback)(const char* key, const char* value_base64, int64_t ttl_seconds);
 
+// ASYNC mode: callbacks notify JS, JS calls back with result via httpcloak_async_cache_*_result
+typedef void (*async_cache_get_callback)(int64_t request_id, const char* key);
+typedef void (*async_cache_put_callback)(int64_t request_id, const char* key, const char* value_json, int64_t ttl_seconds);
+typedef void (*async_cache_delete_callback)(int64_t request_id, const char* key);
+typedef void (*async_ech_get_callback)(int64_t request_id, const char* key);
+typedef void (*async_ech_put_callback)(int64_t request_id, const char* key, const char* value_base64, int64_t ttl_seconds);
+
 // Helper function to invoke callback from Go
 static void invoke_callback(async_callback cb, int64_t callback_id, const char* response_json, const char* error) {
     if (cb != NULL) {
@@ -26,7 +34,7 @@ static void invoke_callback(async_callback cb, int64_t callback_id, const char* 
     }
 }
 
-// Helper functions to invoke session cache callbacks
+// Helper functions to invoke SYNC session cache callbacks
 static char* invoke_cache_get(session_cache_get_callback cb, const char* key) {
     if (cb != NULL) {
         return cb(key);
@@ -66,6 +74,37 @@ static int invoke_ech_put(ech_cache_put_callback cb, const char* key, const char
         return cb(key, value_base64, ttl_seconds);
     }
     return -1;
+}
+
+// Helper functions to invoke ASYNC session cache callbacks
+static void invoke_async_cache_get(async_cache_get_callback cb, int64_t request_id, const char* key) {
+    if (cb != NULL) {
+        cb(request_id, key);
+    }
+}
+
+static void invoke_async_cache_put(async_cache_put_callback cb, int64_t request_id, const char* key, const char* value_json, int64_t ttl_seconds) {
+    if (cb != NULL) {
+        cb(request_id, key, value_json, ttl_seconds);
+    }
+}
+
+static void invoke_async_cache_delete(async_cache_delete_callback cb, int64_t request_id, const char* key) {
+    if (cb != NULL) {
+        cb(request_id, key);
+    }
+}
+
+static void invoke_async_ech_get(async_ech_get_callback cb, int64_t request_id, const char* key) {
+    if (cb != NULL) {
+        cb(request_id, key);
+    }
+}
+
+static void invoke_async_ech_put(async_ech_put_callback cb, int64_t request_id, const char* key, const char* value_base64, int64_t ttl_seconds) {
+    if (cb != NULL) {
+        cb(request_id, key, value_base64, ttl_seconds);
+    }
 }
 */
 import "C"
@@ -820,7 +859,7 @@ func httpcloak_request_raw(handle C.int64_t, requestJSON *C.char, body *C.char, 
 //export httpcloak_session_new
 func httpcloak_session_new(configJSON *C.char) C.int64_t {
 	config := SessionConfig{
-		Preset:      "chrome-143",
+		Preset:      "chrome-144",
 		Timeout:     30,
 		HTTPVersion: "auto",
 	}
@@ -1662,6 +1701,7 @@ func httpcloak_version() *C.char {
 func httpcloak_available_presets() *C.char {
 	// Must match exactly what's in fingerprint/presets.go
 	presets := []string{
+		"chrome-144", "chrome-144-windows", "chrome-144-linux", "chrome-144-macos",
 		"chrome-143", "chrome-143-windows", "chrome-143-linux", "chrome-143-macos",
 		"chrome-141", "chrome-133", "chrome-131",
 		"ios-chrome-143", "android-chrome-143",
@@ -1888,11 +1928,316 @@ func (c *CErrorCallback) Call(operation, key string, err error) {
 	C.invoke_cache_error(c.callback, opC, keyC, errC)
 }
 
-// Global session cache callbacks (set via httpcloak_set_session_cache_callbacks)
+// ============================================================================
+// Async Session Cache Backend (for async JS callbacks like Redis)
+// ============================================================================
+
+// asyncCacheGetResult holds the result of an async cache get operation
+type asyncCacheGetResult struct {
+	value string
+	found bool
+}
+
+// asyncCacheOpResult holds the result of an async cache put/delete operation
+type asyncCacheOpResult struct {
+	success bool
+}
+
+// Pending async cache requests
 var (
-	globalSessionCacheMu      sync.RWMutex
-	globalSessionCacheBackend *CSessionCacheBackend
-	globalSessionCacheError   *CErrorCallback
+	asyncCacheRequestsMu sync.RWMutex
+	asyncCacheRequestID  int64
+	asyncCacheGetResults    = make(map[int64]chan asyncCacheGetResult)
+	asyncCacheOpResults     = make(map[int64]chan asyncCacheOpResult)
+	asyncCacheTimeout       = 30 * time.Second // Timeout for async operations
+)
+
+// CAsyncSessionCacheBackend wraps async C callbacks to implement transport.SessionCacheBackend
+type CAsyncSessionCacheBackend struct {
+	getCallback    C.async_cache_get_callback
+	putCallback    C.async_cache_put_callback
+	deleteCallback C.async_cache_delete_callback
+	echGetCallback C.async_ech_get_callback
+	echPutCallback C.async_ech_put_callback
+}
+
+// NewCAsyncSessionCacheBackend creates a new async C callback-backed session cache
+func NewCAsyncSessionCacheBackend(
+	getCallback C.async_cache_get_callback,
+	putCallback C.async_cache_put_callback,
+	deleteCallback C.async_cache_delete_callback,
+	echGetCallback C.async_ech_get_callback,
+	echPutCallback C.async_ech_put_callback,
+) *CAsyncSessionCacheBackend {
+	return &CAsyncSessionCacheBackend{
+		getCallback:    getCallback,
+		putCallback:    putCallback,
+		deleteCallback: deleteCallback,
+		echGetCallback: echGetCallback,
+		echPutCallback: echPutCallback,
+	}
+}
+
+// registerGetRequest creates a new async get request and returns the request ID and result channel
+func registerGetRequest() (int64, chan asyncCacheGetResult) {
+	asyncCacheRequestsMu.Lock()
+	defer asyncCacheRequestsMu.Unlock()
+
+	asyncCacheRequestID++
+	id := asyncCacheRequestID
+	ch := make(chan asyncCacheGetResult, 1)
+	asyncCacheGetResults[id] = ch
+	return id, ch
+}
+
+// registerOpRequest creates a new async op request and returns the request ID and result channel
+func registerOpRequest() (int64, chan asyncCacheOpResult) {
+	asyncCacheRequestsMu.Lock()
+	defer asyncCacheRequestsMu.Unlock()
+
+	asyncCacheRequestID++
+	id := asyncCacheRequestID
+	ch := make(chan asyncCacheOpResult, 1)
+	asyncCacheOpResults[id] = ch
+	return id, ch
+}
+
+// cleanupGetRequest removes a get request from the pending map
+func cleanupGetRequest(id int64) {
+	asyncCacheRequestsMu.Lock()
+	defer asyncCacheRequestsMu.Unlock()
+	delete(asyncCacheGetResults, id)
+}
+
+// cleanupOpRequest removes an op request from the pending map
+func cleanupOpRequest(id int64) {
+	asyncCacheRequestsMu.Lock()
+	defer asyncCacheRequestsMu.Unlock()
+	delete(asyncCacheOpResults, id)
+}
+
+// Get retrieves a TLS session from the external async cache
+func (c *CAsyncSessionCacheBackend) Get(ctx context.Context, key string) (*transport.TLSSessionState, error) {
+	if c.getCallback == nil {
+		return nil, nil
+	}
+
+	// Register request and get channel
+	requestID, resultCh := registerGetRequest()
+	defer cleanupGetRequest(requestID)
+
+	keyC := C.CString(key)
+	defer C.free(unsafe.Pointer(keyC))
+
+	// Invoke async callback - JS will call httpcloak_async_cache_get_result when done
+	C.invoke_async_cache_get(c.getCallback, C.int64_t(requestID), keyC)
+
+	// Wait for result with timeout
+	select {
+	case result := <-resultCh:
+		if !result.found || result.value == "" {
+			return nil, nil
+		}
+		var session transport.TLSSessionState
+		if err := json.Unmarshal([]byte(result.value), &session); err != nil {
+			return nil, fmt.Errorf("decode session: %w", err)
+		}
+		return &session, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-time.After(asyncCacheTimeout):
+		return nil, fmt.Errorf("async cache get timeout")
+	}
+}
+
+// Put stores a TLS session in the external async cache
+func (c *CAsyncSessionCacheBackend) Put(ctx context.Context, key string, session *transport.TLSSessionState, ttl time.Duration) error {
+	if c.putCallback == nil {
+		return nil
+	}
+
+	sessionJSON, err := json.Marshal(session)
+	if err != nil {
+		return fmt.Errorf("encode session: %w", err)
+	}
+
+	// Register request and get channel
+	requestID, resultCh := registerOpRequest()
+	defer cleanupOpRequest(requestID)
+
+	keyC := C.CString(key)
+	defer C.free(unsafe.Pointer(keyC))
+
+	valueC := C.CString(string(sessionJSON))
+	defer C.free(unsafe.Pointer(valueC))
+
+	ttlSeconds := int64(ttl.Seconds())
+
+	// Invoke async callback
+	C.invoke_async_cache_put(c.putCallback, C.int64_t(requestID), keyC, valueC, C.int64_t(ttlSeconds))
+
+	// Wait for result with timeout
+	select {
+	case result := <-resultCh:
+		if !result.success {
+			return fmt.Errorf("async cache put failed")
+		}
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(asyncCacheTimeout):
+		return fmt.Errorf("async cache put timeout")
+	}
+}
+
+// Delete removes a session from the external async cache
+func (c *CAsyncSessionCacheBackend) Delete(ctx context.Context, key string) error {
+	if c.deleteCallback == nil {
+		return nil
+	}
+
+	// Register request and get channel
+	requestID, resultCh := registerOpRequest()
+	defer cleanupOpRequest(requestID)
+
+	keyC := C.CString(key)
+	defer C.free(unsafe.Pointer(keyC))
+
+	// Invoke async callback
+	C.invoke_async_cache_delete(c.deleteCallback, C.int64_t(requestID), keyC)
+
+	// Wait for result with timeout
+	select {
+	case result := <-resultCh:
+		if !result.success {
+			return fmt.Errorf("async cache delete failed")
+		}
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(asyncCacheTimeout):
+		return fmt.Errorf("async cache delete timeout")
+	}
+}
+
+// GetECHConfig retrieves ECH config from the external async cache
+func (c *CAsyncSessionCacheBackend) GetECHConfig(ctx context.Context, key string) ([]byte, error) {
+	if c.echGetCallback == nil {
+		return nil, nil
+	}
+
+	// Register request and get channel
+	requestID, resultCh := registerGetRequest()
+	defer cleanupGetRequest(requestID)
+
+	keyC := C.CString(key)
+	defer C.free(unsafe.Pointer(keyC))
+
+	// Invoke async callback
+	C.invoke_async_ech_get(c.echGetCallback, C.int64_t(requestID), keyC)
+
+	// Wait for result with timeout
+	select {
+	case result := <-resultCh:
+		if !result.found || result.value == "" {
+			return nil, nil
+		}
+		// Decode base64
+		data, err := base64.StdEncoding.DecodeString(result.value)
+		if err != nil {
+			return nil, fmt.Errorf("decode ech config: %w", err)
+		}
+		return data, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-time.After(asyncCacheTimeout):
+		return nil, fmt.Errorf("async ech get timeout")
+	}
+}
+
+// PutECHConfig stores ECH config in the external async cache
+func (c *CAsyncSessionCacheBackend) PutECHConfig(ctx context.Context, key string, config []byte, ttl time.Duration) error {
+	if c.echPutCallback == nil {
+		return nil
+	}
+
+	// Register request and get channel
+	requestID, resultCh := registerOpRequest()
+	defer cleanupOpRequest(requestID)
+
+	keyC := C.CString(key)
+	defer C.free(unsafe.Pointer(keyC))
+
+	valueBase64 := base64.StdEncoding.EncodeToString(config)
+	valueC := C.CString(valueBase64)
+	defer C.free(unsafe.Pointer(valueC))
+
+	ttlSeconds := int64(ttl.Seconds())
+
+	// Invoke async callback
+	C.invoke_async_ech_put(c.echPutCallback, C.int64_t(requestID), keyC, valueC, C.int64_t(ttlSeconds))
+
+	// Wait for result with timeout
+	select {
+	case result := <-resultCh:
+		if !result.success {
+			return fmt.Errorf("async ech put failed")
+		}
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(asyncCacheTimeout):
+		return fmt.Errorf("async ech put timeout")
+	}
+}
+
+//export httpcloak_async_cache_get_result
+func httpcloak_async_cache_get_result(requestID C.int64_t, value *C.char) {
+	asyncCacheRequestsMu.RLock()
+	ch, ok := asyncCacheGetResults[int64(requestID)]
+	asyncCacheRequestsMu.RUnlock()
+
+	if !ok {
+		return // Request already cleaned up or invalid
+	}
+
+	result := asyncCacheGetResult{found: value != nil}
+	if value != nil {
+		result.value = C.GoString(value)
+	}
+
+	select {
+	case ch <- result:
+	default:
+		// Channel full or closed
+	}
+}
+
+//export httpcloak_async_cache_op_result
+func httpcloak_async_cache_op_result(requestID C.int64_t, success C.int) {
+	asyncCacheRequestsMu.RLock()
+	ch, ok := asyncCacheOpResults[int64(requestID)]
+	asyncCacheRequestsMu.RUnlock()
+
+	if !ok {
+		return // Request already cleaned up or invalid
+	}
+
+	result := asyncCacheOpResult{success: success == 0}
+
+	select {
+	case ch <- result:
+	default:
+		// Channel full or closed
+	}
+}
+
+// Global session cache callbacks (set via httpcloak_set_session_cache_callbacks or httpcloak_set_async_session_cache_callbacks)
+var (
+	globalSessionCacheMu           sync.RWMutex
+	globalSessionCacheBackend      *CSessionCacheBackend      // Sync backend
+	globalAsyncSessionCacheBackend *CAsyncSessionCacheBackend // Async backend
+	globalSessionCacheError        *CErrorCallback
 )
 
 //export httpcloak_set_session_cache_callbacks
@@ -1906,6 +2251,9 @@ func httpcloak_set_session_cache_callbacks(
 ) {
 	globalSessionCacheMu.Lock()
 	defer globalSessionCacheMu.Unlock()
+
+	// Clear async backend when setting sync callbacks
+	globalAsyncSessionCacheBackend = nil
 
 	if getCallback == nil && putCallback == nil {
 		// Clear callbacks
@@ -1929,22 +2277,56 @@ func httpcloak_set_session_cache_callbacks(
 	}
 }
 
+//export httpcloak_set_async_session_cache_callbacks
+func httpcloak_set_async_session_cache_callbacks(
+	getCallback C.async_cache_get_callback,
+	putCallback C.async_cache_put_callback,
+	deleteCallback C.async_cache_delete_callback,
+	echGetCallback C.async_ech_get_callback,
+	echPutCallback C.async_ech_put_callback,
+	errorCallback C.session_cache_error_callback,
+) {
+	globalSessionCacheMu.Lock()
+	defer globalSessionCacheMu.Unlock()
+
+	// Clear sync backend when setting async callbacks
+	globalSessionCacheBackend = nil
+
+	if getCallback == nil && putCallback == nil {
+		// Clear callbacks
+		globalAsyncSessionCacheBackend = nil
+		globalSessionCacheError = nil
+		return
+	}
+
+	globalAsyncSessionCacheBackend = NewCAsyncSessionCacheBackend(
+		getCallback,
+		putCallback,
+		deleteCallback,
+		echGetCallback,
+		echPutCallback,
+	)
+
+	if errorCallback != nil {
+		globalSessionCacheError = &CErrorCallback{callback: errorCallback}
+	} else {
+		globalSessionCacheError = nil
+	}
+}
+
 //export httpcloak_clear_session_cache_callbacks
 func httpcloak_clear_session_cache_callbacks() {
 	globalSessionCacheMu.Lock()
 	defer globalSessionCacheMu.Unlock()
 	globalSessionCacheBackend = nil
+	globalAsyncSessionCacheBackend = nil
 	globalSessionCacheError = nil
 }
 
-// getSessionCacheBackend returns the global session cache backend if configured
+// getSessionCacheBackend returns the global session cache backend if configured (sync or async)
 func getSessionCacheBackend() (transport.SessionCacheBackend, transport.ErrorCallback) {
 	globalSessionCacheMu.RLock()
 	defer globalSessionCacheMu.RUnlock()
-
-	if globalSessionCacheBackend == nil {
-		return nil, nil
-	}
 
 	var errorCallback transport.ErrorCallback
 	if globalSessionCacheError != nil {
@@ -1954,7 +2336,16 @@ func getSessionCacheBackend() (transport.SessionCacheBackend, transport.ErrorCal
 		}
 	}
 
-	return globalSessionCacheBackend, errorCallback
+	// Prefer async backend if set
+	if globalAsyncSessionCacheBackend != nil {
+		return globalAsyncSessionCacheBackend, errorCallback
+	}
+
+	if globalSessionCacheBackend != nil {
+		return globalSessionCacheBackend, errorCallback
+	}
+
+	return nil, nil
 }
 
 // ============================================================================
@@ -1983,7 +2374,7 @@ type LocalProxyConfig struct {
 func httpcloak_local_proxy_start(configJSON *C.char) C.int64_t {
 	config := LocalProxyConfig{
 		Port:           0,
-		Preset:         "chrome-143",
+		Preset:         "chrome-144",
 		Timeout:        30,
 		MaxConnections: 1000,
 	}

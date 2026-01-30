@@ -132,13 +132,20 @@ class Preset:
         session = httpcloak.Session(preset=httpcloak.Preset.FIREFOX_133)
 
     All available presets:
-        Desktop Chrome: CHROME_143, CHROME_143_WINDOWS, CHROME_143_LINUX, CHROME_143_MACOS
+        Desktop Chrome: CHROME_144, CHROME_144_WINDOWS, CHROME_144_LINUX, CHROME_144_MACOS
+                        CHROME_143, CHROME_143_WINDOWS, CHROME_143_LINUX, CHROME_143_MACOS
                         CHROME_141, CHROME_133, CHROME_131
         Mobile Chrome: IOS_CHROME_143, ANDROID_CHROME_143
         Firefox: FIREFOX_133
         Safari: SAFARI_18, IOS_SAFARI_17
     """
-    # Chrome 143 (latest)
+    # Chrome 144 (latest)
+    CHROME_144 = "chrome-144"
+    CHROME_144_WINDOWS = "chrome-144-windows"
+    CHROME_144_LINUX = "chrome-144-linux"
+    CHROME_144_MACOS = "chrome-144-macos"
+
+    # Chrome 143
     CHROME_143 = "chrome-143"
     CHROME_143_WINDOWS = "chrome-143-windows"
     CHROME_143_LINUX = "chrome-143-linux"
@@ -158,7 +165,9 @@ class Preset:
 
     # Mobile Chrome
     IOS_CHROME_143 = "ios-chrome-143"
+    IOS_CHROME_144 = "ios-chrome-144"
     ANDROID_CHROME_143 = "android-chrome-143"
+    ANDROID_CHROME_144 = "android-chrome-144"
 
     # Firefox
     FIREFOX_133 = "firefox-133"
@@ -166,16 +175,18 @@ class Preset:
     # Safari (desktop and mobile)
     SAFARI_18 = "safari-18"
     IOS_SAFARI_17 = "ios-safari-17"
+    IOS_SAFARI_18 = "ios-safari-18"
 
     @classmethod
     def all(cls) -> List[str]:
         """Return list of all available preset names."""
         return [
+            cls.CHROME_144, cls.CHROME_144_WINDOWS, cls.CHROME_144_LINUX, cls.CHROME_144_MACOS,
             cls.CHROME_143, cls.CHROME_143_WINDOWS, cls.CHROME_143_LINUX, cls.CHROME_143_MACOS,
             cls.CHROME_141, cls.CHROME_133, cls.CHROME_131,
-            cls.IOS_CHROME_143, cls.ANDROID_CHROME_143,
+            cls.IOS_CHROME_143, cls.IOS_CHROME_144, cls.ANDROID_CHROME_143, cls.ANDROID_CHROME_144,
             cls.FIREFOX_133,
-            cls.SAFARI_18, cls.IOS_SAFARI_17,
+            cls.SAFARI_18, cls.IOS_SAFARI_17, cls.IOS_SAFARI_18,
         ]
 
 
@@ -1334,7 +1345,7 @@ class Session:
     API is compatible with requests.Session.
 
     Args:
-        preset: Browser preset (default: "chrome-143")
+        preset: Browser preset (default: "chrome-144")
         proxy: Proxy URL (e.g., "http://user:pass@host:port" or "socks5://host:port")
         tcp_proxy: Proxy URL for TCP protocols (HTTP/1.1, HTTP/2) - use with udp_proxy for split config
         udp_proxy: Proxy URL for UDP protocols (HTTP/3 via MASQUE) - use with tcp_proxy for split config
@@ -1382,7 +1393,7 @@ class Session:
 
     def __init__(
         self,
-        preset: str = "chrome-143",
+        preset: str = "chrome-144",
         proxy: Optional[str] = None,
         tcp_proxy: Optional[str] = None,
         udp_proxy: Optional[str] = None,
@@ -3198,7 +3209,7 @@ _default_config: Dict[str, Any] = {}
 
 
 def configure(
-    preset: str = "chrome-143",
+    preset: str = "chrome-144",
     headers: Optional[Dict[str, str]] = None,
     auth: Optional[Tuple[str, str]] = None,
     proxy: Optional[str] = None,
@@ -3218,7 +3229,7 @@ def configure(
     All subsequent calls to httpcloak.get(), httpcloak.post(), etc. will use these defaults.
 
     Args:
-        preset: Browser preset (default: "chrome-143")
+        preset: Browser preset (default: "chrome-144")
         headers: Default headers for all requests
         auth: Default basic auth tuple (username, password)
         proxy: Proxy URL (e.g., "http://user:pass@host:port")
@@ -3317,7 +3328,7 @@ class LocalProxy:
     def __init__(
         self,
         port: int = 0,
-        preset: str = "chrome-143",
+        preset: str = "chrome-144",
         timeout: int = 30,
         max_connections: int = 1000,
         tcp_proxy: Optional[str] = None,
@@ -3329,7 +3340,7 @@ class LocalProxy:
 
         Args:
             port: Port to listen on (0 = auto-select available port)
-            preset: Browser fingerprint preset (default: "chrome-143")
+            preset: Browser fingerprint preset (default: "chrome-144")
             timeout: Request timeout in seconds (default: 30)
             max_connections: Maximum concurrent connections (default: 1000)
             tcp_proxy: Default upstream TCP proxy URL (can be overridden per-request)
@@ -3844,7 +3855,7 @@ def _get_default_session() -> Session:
     if _default_session is None:
         with _default_session_lock:
             if _default_session is None:
-                preset = _default_config.get("preset", "chrome-143")
+                preset = _default_config.get("preset", "chrome-144")
                 proxy = _default_config.get("proxy")
                 timeout = _default_config.get("timeout", 30)
                 http_version = _default_config.get("http_version", "auto")
@@ -3907,7 +3918,7 @@ def _get_session_for_request(kwargs: dict) -> Tuple[Session, bool]:
         return _get_default_session(), False
 
     # Get current defaults and apply overrides
-    final_preset = preset if preset is not None else _default_config.get("preset", "chrome-143")
+    final_preset = preset if preset is not None else _default_config.get("preset", "chrome-144")
     final_proxy = proxy if proxy is not None else _default_config.get("proxy")
     final_tcp_proxy = tcp_proxy if tcp_proxy is not None else _default_config.get("tcp_proxy")
     final_udp_proxy = udp_proxy if udp_proxy is not None else _default_config.get("udp_proxy")

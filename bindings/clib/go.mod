@@ -24,3 +24,6 @@ require (
 
 // Use local httpcloak (same repo)
 replace github.com/sardanioss/httpcloak => ../..
+
+// Use local utls fork with Chrome 144
+replace github.com/sardanioss/utls => ../../../utls

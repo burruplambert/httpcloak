@@ -49,11 +49,15 @@
     "koffi": "^2.9.0"
   },
   "optionalDependencies": {
-    "@httpcloak/linux-x64": "1.5.9",
-    "@httpcloak/linux-arm64": "1.5.9",
-    "@httpcloak/darwin-x64": "1.5.9",
     "@httpcloak/darwin-arm64": "1.5.9",
-    "@httpcloak/win32-x64": "1.5.9",
-    "@httpcloak/win32-arm64": "1.5.9"
+    "@httpcloak/darwin-x64": "1.5.9",
+    "@httpcloak/linux-arm64": "1.5.9",
+    "@httpcloak/linux-x64": "1.5.9",
+    "@httpcloak/win32-arm64": "1.5.9",
+    "@httpcloak/win32-x64": "1.5.9"
+  },
+  "devDependencies": {
+    "@types/node": "^25.1.0",
+    "typescript": "^5.9.3"
   }
 }

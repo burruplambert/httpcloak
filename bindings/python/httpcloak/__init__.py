@@ -17,7 +17,7 @@ Example:
 
     # Configure defaults (preset, headers, proxy)
     httpcloak.configure(
-        preset="chrome-143-windows",
+        preset="chrome-144-windows",
         headers={"Authorization": "Bearer token"},
     )
     r = httpcloak.get("https://example.com")  # uses configured preset

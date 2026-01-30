@@ -51,7 +51,9 @@ const Preset = {
 
   // Mobile Chrome
   IOS_CHROME_143: "ios-chrome-143",
+  IOS_CHROME_144: "ios-chrome-144",
   ANDROID_CHROME_143: "android-chrome-143",
+  ANDROID_CHROME_144: "android-chrome-144",
 
   // Firefox
   FIREFOX_133: "firefox-133",
@@ -59,6 +61,7 @@ const Preset = {
   // Safari (desktop and mobile)
   SAFARI_18: "safari-18",
   IOS_SAFARI_17: "ios-safari-17",
+  IOS_SAFARI_18: "ios-safari-18",
 
   /**
    * Get all available preset names
@@ -66,11 +69,12 @@ const Preset = {
    */
   all() {
     return [
+      this.CHROME_144, this.CHROME_144_WINDOWS, this.CHROME_144_LINUX, this.CHROME_144_MACOS,
       this.CHROME_143, this.CHROME_143_WINDOWS, this.CHROME_143_LINUX, this.CHROME_143_MACOS,
       this.CHROME_141, this.CHROME_133, this.CHROME_131,
-      this.IOS_CHROME_143, this.ANDROID_CHROME_143,
+      this.IOS_CHROME_143, this.IOS_CHROME_144, this.ANDROID_CHROME_143, this.ANDROID_CHROME_144,
       this.FIREFOX_133,
-      this.SAFARI_18, this.IOS_SAFARI_17,
+      this.SAFARI_18, this.IOS_SAFARI_17, this.IOS_SAFARI_18,
     ];
   },
 };
@@ -728,13 +732,20 @@ function getLibPath() {
 // Define callback proto globally for koffi (must be before getLib)
 const AsyncCallbackProto = koffi.proto("void AsyncCallback(int64 callbackId, str responseJson, str error)");
 
-// Session cache callback prototypes
+// Session cache callback prototypes (SYNC mode - for sync callbacks like Map)
 const SessionCacheGetProto = koffi.proto("str SessionCacheGet(str key)");
 const SessionCachePutProto = koffi.proto("int SessionCachePut(str key, str valueJson, int64 ttlSeconds)");
 const SessionCacheDeleteProto = koffi.proto("int SessionCacheDelete(str key)");
 const SessionCacheErrorProto = koffi.proto("void SessionCacheError(str operation, str key, str error)");
 const EchCacheGetProto = koffi.proto("str EchCacheGet(str key)");
 const EchCachePutProto = koffi.proto("int EchCachePut(str key, str valueBase64, int64 ttlSeconds)");
+
+// Session cache callback prototypes (ASYNC mode - for async callbacks like Redis)
+const AsyncCacheGetProto = koffi.proto("void AsyncCacheGet(int64 requestId, str key)");
+const AsyncCachePutProto = koffi.proto("void AsyncCachePut(int64 requestId, str key, str valueJson, int64 ttlSeconds)");
+const AsyncCacheDeleteProto = koffi.proto("void AsyncCacheDelete(int64 requestId, str key)");
+const AsyncEchGetProto = koffi.proto("void AsyncEchGet(int64 requestId, str key)");
+const AsyncEchPutProto = koffi.proto("void AsyncEchPut(int64 requestId, str key, str valueBase64, int64 ttlSeconds)");
 
 // Load the native library
 let lib = null;
@@ -816,6 +827,18 @@ function getLib() {
         koffi.pointer(SessionCacheErrorProto),
       ]),
       httpcloak_clear_session_cache_callbacks: nativeLibHandle.func("httpcloak_clear_session_cache_callbacks", "void", []),
+      // Async session cache callbacks (for async backends like Redis)
+      httpcloak_set_async_session_cache_callbacks: nativeLibHandle.func("httpcloak_set_async_session_cache_callbacks", "void", [
+        koffi.pointer(AsyncCacheGetProto),
+        koffi.pointer(AsyncCachePutProto),
+        koffi.pointer(AsyncCacheDeleteProto),
+        koffi.pointer(AsyncEchGetProto),
+        koffi.pointer(AsyncEchPutProto),
+        koffi.pointer(SessionCacheErrorProto),
+      ]),
+      // Async cache result functions (called by JS to provide results to Go)
+      httpcloak_async_cache_get_result: nativeLibHandle.func("httpcloak_async_cache_get_result", "void", ["int64", "str"]),
+      httpcloak_async_cache_op_result: nativeLibHandle.func("httpcloak_async_cache_op_result", "void", ["int64", "int"]),
     };
   }
   return lib;
@@ -2735,6 +2758,11 @@ function request(method, url, options = {}) {
  * Use this to transparently apply fingerprinting to any HTTP client (e.g., Undici, fetch).
  *
  * Supports per-request proxy rotation via X-Upstream-Proxy header.
+ * Supports per-request session routing via X-HTTPCloak-Session header.
+ *
+ * IMPORTANT: For distributed session caching to work with X-HTTPCloak-Session header,
+ * you MUST register the session with the proxy using registerSession() first.
+ * Without registration, cache callbacks will not be triggered for that session.
  *
  * @example
  * const proxy = new LocalProxy({ preset: "chrome-143", tlsOnly: true });
@@ -2744,6 +2772,22 @@ function request(method, url, options = {}) {
  * // Pass X-Upstream-Proxy header to rotate proxies per-request
  *
  * proxy.close();
+ *
+ * @example
+ * // Using with distributed session cache
+ * const proxy = new LocalProxy({ port: 8888 });
+ * const session = new Session({ preset: 'chrome-143' });
+ *
+ * // Configure distributed cache (e.g., Redis)
+ * httpcloak.configureSessionCache({
+ *   get: async (key) => await redis.get(key),
+ *   put: async (key, value, ttl) => { await redis.setex(key, ttl, value); return 0; },
+ * });
+ *
+ * // REQUIRED: Register session with proxy for cache callbacks to work
+ * proxy.registerSession('session-1', session);
+ *
+ * // Now requests with X-HTTPCloak-Session: session-1 will trigger cache callbacks
  */
 class LocalProxy {
   /**
@@ -2933,13 +2977,17 @@ class SessionCacheBackend {
   /**
    * Create a session cache backend.
    *
+   * Supports both synchronous and asynchronous callbacks. Async mode is automatically
+   * detected when any callback is an async function or returns a Promise.
+   *
    * @param {Object} options Cache configuration
-   * @param {Function} [options.get] Function to get session data: (key: string) => string|null|Promise<string|null>
-   * @param {Function} [options.put] Function to store session: (key: string, value: string, ttlSeconds: number) => number|Promise<number>
-   * @param {Function} [options.delete] Function to delete session: (key: string) => number|Promise<number>
-   * @param {Function} [options.getEch] Function to get ECH config: (key: string) => string|null|Promise<string|null>
-   * @param {Function} [options.putEch] Function to store ECH: (key: string, value: string, ttlSeconds: number) => number|Promise<number>
+   * @param {Function} [options.get] Get session data: (key: string) => string|null|Promise<string|null>
+   * @param {Function} [options.put] Store session: (key: string, value: string, ttlSeconds: number) => number|Promise<number>
+   * @param {Function} [options.delete] Delete session: (key: string) => number|Promise<number>
+   * @param {Function} [options.getEch] Get ECH config: (key: string) => string|null|Promise<string|null>
+   * @param {Function} [options.putEch] Store ECH: (key: string, value: string, ttlSeconds: number) => number|Promise<number>
    * @param {Function} [options.onError] Error callback: (operation: string, key: string, error: string) => void
+   * @param {boolean} [options.async] Force async mode (auto-detected if not specified)
    */
   constructor(options = {}) {
     this._get = options.get || null;
@@ -2949,6 +2997,23 @@ class SessionCacheBackend {
     this._putEch = options.putEch || null;
     this._onError = options.onError || null;
     this._registered = false;
+
+    // Auto-detect async mode based on function types
+    // AsyncFunction.constructor.name === 'AsyncFunction'
+    // Use !! to ensure boolean result (null && x returns null, not false)
+    const isAsyncFn = (fn) => !!(fn && (fn.constructor.name === 'AsyncFunction' || fn[Symbol.toStringTag] === 'AsyncFunction'));
+    this._asyncMode = options.async !== undefined ? options.async : (
+      isAsyncFn(this._get) || isAsyncFn(this._put) || isAsyncFn(this._delete) ||
+      isAsyncFn(this._getEch) || isAsyncFn(this._putEch)
+    );
+  }
+
+  /**
+   * Check if this backend is running in async mode.
+   * @returns {boolean}
+   */
+  get isAsync() {
+    return this._asyncMode;
   }
 
   /**
@@ -2961,86 +3026,9 @@ class SessionCacheBackend {
     const lib = getLib();
 
     // Create callback pointers (keep references to prevent GC)
-    // Use no-op callbacks for missing functions to avoid null pointer issues
     _sessionCacheCallbackPtrs = {};
 
-    // Create get callback (or no-op)
-    const getFn = this._get;
-    _sessionCacheCallbackPtrs.get = koffi.register((key) => {
-      if (!getFn) return null;
-      try {
-        const result = getFn(key);
-        if (result && typeof result.then === 'function') {
-          console.warn('SessionCacheBackend: Async callbacks not fully supported, returning null');
-          return null;
-        }
-        return result || null;
-      } catch (e) {
-        return null;
-      }
-    }, koffi.pointer(SessionCacheGetProto));
-
-    // Create put callback (or no-op)
-    const putFn = this._put;
-    _sessionCacheCallbackPtrs.put = koffi.register((key, value, ttlSeconds) => {
-      if (!putFn) return 0;
-      try {
-        const result = putFn(key, value, Number(ttlSeconds));
-        if (result && typeof result.then === 'function') {
-          return 0;
-        }
-        return result || 0;
-      } catch (e) {
-        return -1;
-      }
-    }, koffi.pointer(SessionCachePutProto));
-
-    // Create delete callback (or no-op)
-    const deleteFn = this._delete;
-    _sessionCacheCallbackPtrs.delete = koffi.register((key) => {
-      if (!deleteFn) return 0;
-      try {
-        const result = deleteFn(key);
-        if (result && typeof result.then === 'function') {
-          return 0;
-        }
-        return result || 0;
-      } catch (e) {
-        return -1;
-      }
-    }, koffi.pointer(SessionCacheDeleteProto));
-
-    // Create ECH get callback (or no-op)
-    const getEchFn = this._getEch;
-    _sessionCacheCallbackPtrs.getEch = koffi.register((key) => {
-      if (!getEchFn) return null;
-      try {
-        const result = getEchFn(key);
-        if (result && typeof result.then === 'function') {
-          return null;
-        }
-        return result || null;
-      } catch (e) {
-        return null;
-      }
-    }, koffi.pointer(EchCacheGetProto));
-
-    // Create ECH put callback (or no-op)
-    const putEchFn = this._putEch;
-    _sessionCacheCallbackPtrs.putEch = koffi.register((key, value, ttlSeconds) => {
-      if (!putEchFn) return 0;
-      try {
-        const result = putEchFn(key, value, Number(ttlSeconds));
-        if (result && typeof result.then === 'function') {
-          return 0;
-        }
-        return result || 0;
-      } catch (e) {
-        return -1;
-      }
-    }, koffi.pointer(EchCachePutProto));
-
-    // Create error callback (or no-op)
+    // Create error callback (shared between sync and async modes)
     const errorFn = this._onError;
     _sessionCacheCallbackPtrs.error = koffi.register((operation, key, error) => {
       if (!errorFn) return;
@@ -3051,7 +3039,97 @@ class SessionCacheBackend {
       }
     }, koffi.pointer(SessionCacheErrorProto));
 
-    // Register with library
+    if (this._asyncMode) {
+      this._registerAsync(lib);
+    } else {
+      this._registerSync(lib);
+    }
+
+    _sessionCacheBackend = this;
+    this._registered = true;
+  }
+
+  /**
+   * Register synchronous callbacks (for in-memory Map, etc.)
+   * @private
+   */
+  _registerSync(lib) {
+    const getFn = this._get;
+    _sessionCacheCallbackPtrs.get = koffi.register((key) => {
+      if (!getFn) return null;
+      try {
+        const result = getFn(key);
+        // If sync mode but user passed async function, warn and return null
+        if (result && typeof result.then === 'function') {
+          console.warn('SessionCacheBackend: Detected async callback in sync mode. Use async: true option.');
+          return null;
+        }
+        return result || null;
+      } catch (e) {
+        return null;
+      }
+    }, koffi.pointer(SessionCacheGetProto));
+
+    const putFn = this._put;
+    _sessionCacheCallbackPtrs.put = koffi.register((key, value, ttlSeconds) => {
+      if (!putFn) return 0;
+      try {
+        const result = putFn(key, value, Number(ttlSeconds));
+        if (result && typeof result.then === 'function') {
+          console.warn('SessionCacheBackend: Detected async callback in sync mode. Use async: true option.');
+          return 0;
+        }
+        return result || 0;
+      } catch (e) {
+        return -1;
+      }
+    }, koffi.pointer(SessionCachePutProto));
+
+    const deleteFn = this._delete;
+    _sessionCacheCallbackPtrs.delete = koffi.register((key) => {
+      if (!deleteFn) return 0;
+      try {
+        const result = deleteFn(key);
+        if (result && typeof result.then === 'function') {
+          console.warn('SessionCacheBackend: Detected async callback in sync mode. Use async: true option.');
+          return 0;
+        }
+        return result || 0;
+      } catch (e) {
+        return -1;
+      }
+    }, koffi.pointer(SessionCacheDeleteProto));
+
+    const getEchFn = this._getEch;
+    _sessionCacheCallbackPtrs.getEch = koffi.register((key) => {
+      if (!getEchFn) return null;
+      try {
+        const result = getEchFn(key);
+        if (result && typeof result.then === 'function') {
+          console.warn('SessionCacheBackend: Detected async callback in sync mode. Use async: true option.');
+          return null;
+        }
+        return result || null;
+      } catch (e) {
+        return null;
+      }
+    }, koffi.pointer(EchCacheGetProto));
+
+    const putEchFn = this._putEch;
+    _sessionCacheCallbackPtrs.putEch = koffi.register((key, value, ttlSeconds) => {
+      if (!putEchFn) return 0;
+      try {
+        const result = putEchFn(key, value, Number(ttlSeconds));
+        if (result && typeof result.then === 'function') {
+          console.warn('SessionCacheBackend: Detected async callback in sync mode. Use async: true option.');
+          return 0;
+        }
+        return result || 0;
+      } catch (e) {
+        return -1;
+      }
+    }, koffi.pointer(EchCachePutProto));
+
     lib.httpcloak_set_session_cache_callbacks(
       _sessionCacheCallbackPtrs.get,
       _sessionCacheCallbackPtrs.put,
@@ -3060,9 +3138,104 @@ class SessionCacheBackend {
       _sessionCacheCallbackPtrs.putEch,
       _sessionCacheCallbackPtrs.error
     );
+  }
 
-    _sessionCacheBackend = this;
-    this._registered = true;
+  /**
+   * Register asynchronous callbacks (for Redis, database, etc.)
+   * Go will call our callback with a request ID, we process async,
+   * then call back into Go with the result.
+   * @private
+   */
+  _registerAsync(lib) {
+    const getFn = this._get;
+    _sessionCacheCallbackPtrs.get = koffi.register((requestId, key) => {
+      if (!getFn) {
+        lib.httpcloak_async_cache_get_result(requestId, null);
+        return;
+      }
+      // Process async and call back with result
+      Promise.resolve()
+        .then(() => getFn(key))
+        .then((result) => {
+          lib.httpcloak_async_cache_get_result(requestId, result || null);
+        })
+        .catch(() => {
+          lib.httpcloak_async_cache_get_result(requestId, null);
+        });
+    }, koffi.pointer(AsyncCacheGetProto));
+
+    const putFn = this._put;
+    _sessionCacheCallbackPtrs.put = koffi.register((requestId, key, value, ttlSeconds) => {
+      if (!putFn) {
+        lib.httpcloak_async_cache_op_result(requestId, 0);
+        return;
+      }
+      Promise.resolve()
+        .then(() => putFn(key, value, Number(ttlSeconds)))
+        .then((result) => {
+          lib.httpcloak_async_cache_op_result(requestId, result || 0);
+        })
+        .catch(() => {
+          lib.httpcloak_async_cache_op_result(requestId, -1);
+        });
+    }, koffi.pointer(AsyncCachePutProto));
+
+    const deleteFn = this._delete;
+    _sessionCacheCallbackPtrs.delete = koffi.register((requestId, key) => {
+      if (!deleteFn) {
+        lib.httpcloak_async_cache_op_result(requestId, 0);
+        return;
+      }
+      Promise.resolve()
+        .then(() => deleteFn(key))
+        .then((result) => {
+          lib.httpcloak_async_cache_op_result(requestId, result || 0);
+        })
+        .catch(() => {
+          lib.httpcloak_async_cache_op_result(requestId, -1);
+        });
+    }, koffi.pointer(AsyncCacheDeleteProto));
+
+    const getEchFn = this._getEch;
+    _sessionCacheCallbackPtrs.getEch = koffi.register((requestId, key) => {
+      if (!getEchFn) {
+        lib.httpcloak_async_cache_get_result(requestId, null);
+        return;
+      }
+      Promise.resolve()
+        .then(() => getEchFn(key))
+        .then((result) => {
+          lib.httpcloak_async_cache_get_result(requestId, result || null);
+        })
+        .catch(() => {
+          lib.httpcloak_async_cache_get_result(requestId, null);
+        });
+    }, koffi.pointer(AsyncEchGetProto));
+
+    const putEchFn = this._putEch;
+    _sessionCacheCallbackPtrs.putEch = koffi.register((requestId, key, value, ttlSeconds) => {
+      if (!putEchFn) {
+        lib.httpcloak_async_cache_op_result(requestId, 0);
+        return;
+      }
+      Promise.resolve()
+        .then(() => putEchFn(key, value, Number(ttlSeconds)))
+        .then((result) => {
+          lib.httpcloak_async_cache_op_result(requestId, result || 0);
+        })
+        .catch(() => {
+          lib.httpcloak_async_cache_op_result(requestId, -1);
+        });
+    }, koffi.pointer(AsyncEchPutProto));
+
+    lib.httpcloak_set_async_session_cache_callbacks(
+      _sessionCacheCallbackPtrs.get,
+      _sessionCacheCallbackPtrs.put,
+      _sessionCacheCallbackPtrs.delete,
+      _sessionCacheCallbackPtrs.getEch,
+      _sessionCacheCallbackPtrs.putEch,
+      _sessionCacheCallbackPtrs.error
+    );
   }
 
   /**
@@ -3088,11 +3261,25 @@ class SessionCacheBackend {
  * Configure a distributed session cache backend.
  *
  * This is a convenience function that creates and registers a SessionCacheBackend.
+ * Supports both synchronous and asynchronous callbacks (auto-detected).
  *
  * @param {Object} options Cache configuration (same as SessionCacheBackend constructor)
  * @returns {SessionCacheBackend} The registered backend
  *
- * Example:
+ * Example using in-memory Map (sync):
+ * ```javascript
+ * const httpcloak = require('httpcloak');
+ *
+ * const cache = new Map();
+ *
+ * httpcloak.configureSessionCache({
+ *   get: (key) => cache.get(key) || null,
+ *   put: (key, value, ttl) => { cache.set(key, value); return 0; },
+ *   delete: (key) => { cache.delete(key); return 0; },
+ * });
+ * ```
+ *
+ * Example using Redis (async):
  * ```javascript
  * const Redis = require('ioredis');
  * const httpcloak = require('httpcloak');
@@ -3100,12 +3287,12 @@ class SessionCacheBackend {
  * const redis = new Redis();
  *
  * httpcloak.configureSessionCache({
- *   get: (key) => redis.get(key),
- *   put: (key, value, ttl) => { redis.setex(key, ttl, value); return 0; },
- *   delete: (key) => { redis.del(key); return 0; },
+ *   get: async (key) => await redis.get(key),
+ *   put: async (key, value, ttl) => { await redis.setex(key, ttl, value); return 0; },
+ *   delete: async (key) => { await redis.del(key); return 0; },
  * });
  *
- * // Now all sessions will use Redis for TLS session storage
+ * // Async callbacks are automatically detected and handled properly
  * const session = new httpcloak.Session();
  * await session.get('https://example.com');
  * ```

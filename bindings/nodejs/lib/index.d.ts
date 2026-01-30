@@ -195,7 +195,7 @@ export class StreamResponse {
 }
 
 export interface SessionOptions {
-  /** Browser preset to use (default: "chrome-143") */
+  /** Browser preset to use (default: "chrome-144") */
   preset?: string;
   /** Proxy URL (e.g., "http://user:pass@host:port" or "socks5://host:port") */
   proxy?: string;
@@ -586,7 +586,7 @@ export class Session {
 export interface LocalProxyOptions {
   /** Port to listen on (default: 0 for auto-assign) */
   port?: number;
-  /** Browser preset to use (default: "chrome-143") */
+  /** Browser preset to use (default: "chrome-144") */
   preset?: string;
   /** Request timeout in seconds (default: 30) */
   timeout?: number;
@@ -613,6 +613,38 @@ export interface LocalProxyStats {
   bytesReceived: number;
 }
 
+/**
+ * Local HTTP proxy server that forwards requests through httpcloak with TLS fingerprinting.
+ * Use this to transparently apply fingerprinting to any HTTP client (e.g., Undici, fetch).
+ *
+ * Supports per-request proxy rotation via X-Upstream-Proxy header.
+ * Supports per-request session routing via X-HTTPCloak-Session header.
+ *
+ * IMPORTANT: For distributed session caching to work with X-HTTPCloak-Session header,
+ * you MUST register the session with the proxy using registerSession() first.
+ * Without registration, cache callbacks will not be triggered for that session.
+ *
+ * @example
+ * // Basic usage
+ * const proxy = new LocalProxy({ preset: "chrome-144", tlsOnly: true });
+ * console.log(`Proxy running on ${proxy.proxyUrl}`);
+ * // Use with any HTTP client pointing to the proxy
+ * proxy.close();
+ *
+ * @example
+ * // With distributed session cache
+ * const proxy = new LocalProxy({ port: 8888 });
+ * const session = new Session({ preset: 'chrome-144' });
+ *
+ * // Configure distributed cache
+ * httpcloak.configureSessionCache({
+ *   get: async (key) => await redis.get(key),
+ *   put: async (key, value, ttl) => { await redis.setex(key, ttl, value); return 0; },
+ * });
+ *
+ * // REQUIRED: Register session for cache callbacks to work
+ * proxy.registerSession('session-1', session);
+ */
 export class LocalProxy {
   /**
    * Create a new LocalProxy instance.
@@ -640,6 +672,9 @@ export class LocalProxy {
    * Register a session with an ID for use with X-HTTPCloak-Session header.
    * This allows per-request session routing through the proxy.
    *
+   * IMPORTANT: This is REQUIRED for distributed session caching to work.
+   * Without registration, cache callbacks will not be triggered for the session.
+   *
    * When a request is made through the proxy with the `X-HTTPCloak-Session: <sessionId>` header,
    * the proxy will use the registered session for that request, applying its TLS fingerprint
    * and cookies.
@@ -651,12 +686,13 @@ export class LocalProxy {
    * @example
    * ```typescript
    * const proxy = new LocalProxy({ port: 8888 });
-   * const session = new Session({ preset: 'chrome-143' });
+   * const session = new Session({ preset: 'chrome-144' });
    *
-   * // Register session with ID
+   * // Register session with ID (required for cache callbacks)
    * proxy.registerSession('user-1', session);
    *
    * // Now requests with X-HTTPCloak-Session: user-1 header will use this session
+   * // and trigger cache callbacks
    * ```
    */
   registerSession(sessionId: string, session: Session): void;
@@ -758,10 +794,13 @@ export const Preset: {
   CHROME_131_LINUX: string;
   CHROME_131_MACOS: string;
   IOS_CHROME_143: string;
+  IOS_CHROME_144: string;
   ANDROID_CHROME_143: string;
+  ANDROID_CHROME_144: string;
   FIREFOX_133: string;
   SAFARI_18: string;
   IOS_SAFARI_17: string;
+  IOS_SAFARI_18: string;
   all(): string[];
 };
 
@@ -773,42 +812,48 @@ export interface SessionCacheOptions {
   /**
    * Function to get session data from cache.
    * Returns JSON string with session data, or null if not found.
-   * Note: Must be synchronous - async callbacks are not supported.
+   * Supports both sync and async callbacks.
    */
-  get?: (key: string) => string | null;
+  get?: (key: string) => string | null | Promise<string | null>;
 
   /**
    * Function to store session data in cache.
    * Returns 0 on success, non-zero on error.
-   * Note: Must be synchronous - async callbacks are not supported.
+   * Supports both sync and async callbacks.
    */
-  put?: (key: string, value: string, ttlSeconds: number) => number;
+  put?: (key: string, value: string, ttlSeconds: number) => number | Promise<number>;
 
   /**
    * Function to delete session data from cache.
    * Returns 0 on success, non-zero on error.
-   * Note: Must be synchronous - async callbacks are not supported.
+   * Supports both sync and async callbacks.
    */
-  delete?: (key: string) => number;
+  delete?: (key: string) => number | Promise<number>;
 
   /**
    * Function to get ECH config from cache.
    * Returns base64-encoded config, or null if not found.
-   * Note: Must be synchronous - async callbacks are not supported.
+   * Supports both sync and async callbacks.
    */
-  getEch?: (key: string) => string | null;
+  getEch?: (key: string) => string | null | Promise<string | null>;
 
   /**
    * Function to store ECH config in cache.
    * Returns 0 on success, non-zero on error.
-   * Note: Must be synchronous - async callbacks are not supported.
+   * Supports both sync and async callbacks.
    */
-  putEch?: (key: string, value: string, ttlSeconds: number) => number;
+  putEch?: (key: string, value: string, ttlSeconds: number) => number | Promise<number>;
 
   /**
    * Error callback for cache operations.
    */
   onError?: (operation: string, key: string, error: string) => void;
+
+  /**
+   * Force async mode. If not specified, async mode is auto-detected
+   * based on whether any callback is an async function.
+   */
+  async?: boolean;
 }
 
 /**
@@ -817,12 +862,41 @@ export interface SessionCacheOptions {
  * Enables TLS session resumption across distributed httpcloak instances
  * by storing session tickets in an external cache like Redis or Memcached.
  *
+ * Supports both synchronous callbacks (for in-memory Map) and asynchronous
+ * callbacks (for Redis, database, etc.). Async mode is auto-detected when
+ * any callback is an async function.
+ *
  * Cache key formats:
  * - TLS sessions: httpcloak:sessions:{preset}:{protocol}:{host}:{port}
  * - ECH configs: httpcloak:ech:{preset}:{host}:{port}
+ *
+ * @example
+ * // Sync example with Map
+ * const cache = new Map();
+ * const backend = new SessionCacheBackend({
+ *   get: (key) => cache.get(key) || null,
+ *   put: (key, value, ttl) => { cache.set(key, value); return 0; },
+ *   delete: (key) => { cache.delete(key); return 0; },
+ * });
+ * backend.register();
+ *
+ * @example
+ * // Async example with Redis
+ * const redis = new Redis();
+ * const backend = new SessionCacheBackend({
+ *   get: async (key) => await redis.get(key),
+ *   put: async (key, value, ttl) => { await redis.setex(key, ttl, value); return 0; },
+ *   delete: async (key) => { await redis.del(key); return 0; },
+ * });
+ * backend.register();
  */
 export class SessionCacheBackend {
   constructor(options?: SessionCacheOptions);
+
+  /**
+   * Check if this backend is running in async mode.
+   */
+  readonly isAsync: boolean;
 
   /**
    * Register this cache backend globally.
@@ -841,8 +915,19 @@ export class SessionCacheBackend {
 /**
  * Configure a distributed session cache backend.
  *
+ * Supports both synchronous and asynchronous callbacks (auto-detected).
+ *
  * @param options Cache configuration
  * @returns The registered SessionCacheBackend instance
+ *
+ * @example
+ * // Using Redis with async callbacks
+ * const redis = new Redis();
+ * httpcloak.configureSessionCache({
+ *   get: async (key) => await redis.get(key),
+ *   put: async (key, value, ttl) => { await redis.setex(key, ttl, value); return 0; },
+ *   delete: async (key) => { await redis.del(key); return 0; },
+ * });
  */
 export function configureSessionCache(options: SessionCacheOptions): SessionCacheBackend;
 
