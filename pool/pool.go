@@ -381,19 +381,15 @@ func (p *HostPool) createConn(ctx context.Context) (*Conn, error) {
 
 		// Native fingerprinting via sardanioss/net
 		ConnectionFlow: settings.ConnectionWindowUpdate,
-		Settings: map[http2.SettingID]uint32{
-			http2.SettingHeaderTableSize:   settings.HeaderTableSize,
-			http2.SettingEnablePush:        boolToUint32(settings.EnablePush),
-			http2.SettingInitialWindowSize: settings.InitialWindowSize,
-			http2.SettingMaxHeaderListSize: settings.MaxHeaderListSize,
-		},
-		SettingsOrder: []http2.SettingID{
-			http2.SettingHeaderTableSize,
-			http2.SettingEnablePush,
-			http2.SettingInitialWindowSize,
-			http2.SettingMaxHeaderListSize,
-		},
-		PseudoHeaderOrder: []string{":method", ":authority", ":scheme", ":path"}, // Chrome order (m,a,s,p)
+		Settings:       buildHTTP2Settings(settings),
+		SettingsOrder:  buildHTTP2SettingsOrder(settings),
+		PseudoHeaderOrder: func() []string {
+			// Safari/iOS uses m,s,p,a order; Chrome uses m,a,s,p
+			if settings.NoRFC7540Priorities {
+				return []string{":method", ":scheme", ":path", ":authority"} // Safari order (m,s,p,a)
+			}
+			return []string{":method", ":authority", ":scheme", ":path"} // Chrome order (m,a,s,p)
+		}(),
 		HeaderPriority: &http2.PriorityParam{
 			Weight:    uint8(settings.StreamWeight - 1), // Wire format is weight-1
 			Exclusive: settings.StreamExclusive,
@@ -1214,4 +1210,46 @@ func boolToUint32(b bool) uint32 {
 		return 1
 	}
 	return 0
+}
+
+// buildHTTP2Settings creates the settings map based on preset configuration
+func buildHTTP2Settings(settings fingerprint.HTTP2Settings) map[http2.SettingID]uint32 {
+	// Safari/iOS uses different settings than Chrome
+	if settings.NoRFC7540Priorities {
+		// Safari/iOS settings: ENABLE_PUSH, INITIAL_WINDOW_SIZE, MAX_CONCURRENT_STREAMS, NO_RFC7540_PRIORITIES
+		return map[http2.SettingID]uint32{
+			http2.SettingEnablePush:           boolToUint32(settings.EnablePush),
+			http2.SettingInitialWindowSize:    settings.InitialWindowSize,
+			http2.SettingMaxConcurrentStreams: settings.MaxConcurrentStreams,
+			http2.SettingNoRFC7540Priorities:  1,
+		}
+	}
+	// Chrome settings: HEADER_TABLE_SIZE, ENABLE_PUSH, INITIAL_WINDOW_SIZE, MAX_HEADER_LIST_SIZE
+	return map[http2.SettingID]uint32{
+		http2.SettingHeaderTableSize:   settings.HeaderTableSize,
+		http2.SettingEnablePush:        boolToUint32(settings.EnablePush),
+		http2.SettingInitialWindowSize: settings.InitialWindowSize,
+		http2.SettingMaxHeaderListSize: settings.MaxHeaderListSize,
+	}
+}
+
+// buildHTTP2SettingsOrder creates the settings order based on preset configuration
+func buildHTTP2SettingsOrder(settings fingerprint.HTTP2Settings) []http2.SettingID {
+	// Safari/iOS uses different order than Chrome
+	if settings.NoRFC7540Priorities {
+		// Safari/iOS order: 2, 4, 3, 9
+		return []http2.SettingID{
+			http2.SettingEnablePush,
+			http2.SettingInitialWindowSize,
+			http2.SettingMaxConcurrentStreams,
+			http2.SettingNoRFC7540Priorities,
+		}
+	}
+	// Chrome order: 1, 2, 4, 6
+	return []http2.SettingID{
+		http2.SettingHeaderTableSize,
+		http2.SettingEnablePush,
+		http2.SettingInitialWindowSize,
+		http2.SettingMaxHeaderListSize,
+	}
 }

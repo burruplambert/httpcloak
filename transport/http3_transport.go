@@ -26,6 +26,7 @@ import (
 // HTTP/3 SETTINGS identifiers
 const (
 	settingQPACKMaxTableCapacity = 0x1
+	settingMaxFieldSectionSize   = 0x6
 	settingQPACKBlockedStreams   = 0x7
 	settingH3Datagram            = 0x33
 )
@@ -295,11 +296,19 @@ func NewHTTP3TransportWithTransportConfig(preset *fingerprint.Preset, dnsCache *
 		qpackMaxTableCapacity = 16383
 	}
 
-	// HTTP/3 settings - browser-specific QPACK configuration
+	// HTTP/3 settings - browser-specific configuration
+	// Chrome sends: QPACK_MAX_TABLE_CAPACITY, MAX_FIELD_SECTION_SIZE, QPACK_BLOCKED_STREAMS, H3_DATAGRAM, GREASE
+	// Safari/iOS sends: QPACK_MAX_TABLE_CAPACITY, QPACK_BLOCKED_STREAMS, GREASE (no MAX_FIELD_SECTION_SIZE or H3_DATAGRAM)
 	additionalSettings := map[uint64]uint64{
 		settingQPACKMaxTableCapacity: qpackMaxTableCapacity, // Browser-specific QPACK table capacity
 		settingQPACKBlockedStreams:   100,                   // Both Chrome and Safari use 100
 		greaseSettingID:              greaseSettingValue,    // GREASE setting
+	}
+
+	// Add Chrome-specific settings (not sent by Safari/iOS)
+	if t.preset == nil || !t.preset.HTTP2Settings.NoRFC7540Priorities {
+		additionalSettings[settingMaxFieldSectionSize] = 262144 // Chrome's MAX_FIELD_SECTION_SIZE
+		additionalSettings[settingH3Datagram] = 1               // Chrome enables H3_DATAGRAM
 	}
 
 	// Create QUIC transport for direct connections
@@ -480,6 +489,12 @@ func NewHTTP3TransportWithConfig(preset *fingerprint.Preset, dnsCache *dns.Cache
 		greaseSettingID:              greaseSettingValue,
 	}
 
+	// Add Chrome-specific settings (not sent by Safari/iOS)
+	if t.preset == nil || !t.preset.HTTP2Settings.NoRFC7540Priorities {
+		additionalSettings[settingMaxFieldSectionSize] = 262144 // Chrome's MAX_FIELD_SECTION_SIZE
+		additionalSettings[settingH3Datagram] = 1               // Chrome enables H3_DATAGRAM
+	}
+
 	// Create HTTP/3 transport with appropriate dial function
 	if t.socks5Conn != nil {
 		// Use proxy-aware dial function
@@ -636,6 +651,12 @@ func NewHTTP3TransportWithMASQUE(preset *fingerprint.Preset, dnsCache *dns.Cache
 		settingQPACKMaxTableCapacity: qpackMaxTableCapacityMASQUE,
 		settingQPACKBlockedStreams:   100,
 		greaseSettingID:              greaseSettingValue,
+	}
+
+	// Add Chrome-specific settings (not sent by Safari/iOS)
+	if t.preset == nil || !t.preset.HTTP2Settings.NoRFC7540Priorities {
+		additionalSettings[settingMaxFieldSectionSize] = 262144 // Chrome's MAX_FIELD_SECTION_SIZE
+		additionalSettings[settingH3Datagram] = 1               // Chrome enables H3_DATAGRAM
 	}
 
 	// Create HTTP/3 transport with MASQUE dial function

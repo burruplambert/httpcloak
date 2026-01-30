@@ -22,7 +22,9 @@ import (
 // HTTP/3 SETTINGS identifiers (Chrome-like)
 const (
 	settingQPACKMaxTableCapacity = 0x1
+	settingMaxFieldSectionSize   = 0x6
 	settingQPACKBlockedStreams   = 0x7
+	settingH3Datagram            = 0x33
 )
 
 // QUIC Transport Parameter IDs
@@ -438,6 +440,12 @@ func (p *QUICHostPool) createConn(ctx context.Context) (*QUICConn, error) {
 		settingQPACKMaxTableCapacity: qpackMaxTableCapacity, // Browser-specific QPACK table capacity
 		settingQPACKBlockedStreams:   100,                   // Both Chrome and Safari use 100
 		greaseSettingID:              greaseSettingValue,    // Random non-zero GREASE value
+	}
+
+	// Add Chrome-specific settings (not sent by Safari/iOS)
+	if p.preset == nil || !p.preset.HTTP2Settings.NoRFC7540Priorities {
+		additionalSettings[settingMaxFieldSectionSize] = 262144 // Chrome's MAX_FIELD_SECTION_SIZE
+		additionalSettings[settingH3Datagram] = 1               // Chrome enables H3_DATAGRAM
 	}
 
 	// Order IPs based on preference
