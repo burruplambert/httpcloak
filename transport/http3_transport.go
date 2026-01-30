@@ -1025,6 +1025,28 @@ func (t *HTTP3Transport) dialQUIC(ctx context.Context, addr string, tlsCfg *tls.
 		return nil, fmt.Errorf("invalid port: %w", err)
 	}
 
+	// Filter IPs by local address family if set
+	if t.localAddr != "" {
+		localIP := net.ParseIP(t.localAddr)
+		if localIP != nil {
+			isLocalIPv6 := localIP.To4() == nil
+			var filtered []net.IP
+			for _, ip := range ips {
+				if (ip.To4() == nil) == isLocalIPv6 {
+					filtered = append(filtered, ip)
+				}
+			}
+			ips = filtered
+			if len(ips) == 0 {
+				family := "IPv4"
+				if isLocalIPv6 {
+					family = "IPv6"
+				}
+				return nil, fmt.Errorf("no %s addresses found for host (local address is %s)", family, t.localAddr)
+			}
+		}
+	}
+
 	// Separate IPv4 and IPv6 addresses
 	var ipv4Addrs, ipv6Addrs []*net.UDPAddr
 	for _, ip := range ips {
