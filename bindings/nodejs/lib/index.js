@@ -761,6 +761,7 @@ function getLib() {
     lib = {
       httpcloak_session_new: nativeLibHandle.func("httpcloak_session_new", "int64", ["str"]),
       httpcloak_session_free: nativeLibHandle.func("httpcloak_session_free", "void", ["int64"]),
+      httpcloak_session_refresh: nativeLibHandle.func("httpcloak_session_refresh", "void", ["int64"]),
       httpcloak_get: nativeLibHandle.func("httpcloak_get", "str", ["int64", "str", "str"]),
       httpcloak_post: nativeLibHandle.func("httpcloak_post", "str", ["int64", "str", "str", "str"]),
       httpcloak_request: nativeLibHandle.func("httpcloak_request", "str", ["int64", "str"]),
@@ -1311,6 +1312,17 @@ class Session {
     if (this._handle) {
       this._lib.httpcloak_session_free(this._handle);
       this._handle = 0n;
+    }
+  }
+
+  /**
+   * Refresh the session by closing all connections while keeping TLS session tickets.
+   * This simulates a browser page refresh - connections are severed but 0-RTT
+   * early data can be used on reconnection due to preserved session tickets.
+   */
+  refresh() {
+    if (this._handle) {
+      this._lib.httpcloak_session_refresh(this._handle);
     }
   }
 

@@ -991,6 +991,14 @@ func httpcloak_session_free(handle C.int64_t) {
 	}
 }
 
+//export httpcloak_session_refresh
+func httpcloak_session_refresh(handle C.int64_t) {
+	session := getSession(handle)
+	if session != nil {
+		session.Refresh()
+	}
+}
+
 func getSession(handle C.int64_t) *httpcloak.Session {
 	sessionMu.RLock()
 	defer sessionMu.RUnlock()

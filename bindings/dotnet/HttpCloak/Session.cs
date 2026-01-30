@@ -1468,6 +1468,17 @@ public sealed class Session : IDisposable
     public FastResponse PatchFast(string url, byte[]? body = null, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
         => RequestFast("PATCH", url, body, headers, parameters, cookies, auth, timeout);
 
+    /// <summary>
+    /// Refresh the session by closing all connections while keeping TLS session tickets.
+    /// This simulates a browser page refresh - connections are severed but 0-RTT
+    /// early data can be used on reconnection due to preserved session tickets.
+    /// </summary>
+    public void Refresh()
+    {
+        ThrowIfDisposed();
+        Native.SessionRefresh(_handle);
+    }
+
     private void ThrowIfDisposed()
     {
         if (_disposed)

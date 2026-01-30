@@ -53,6 +53,7 @@ image copy*.png
 plans/
 
 # Test files with credentials
-cmd/test_proxy_switch.go
+cmd/
 debugs/
 issues_reply/
+library_locations.md

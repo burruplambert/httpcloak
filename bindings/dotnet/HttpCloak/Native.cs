@@ -80,6 +80,9 @@ internal static class Native
     [DllImport(LibraryName, EntryPoint = "httpcloak_session_free", CallingConvention = CallingConvention.Cdecl)]
     public static extern void SessionFree(long handle);
 
+    [DllImport(LibraryName, EntryPoint = "httpcloak_session_refresh", CallingConvention = CallingConvention.Cdecl)]
+    public static extern void SessionRefresh(long handle);
+
     [DllImport(LibraryName, EntryPoint = "httpcloak_get", CallingConvention = CallingConvention.Cdecl)]
     public static extern IntPtr Get(long handle, [MarshalAs(UnmanagedType.LPUTF8Str)] string url, [MarshalAs(UnmanagedType.LPUTF8Str)] string? headersJson);
 

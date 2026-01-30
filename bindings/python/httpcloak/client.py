@@ -934,6 +934,8 @@ def _setup_lib(lib):
     lib.httpcloak_session_new.restype = c_int64
     lib.httpcloak_session_free.argtypes = [c_int64]
     lib.httpcloak_session_free.restype = None
+    lib.httpcloak_session_refresh.argtypes = [c_int64]
+    lib.httpcloak_session_refresh.restype = None
     # Use c_void_p for string returns so we can free them properly
     lib.httpcloak_get.argtypes = [c_int64, c_char_p, c_char_p]
     lib.httpcloak_get.restype = c_void_p
@@ -1470,6 +1472,15 @@ class Session:
         if hasattr(self, "_handle") and self._handle:
             self._lib.httpcloak_session_free(self._handle)
             self._handle = 0
+
+    def refresh(self):
+        """Refresh the session by closing all connections while keeping TLS session tickets.
+
+        This simulates a browser page refresh - connections are severed but 0-RTT
+        early data can be used on reconnection due to preserved session tickets.
+        """
+        if hasattr(self, "_handle") and self._handle:
+            self._lib.httpcloak_session_refresh(self._handle)
 
     def _merge_headers(self, headers: Optional[Dict[str, str]]) -> Optional[Dict[str, str]]:
         """Merge session headers with request headers."""

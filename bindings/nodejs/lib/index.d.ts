@@ -268,6 +268,12 @@ export class Session {
   /** Close the session and release resources */
   close(): void;
 
+  /** Refresh the session by closing all connections while keeping TLS session tickets.
+   * This simulates a browser page refresh - connections are severed but 0-RTT
+   * early data can be used on reconnection due to preserved session tickets.
+   */
+  refresh(): void;
+
   // Synchronous methods
   /** Perform a synchronous GET request */
   getSync(url: string, options?: RequestOptions): Response;
