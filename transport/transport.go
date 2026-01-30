@@ -158,6 +158,13 @@ type Request struct {
 	Body       []byte
 	BodyReader io.Reader // For streaming uploads - used instead of Body if set
 	Timeout    time.Duration
+
+	// TLSOnly is a per-request override for TLS-only mode.
+	// When set to true, preset HTTP headers are NOT applied - only TLS fingerprinting is used.
+	// When nil, the transport's TLSOnly setting is used.
+	// This is useful for LocalProxy where each request can have different TLS-only settings
+	// via the X-HTTPCloak-TlsOnly header.
+	TLSOnly *bool
 }
 
 // RedirectInfo contains information about a redirect response
@@ -1059,9 +1066,15 @@ func (t *Transport) doHTTP1(ctx context.Context, req *Request) (*Response, error
 		return nil, NewRequestError("create_request", host, port, "h1", err)
 	}
 
+	// Determine effective TLS-only mode: per-request override takes precedence
+	effectiveTLSOnly := t.tlsOnly
+	if req.TLSOnly != nil {
+		effectiveTLSOnly = *req.TLSOnly
+	}
+
 	// Set preset headers (with ordering for fingerprinting)
 	// Pass "h1" protocol so Chrome presets don't send Priority header on HTTP/1.1
-	applyPresetHeaders(httpReq, t.preset, t.getHeaderOrder(), t.tlsOnly, "h1")
+	applyPresetHeaders(httpReq, t.preset, t.getHeaderOrder(), effectiveTLSOnly, "h1")
 
 	// Override with custom headers (multi-value support)
 	// Use Set for first value to replace preset headers, Add for additional values
@@ -1166,8 +1179,14 @@ func (t *Transport) doHTTP1WithTLSConn(ctx context.Context, req *Request, alpnEr
 		return nil, NewRequestError("create_request", host, port, "h1", err)
 	}
 
+	// Determine effective TLS-only mode: per-request override takes precedence
+	effectiveTLSOnly := t.tlsOnly
+	if req.TLSOnly != nil {
+		effectiveTLSOnly = *req.TLSOnly
+	}
+
 	// Set preset headers - pass "h1" protocol so Chrome presets don't send Priority header
-	applyPresetHeaders(httpReq, t.preset, t.getHeaderOrder(), t.tlsOnly, "h1")
+	applyPresetHeaders(httpReq, t.preset, t.getHeaderOrder(), effectiveTLSOnly, "h1")
 
 	// Override with custom headers (multi-value support)
 	// Use Set for first value to replace preset headers, Add for additional values
@@ -1279,8 +1298,14 @@ func (t *Transport) doHTTP2(ctx context.Context, req *Request) (*Response, error
 		return nil, NewRequestError("create_request", host, port, "h2", err)
 	}
 
+	// Determine effective TLS-only mode: per-request override takes precedence
+	effectiveTLSOnly := t.tlsOnly
+	if req.TLSOnly != nil {
+		effectiveTLSOnly = *req.TLSOnly
+	}
+
 	// Set preset headers (with ordering for fingerprinting)
-	applyPresetHeaders(httpReq, t.preset, t.getHeaderOrder(), t.tlsOnly, "h2")
+	applyPresetHeaders(httpReq, t.preset, t.getHeaderOrder(), effectiveTLSOnly, "h2")
 
 	// Override with custom headers (multi-value support)
 	// Use Set for first value to replace preset headers, Add for additional values
@@ -1407,8 +1432,14 @@ func (t *Transport) doHTTP3(ctx context.Context, req *Request) (*Response, error
 		return nil, NewRequestError("create_request", host, port, "h3", err)
 	}
 
+	// Determine effective TLS-only mode: per-request override takes precedence
+	effectiveTLSOnly := t.tlsOnly
+	if req.TLSOnly != nil {
+		effectiveTLSOnly = *req.TLSOnly
+	}
+
 	// Set preset headers (with ordering for fingerprinting)
-	applyPresetHeaders(httpReq, t.preset, t.getHeaderOrder(), t.tlsOnly, "h3")
+	applyPresetHeaders(httpReq, t.preset, t.getHeaderOrder(), effectiveTLSOnly, "h3")
 
 	// Override with custom headers (multi-value support)
 	// Use Set for first value to replace preset headers, Add for additional values

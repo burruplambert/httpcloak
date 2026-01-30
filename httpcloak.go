@@ -106,6 +106,13 @@ type Request struct {
 	Headers map[string][]string // Multi-value headers (matches http.Header)
 	Body    io.Reader           // Streaming body for uploads
 	Timeout time.Duration
+
+	// TLSOnly is a per-request override for TLS-only mode.
+	// When set to true, preset HTTP headers are NOT applied - only TLS fingerprinting is used.
+	// When nil, the session's TLSOnly setting is used.
+	// This is useful for LocalProxy where each request can have different TLS-only settings
+	// via the X-HTTPCloak-TlsOnly header.
+	TLSOnly *bool
 }
 
 // RedirectInfo contains information about a redirect response
@@ -553,6 +560,7 @@ func (s *Session) Do(ctx context.Context, req *Request) (*Response, error) {
 		URL:        req.URL,
 		Headers:    req.Headers,
 		BodyReader: req.Body,
+		TLSOnly:    req.TLSOnly,
 	}
 
 	resp, err := s.inner.Request(ctx, sReq)
@@ -590,6 +598,7 @@ func (s *Session) DoWithBody(ctx context.Context, req *Request, bodyReader io.Re
 		URL:        req.URL,
 		Headers:    req.Headers,
 		BodyReader: bodyReader,
+		TLSOnly:    req.TLSOnly,
 	}
 
 	resp, err := s.inner.Request(ctx, sReq)
@@ -769,6 +778,7 @@ func (s *Session) DoStream(ctx context.Context, req *Request) (*StreamResponse, 
 		URL:        req.URL,
 		Headers:    req.Headers,
 		BodyReader: req.Body,
+		TLSOnly:    req.TLSOnly,
 	}
 
 	resp, err := s.inner.RequestStream(ctx, sReq)
