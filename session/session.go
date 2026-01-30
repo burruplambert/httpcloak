@@ -8,14 +8,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"sync"
 	"time"
 
-	"github.com/sardanioss/httpcloak/keylog"
 	"github.com/sardanioss/httpcloak/protocol"
 	"github.com/sardanioss/httpcloak/transport"
-	"io"
 )
 
 // generateID generates a random session ID (16 bytes = 32 hex chars)
@@ -98,7 +97,7 @@ func NewSessionWithOptions(id string, config *protocol.SessionConfig, opts *Sess
 	var keyLogWriter io.WriteCloser
 	if config.KeyLogFile != "" {
 		var err error
-		keyLogWriter, err = keylog.NewFileWriter(config.KeyLogFile)
+		keyLogWriter, err = transport.NewKeyLogFileWriter(config.KeyLogFile)
 		if err != nil {
 			// Log error but continue - key logging is optional
 			keyLogWriter = nil

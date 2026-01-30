@@ -17,7 +17,6 @@ import (
 	http "github.com/sardanioss/http"
 	"github.com/sardanioss/httpcloak/dns"
 	"github.com/sardanioss/httpcloak/fingerprint"
-	"github.com/sardanioss/httpcloak/keylog"
 	"github.com/sardanioss/httpcloak/proxy"
 	"github.com/sardanioss/net/http2"
 	"github.com/sardanioss/net/http2/hpack"
@@ -362,7 +361,7 @@ func (t *HTTP2Transport) createConn(ctx context.Context, host, port string) (*pe
 	if t.config != nil && t.config.KeyLogWriter != nil {
 		keyLogWriter = t.config.KeyLogWriter
 	} else {
-		keyLogWriter = keylog.GetWriter()
+		keyLogWriter = GetKeyLogWriter()
 	}
 
 	// Wrap with uTLS for fingerprinting

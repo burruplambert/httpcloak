@@ -14,7 +14,7 @@ import (
 
 	"github.com/sardanioss/httpcloak/dns"
 	"github.com/sardanioss/httpcloak/fingerprint"
-	"github.com/sardanioss/httpcloak/keylog"
+	"github.com/sardanioss/httpcloak/transport"
 	"github.com/sardanioss/quic-go"
 	"github.com/sardanioss/quic-go/http3"
 	"github.com/sardanioss/quic-go/quicvarint"
@@ -337,7 +337,7 @@ func (p *QUICHostPool) GetConn(ctx context.Context) (*QUICConn, error) {
 // Implements IPv6-first connection strategy
 func (p *QUICHostPool) createConn(ctx context.Context) (*QUICConn, error) {
 	// Get key log writer from global setting
-	var keyLogWriter io.Writer = keylog.GetWriter()
+	var keyLogWriter io.Writer = transport.GetKeyLogWriter()
 
 	// TLS config for QUIC (HTTP/3)
 	tlsConfig := &tls.Config{

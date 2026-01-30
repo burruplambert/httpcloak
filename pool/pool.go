@@ -15,7 +15,7 @@ import (
 
 	"github.com/sardanioss/httpcloak/dns"
 	"github.com/sardanioss/httpcloak/fingerprint"
-	"github.com/sardanioss/httpcloak/keylog"
+	"github.com/sardanioss/httpcloak/transport"
 	"github.com/sardanioss/net/http2"
 	"github.com/sardanioss/net/http2/hpack"
 	tls "github.com/sardanioss/utls"
@@ -321,7 +321,7 @@ func (p *HostPool) createConn(ctx context.Context) (*Conn, error) {
 	}
 
 	// Get key log writer from global setting
-	var keyLogWriter io.Writer = keylog.GetWriter()
+	var keyLogWriter io.Writer = transport.GetKeyLogWriter()
 
 	// Wrap with uTLS for fingerprinting
 	// Enable session tickets for PSK resumption (Chrome does this)

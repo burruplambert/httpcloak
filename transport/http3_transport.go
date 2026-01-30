@@ -18,7 +18,6 @@ import (
 	http "github.com/sardanioss/http"
 	"github.com/sardanioss/httpcloak/dns"
 	"github.com/sardanioss/httpcloak/fingerprint"
-	"github.com/sardanioss/httpcloak/keylog"
 	"github.com/sardanioss/httpcloak/proxy"
 	"github.com/sardanioss/quic-go"
 	"github.com/sardanioss/quic-go/http3"
@@ -259,7 +258,7 @@ func NewHTTP3TransportWithTransportConfig(preset *fingerprint.Preset, dnsCache *
 	if config != nil && config.KeyLogWriter != nil {
 		keyLogWriter = config.KeyLogWriter
 	} else {
-		keyLogWriter = keylog.GetWriter()
+		keyLogWriter = GetKeyLogWriter()
 	}
 
 	// Create TLS config for QUIC
@@ -456,7 +455,7 @@ func NewHTTP3TransportWithConfig(preset *fingerprint.Preset, dnsCache *dns.Cache
 	if config != nil && config.KeyLogWriter != nil {
 		keyLogWriter = config.KeyLogWriter
 	} else {
-		keyLogWriter = keylog.GetWriter()
+		keyLogWriter = GetKeyLogWriter()
 	}
 
 	// Create TLS config for QUIC
@@ -649,7 +648,7 @@ func NewHTTP3TransportWithMASQUE(preset *fingerprint.Preset, dnsCache *dns.Cache
 	if config != nil && config.KeyLogWriter != nil {
 		keyLogWriter = config.KeyLogWriter
 	} else {
-		keyLogWriter = keylog.GetWriter()
+		keyLogWriter = GetKeyLogWriter()
 	}
 
 	// Create TLS config for QUIC
@@ -1330,7 +1329,7 @@ func (t *HTTP3Transport) Connect(ctx context.Context, host, port string) error {
 	if t.config != nil && t.config.KeyLogWriter != nil {
 		keyLogWriter = t.config.KeyLogWriter
 	} else {
-		keyLogWriter = keylog.GetWriter()
+		keyLogWriter = GetKeyLogWriter()
 	}
 
 	// Create TLS config

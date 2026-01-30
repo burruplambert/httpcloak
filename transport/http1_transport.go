@@ -17,7 +17,6 @@ import (
 
 	"github.com/sardanioss/httpcloak/dns"
 	"github.com/sardanioss/httpcloak/fingerprint"
-	"github.com/sardanioss/httpcloak/keylog"
 	"github.com/sardanioss/httpcloak/proxy"
 	utls "github.com/sardanioss/utls"
 )
@@ -450,7 +449,7 @@ func (t *HTTP1Transport) createConn(ctx context.Context, host, port, scheme stri
 		if t.config != nil && t.config.KeyLogWriter != nil {
 			keyLogWriter = t.config.KeyLogWriter
 		} else {
-			keyLogWriter = keylog.GetWriter()
+			keyLogWriter = GetKeyLogWriter()
 		}
 
 		tlsConfig := &utls.Config{

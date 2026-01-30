@@ -146,7 +146,7 @@ type TransportConfig struct {
 	// KeyLogWriter is an optional writer for TLS key logging.
 	// When set, TLS master secrets are written in NSS key log format
 	// for traffic decryption in Wireshark.
-	// If nil, falls back to keylog.GetWriter() (SSLKEYLOGFILE env var).
+	// If nil, falls back to GetKeyLogWriter() (SSLKEYLOGFILE env var).
 	KeyLogWriter io.Writer
 }
 
