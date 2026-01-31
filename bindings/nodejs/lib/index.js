@@ -43,12 +43,6 @@ const Preset = {
   // Chrome 133
   CHROME_133: "chrome-133",
 
-  // Chrome 131
-  CHROME_131: "chrome-131",
-  CHROME_131_WINDOWS: "chrome-131-windows",
-  CHROME_131_LINUX: "chrome-131-linux",
-  CHROME_131_MACOS: "chrome-131-macos",
-
   // Mobile Chrome
   IOS_CHROME_143: "ios-chrome-143",
   IOS_CHROME_144: "ios-chrome-144",
@@ -71,7 +65,7 @@ const Preset = {
     return [
       this.CHROME_144, this.CHROME_144_WINDOWS, this.CHROME_144_LINUX, this.CHROME_144_MACOS,
       this.CHROME_143, this.CHROME_143_WINDOWS, this.CHROME_143_LINUX, this.CHROME_143_MACOS,
-      this.CHROME_141, this.CHROME_133, this.CHROME_131,
+      this.CHROME_141, this.CHROME_133,
       this.IOS_CHROME_143, this.IOS_CHROME_144, this.ANDROID_CHROME_143, this.ANDROID_CHROME_144,
       this.FIREFOX_133,
       this.SAFARI_18, this.IOS_SAFARI_17, this.IOS_SAFARI_18,

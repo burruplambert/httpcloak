@@ -122,6 +122,7 @@ import (
 
 	"github.com/sardanioss/httpcloak"
 	"github.com/sardanioss/httpcloak/dns"
+	"github.com/sardanioss/httpcloak/fingerprint"
 	"github.com/sardanioss/httpcloak/transport"
 )
 
@@ -1719,15 +1720,8 @@ func httpcloak_version() *C.char {
 
 //export httpcloak_available_presets
 func httpcloak_available_presets() *C.char {
-	// Must match exactly what's in fingerprint/presets.go
-	presets := []string{
-		"chrome-144", "chrome-144-windows", "chrome-144-linux", "chrome-144-macos",
-		"chrome-143", "chrome-143-windows", "chrome-143-linux", "chrome-143-macos",
-		"chrome-141", "chrome-133", "chrome-131",
-		"ios-chrome-144", "ios-chrome-143",
-		"android-chrome-144", "android-chrome-143",
-		"firefox-133", "safari-18", "ios-safari-18", "ios-safari-17",
-	}
+	// Use the actual preset list from fingerprint package
+	presets := fingerprint.Available()
 	data, _ := json.Marshal(presets)
 	return C.CString(string(data))
 }
