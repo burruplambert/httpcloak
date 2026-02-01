@@ -1884,14 +1884,17 @@ class Session:
         manager = _get_async_manager()
         callback_id, future = manager.register_request(self._lib)
 
-        # Prepare headers JSON
-        headers_json = json.dumps(merged_headers).encode("utf-8") if merged_headers else None
+        # Build options JSON with headers wrapper (clib expects {"headers": {...}})
+        options = {}
+        if merged_headers:
+            options["headers"] = merged_headers
+        options_json = json.dumps(options).encode("utf-8") if options else None
 
         # Start async request
         self._lib.httpcloak_get_async(
             self._handle,
             url.encode("utf-8"),
-            headers_json,
+            options_json,
             callback_id,
         )
 
@@ -1945,15 +1948,18 @@ class Session:
         manager = _get_async_manager()
         callback_id, future = manager.register_request(self._lib)
 
-        # Prepare headers JSON
-        headers_json = json.dumps(merged_headers).encode("utf-8") if merged_headers else None
+        # Build options JSON with headers wrapper (clib expects {"headers": {...}})
+        options = {}
+        if merged_headers:
+            options["headers"] = merged_headers
+        options_json = json.dumps(options).encode("utf-8") if options else None
 
         # Start async request
         self._lib.httpcloak_post_async(
             self._handle,
             url.encode("utf-8"),
             body,
-            headers_json,
+            options_json,
             callback_id,
         )
 
