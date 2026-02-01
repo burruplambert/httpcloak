@@ -66,6 +66,9 @@ type Session struct {
 	// Key log writer for TLS traffic decryption (Wireshark)
 	keyLogWriter io.WriteCloser
 
+	// refreshed indicates Refresh() was called - adds cache-control: max-age=0 to requests
+	refreshed bool
+
 	mu     sync.RWMutex
 	active bool
 }
@@ -189,6 +192,11 @@ func (s *Session) requestWithRedirects(ctx context.Context, req *transport.Reque
 
 	if req.Headers == nil {
 		req.Headers = make(map[string][]string)
+	}
+
+	// Add cache-control: max-age=0 if session was refreshed (simulates browser F5)
+	if s.refreshed {
+		req.Headers["cache-control"] = []string{"max-age=0"}
 	}
 
 	// Add cache validation headers (If-None-Match, If-Modified-Since)
@@ -880,6 +888,9 @@ func (s *Session) Refresh() {
 	if !s.active {
 		return
 	}
+
+	// Set refreshed flag - adds cache-control: max-age=0 to subsequent requests
+	s.refreshed = true
 
 	if s.transport != nil {
 		s.transport.Refresh()
