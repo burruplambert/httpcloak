@@ -193,6 +193,16 @@ type SessionConfig struct {
 	// If set, overrides the global SSLKEYLOGFILE environment variable for this session.
 	KeyLogFile string `json:"keyLogFile,omitempty"`
 
+	// DisableECH skips ECH (Encrypted Client Hello) DNS lookup for faster first request
+	// ECH adds ~15-20ms to first connection but provides extra privacy
+	DisableECH bool `json:"disableEch,omitempty"`
+
+	// DisableSpeculativeTLS disables the speculative TLS optimization for proxy connections.
+	// When false (default), CONNECT request and TLS ClientHello are sent together,
+	// saving one round-trip (~25% faster proxy connections). Set to true if you
+	// experience issues with certain proxies.
+	DisableSpeculativeTLS bool `json:"disableSpeculativeTls,omitempty"`
+
 	// Default authentication (can be overridden per-request)
 	Auth *AuthConfig `json:"auth,omitempty"`
 }

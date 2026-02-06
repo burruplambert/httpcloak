@@ -1361,6 +1361,9 @@ class Session:
         quic_idle_timeout: QUIC connection idle timeout in seconds (default: 30). Set higher for long-lived H3 connections.
         local_address: Local IP address to bind outgoing connections to (e.g., "192.168.1.100" or "::1")
         key_log_file: Path to write TLS key log (NSS format) for Wireshark decryption
+        disable_speculative_tls: Disable speculative TLS optimization for proxy connections (default: False).
+            When False, CONNECT and TLS ClientHello are sent together saving one round-trip.
+            Set to True if you experience issues with certain proxies.
 
     Example:
         with httpcloak.Session(preset="chrome-143") as session:
@@ -1412,6 +1415,7 @@ class Session:
         quic_idle_timeout: int = 0,
         local_address: Optional[str] = None,
         key_log_file: Optional[str] = None,
+        disable_speculative_tls: bool = False,
     ):
         self._lib = _get_lib()
         self._default_timeout = timeout
@@ -1453,6 +1457,8 @@ class Session:
             config["local_address"] = local_address
         if key_log_file:
             config["key_log_file"] = key_log_file
+        if disable_speculative_tls:
+            config["disable_speculative_tls"] = True
 
         config_json = json.dumps(config).encode("utf-8")
         self._handle = self._lib.httpcloak_session_new(config_json)

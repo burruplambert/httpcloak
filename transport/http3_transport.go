@@ -136,6 +136,9 @@ type HTTP3Transport struct {
 	// Skip TLS certificate verification (for testing)
 	insecureSkipVerify bool
 
+	// Skip ECH lookup for faster first request (ECH is optional privacy feature)
+	disableECH bool
+
 	// Local address for binding outgoing connections (IPv6 rotation)
 	localAddr string
 }
@@ -151,6 +154,12 @@ func (t *HTTP3Transport) SetInsecureSkipVerify(skip bool) {
 // SetLocalAddr sets the local IP address for outgoing connections
 func (t *HTTP3Transport) SetLocalAddr(addr string) {
 	t.localAddr = addr
+}
+
+// SetDisableECH disables ECH (Encrypted Client Hello) lookup for faster first request
+// ECH is an optional privacy feature - disabling it saves ~15-20ms on first connection
+func (t *HTTP3Transport) SetDisableECH(disable bool) {
+	t.disableECH = disable
 }
 
 // hasSessionForHost checks if there's a cached TLS session for the given host
@@ -913,16 +922,21 @@ func (t *HTTP3Transport) dialQUICWithProxy(ctx context.Context, addr string, tls
 	return t.raceQUICDial(ctx, host, ipv6Addrs, ipv4Addrs, tlsCfgCopy, cfgCopy)
 }
 
-// raceQUICDial implements Happy Eyeballs-style connection racing
+// raceQUICDial implements Happy Eyeballs-style connection racing (legacy, fetches ECH internally)
 // Tries IPv6 first with a short timeout, then falls back to IPv4 if needed
 func (t *HTTP3Transport) raceQUICDial(ctx context.Context, host string, ipv6Addrs, ipv4Addrs []*net.UDPAddr, tlsCfg *tls.Config, cfg *quic.Config) (*quic.Conn, error) {
+	// Fetch ECH config (legacy path - used by proxy dial functions)
+	echConfigList := t.getECHConfig(ctx, host)
+	return t.raceQUICDialWithECH(ctx, host, ipv6Addrs, ipv4Addrs, tlsCfg, cfg, echConfigList)
+}
+
+// raceQUICDialWithECH implements Happy Eyeballs-style connection racing with pre-fetched ECH config
+// Tries IPv6 first with a short timeout, then falls back to IPv4 if needed
+func (t *HTTP3Transport) raceQUICDialWithECH(ctx context.Context, host string, ipv6Addrs, ipv4Addrs []*net.UDPAddr, tlsCfg *tls.Config, cfg *quic.Config, echConfigList []byte) (*quic.Conn, error) {
 	// If only one address family available, just dial it directly
 	if len(ipv6Addrs) == 0 && len(ipv4Addrs) == 0 {
 		return nil, fmt.Errorf("no addresses to dial")
 	}
-
-	// Fetch ECH config - use custom config if set, otherwise from target host
-	echConfigList := t.getECHConfig(ctx, host)
 
 	// Capture PSK spec for 0-RTT before racing (was set in dialQUICWithDNS)
 	pskSpec := cfg.CachedClientHelloSpec
@@ -1009,10 +1023,38 @@ func (t *HTTP3Transport) dialQUIC(ctx context.Context, addr string, tlsCfg *tls.
 	// Get the connection host (may be different for domain fronting)
 	connectHost := t.getConnectHost(host)
 
-	// Resolve DNS to get all addresses - resolve connection host, not request host
-	ips, err := t.dnsCache.Resolve(ctx, connectHost)
-	if err != nil {
-		return nil, fmt.Errorf("DNS resolution failed for %s: %w", connectHost, err)
+	// Run DNS resolution and ECH config fetch in parallel
+	// Both are independent network lookups that can be done concurrently
+	var ips []net.IP
+	var dnsErr error
+	var echConfigList []byte
+
+	if t.disableECH {
+		// ECH disabled - just do DNS
+		ips, dnsErr = t.dnsCache.Resolve(ctx, connectHost)
+	} else {
+		// Run DNS and ECH in parallel
+		var wg sync.WaitGroup
+		wg.Add(2)
+
+		// DNS resolution goroutine
+		go func() {
+			defer wg.Done()
+			ips, dnsErr = t.dnsCache.Resolve(ctx, connectHost)
+		}()
+
+		// ECH config fetch goroutine
+		go func() {
+			defer wg.Done()
+			echConfigList = t.getECHConfig(ctx, host)
+		}()
+
+		wg.Wait()
+	}
+
+	// Check DNS result
+	if dnsErr != nil {
+		return nil, fmt.Errorf("DNS resolution failed for %s: %w", connectHost, dnsErr)
 	}
 	if len(ips) == 0 {
 		return nil, fmt.Errorf("no IP addresses found for %s", connectHost)
@@ -1078,8 +1120,8 @@ func (t *HTTP3Transport) dialQUIC(ctx context.Context, addr string, tlsCfg *tls.
 
 	// Race IPv6 and IPv4 connections (Happy Eyeballs style)
 	// Try IPv6 first, then IPv4 after short timeout
-	// Pass request host for ECH config fetching
-	return t.raceQUICDial(ctx, host, ipv6Addrs, ipv4Addrs, tlsCfgCopy, cfgCopy)
+	// Pass pre-fetched ECH config (fetched in parallel with DNS)
+	return t.raceQUICDialWithECH(ctx, host, ipv6Addrs, ipv4Addrs, tlsCfgCopy, cfgCopy, echConfigList)
 }
 
 // RoundTrip implements http.RoundTripper

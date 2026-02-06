@@ -275,6 +275,8 @@ type SessionConfig struct {
 	QuicIdleTimeout int               `json:"quic_idle_timeout,omitempty"` // QUIC idle timeout in seconds (default: 30)
 	LocalAddress    string            `json:"local_address,omitempty"`     // Local IP to bind outgoing connections (IPv6 rotation)
 	KeyLogFile      string            `json:"key_log_file,omitempty"`      // Path to write TLS key log for Wireshark decryption
+	DisableECH            bool              `json:"disable_ech,omitempty"`             // Disable ECH lookup for faster first request
+	DisableSpeculativeTLS bool              `json:"disable_speculative_tls,omitempty"` // Disable speculative TLS optimization for proxy connections
 }
 
 // Error response
@@ -971,6 +973,16 @@ func httpcloak_session_new(configJSON *C.char) C.int64_t {
 	// Handle key log file (for Wireshark decryption)
 	if config.KeyLogFile != "" {
 		opts = append(opts, httpcloak.WithKeyLogFile(config.KeyLogFile))
+	}
+
+	// Handle ECH disabling for faster first request
+	if config.DisableECH {
+		opts = append(opts, httpcloak.WithDisableECH())
+	}
+
+	// Handle speculative TLS disabling
+	if config.DisableSpeculativeTLS {
+		opts = append(opts, httpcloak.WithDisableSpeculativeTLS())
 	}
 
 	// Handle session cache if configured globally

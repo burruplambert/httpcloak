@@ -148,6 +148,11 @@ type TransportConfig struct {
 	// for traffic decryption in Wireshark.
 	// If nil, falls back to GetKeyLogWriter() (SSLKEYLOGFILE env var).
 	KeyLogWriter io.Writer
+
+	// DisableSpeculativeTLS disables the speculative TLS optimization for proxy connections.
+	// When false (default), CONNECT request and TLS ClientHello are sent together,
+	// saving one round-trip. Set to true if you experience issues with certain proxies.
+	DisableSpeculativeTLS bool
 }
 
 // Request represents an HTTP request
@@ -386,6 +391,13 @@ func (t *Transport) SetInsecureSkipVerify(skip bool) {
 	}
 }
 
+// SetDisableECH disables ECH lookup for faster first request
+func (t *Transport) SetDisableECH(disable bool) {
+	if t.h3Transport != nil {
+		t.h3Transport.SetDisableECH(disable)
+	}
+}
+
 // SetProxy sets or updates the proxy configuration
 // Note: This recreates the underlying transports
 func (t *Transport) SetProxy(proxy *ProxyConfig) {
@@ -508,20 +520,13 @@ func IsMASQUEProxy(proxyURL string) bool {
 		return true
 	}
 
-	// Auto-detect known MASQUE providers with https:// scheme
+	// Auto-detect MASQUE based on URL path containing MASQUE endpoints
+	// MASQUE proxies use specific paths like /.well-known/masque/ or /connect-udp/
+	// Don't auto-detect based on hostname alone - providers use different ports for different protocols
 	if parsed.Scheme == "https" {
-		// Check against known MASQUE proxy providers
-		host := parsed.Hostname()
-		knownProviders := []string{
-			"brd.superproxy.io",
-			"zproxy.lum-superproxy.io",
-			"lum-superproxy.io",
-			"pr.oxylabs.io",
-		}
-		for _, provider := range knownProviders {
-			if strings.Contains(host, provider) || strings.HasSuffix(host, provider) {
-				return true
-			}
+		path := strings.ToLower(parsed.Path)
+		if strings.Contains(path, "masque") || strings.Contains(path, "connect-udp") {
+			return true
 		}
 	}
 

@@ -165,7 +165,8 @@ public sealed class Session : IDisposable
         bool tlsOnly = false,
         int quicIdleTimeout = 0,
         string? localAddress = null,
-        string? keyLogFile = null)
+        string? keyLogFile = null,
+        bool disableSpeculativeTls = false)
     {
         Auth = auth;
 
@@ -190,7 +191,8 @@ public sealed class Session : IDisposable
             TlsOnly = tlsOnly,
             QuicIdleTimeout = quicIdleTimeout,
             LocalAddress = localAddress,
-            KeyLogFile = keyLogFile
+            KeyLogFile = keyLogFile,
+            DisableSpeculativeTls = disableSpeculativeTls
         };
 
         string configJson = JsonSerializer.Serialize(config, JsonContext.Default.SessionConfig);
@@ -2321,6 +2323,10 @@ internal class SessionConfig
     [JsonPropertyName("key_log_file")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? KeyLogFile { get; set; }
+
+    [JsonPropertyName("disable_speculative_tls")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool DisableSpeculativeTls { get; set; }
 }
 
 internal class RequestConfig

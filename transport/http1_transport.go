@@ -531,7 +531,9 @@ func (t *HTTP1Transport) dialThroughSOCKS5(ctx context.Context, targetHost, targ
 	return conn, nil
 }
 
-// dialThroughHTTPProxy establishes a connection through an HTTP proxy using CONNECT
+// dialThroughHTTPProxy establishes a connection through an HTTP proxy using CONNECT.
+// By default, uses speculative TLS: sends CONNECT + ClientHello together to save one round-trip.
+// Can be disabled via TransportConfig.DisableSpeculativeTLS.
 func (t *HTTP1Transport) dialThroughHTTPProxy(ctx context.Context, targetHost, targetPort string) (net.Conn, error) {
 	proxyURL, err := url.Parse(t.proxy.URL)
 	if err != nil {
@@ -574,7 +576,7 @@ func (t *HTTP1Transport) dialThroughHTTPProxy(ctx context.Context, targetHost, t
 		return nil, fmt.Errorf("failed to connect to proxy: %w", err)
 	}
 
-	// Send CONNECT request
+	// Build CONNECT request
 	targetAddr := net.JoinHostPort(targetHost, targetPort)
 	connectReq := fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\n", targetAddr, targetAddr)
 
@@ -586,9 +588,24 @@ func (t *HTTP1Transport) dialThroughHTTPProxy(ctx context.Context, targetHost, t
 
 	connectReq += "Connection: keep-alive\r\n\r\n"
 
+	// Check if speculative TLS is disabled
+	if t.config != nil && t.config.DisableSpeculativeTLS {
+		// Traditional flow: send CONNECT, wait for 200 OK, then return conn for TLS
+		return t.dialHTTPProxyBlocking(conn, connectReq)
+	}
+
+	// Speculative TLS: return a SpeculativeConn that will send CONNECT + ClientHello together
+	// This saves one round-trip by overlapping the CONNECT wait with TLS handshake start
+	return NewSpeculativeConn(conn, connectReq), nil
+}
+
+// dialHTTPProxyBlocking performs the traditional blocking CONNECT flow.
+// Used when speculative TLS is disabled or as a fallback.
+func (t *HTTP1Transport) dialHTTPProxyBlocking(conn net.Conn, connectReq string) (net.Conn, error) {
+	// Send CONNECT request
 	if _, err := conn.Write([]byte(connectReq)); err != nil {
 		conn.Close()
-		return nil, fmt.Errorf("failed to send CONNECT: %w", err)
+		return nil, fmt.Errorf("failed to send CONNECT request: %w", err)
 	}
 
 	// Read response

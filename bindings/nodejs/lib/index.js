@@ -1239,6 +1239,7 @@ class Session {
       quicIdleTimeout = 0,
       localAddress = null,
       keyLogFile = null,
+      disableSpeculativeTls = false,
     } = options;
 
     this._lib = getLib();
@@ -1298,6 +1299,9 @@ class Session {
     }
     if (keyLogFile) {
       config.key_log_file = keyLogFile;
+    }
+    if (disableSpeculativeTls) {
+      config.disable_speculative_tls = true;
     }
 
     this._handle = this._lib.httpcloak_session_new(JSON.stringify(config));

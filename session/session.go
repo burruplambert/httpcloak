@@ -109,19 +109,20 @@ func NewSessionWithOptions(id string, config *protocol.SessionConfig, opts *Sess
 
 	// Create transport config with ConnectTo, ECH, TLS-only, QUIC timeout, localAddr, and session cache settings
 	var transportConfig *transport.TransportConfig
-	needsConfig := len(config.ConnectTo) > 0 || config.ECHConfigDomain != "" || config.TLSOnly || config.QuicIdleTimeout > 0 || config.LocalAddress != "" || keyLogWriter != nil
+	needsConfig := len(config.ConnectTo) > 0 || config.ECHConfigDomain != "" || config.TLSOnly || config.QuicIdleTimeout > 0 || config.LocalAddress != "" || keyLogWriter != nil || config.DisableSpeculativeTLS
 	if opts != nil && opts.SessionCacheBackend != nil {
 		needsConfig = true
 	}
 
 	if needsConfig {
 		transportConfig = &transport.TransportConfig{
-			ConnectTo:       config.ConnectTo,
-			ECHConfigDomain: config.ECHConfigDomain,
-			TLSOnly:         config.TLSOnly,
-			QuicIdleTimeout: time.Duration(config.QuicIdleTimeout) * time.Second,
-			LocalAddr:       config.LocalAddress,
-			KeyLogWriter:    keyLogWriter,
+			ConnectTo:             config.ConnectTo,
+			ECHConfigDomain:       config.ECHConfigDomain,
+			TLSOnly:              config.TLSOnly,
+			QuicIdleTimeout:      time.Duration(config.QuicIdleTimeout) * time.Second,
+			LocalAddr:            config.LocalAddress,
+			KeyLogWriter:         keyLogWriter,
+			DisableSpeculativeTLS: config.DisableSpeculativeTLS,
 		}
 		// Add session cache backend if provided
 		if opts != nil {
@@ -158,6 +159,11 @@ func NewSessionWithOptions(id string, config *protocol.SessionConfig, opts *Sess
 		if dnsCache := t.GetDNSCache(); dnsCache != nil {
 			dnsCache.SetPreferIPv4(true)
 		}
+	}
+
+	// Disable ECH lookup for faster first request
+	if config.DisableECH {
+		t.SetDisableECH(true)
 	}
 
 	return &Session{

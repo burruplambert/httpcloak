@@ -25,6 +25,7 @@ package httpcloak
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"io"
 	"strings"
@@ -36,6 +37,16 @@ import (
 	"github.com/sardanioss/httpcloak/session"
 	"github.com/sardanioss/httpcloak/transport"
 )
+
+// systemRoots is pre-loaded at init time to avoid ~40ms delay on first TLS connection
+var systemRoots *x509.CertPool
+
+func init() {
+	// Pre-load system root CA certificates at package init time.
+	// This normally takes ~40ms on first TLS connection, so we do it eagerly.
+	// The result is cached by the Go runtime, so subsequent calls are instant.
+	systemRoots, _ = x509.SystemCertPool()
+}
 
 // Client is an HTTP client with browser fingerprint spoofing
 type Client struct {
@@ -301,6 +312,8 @@ type sessionConfig struct {
 	quicIdleTimeout    time.Duration     // QUIC idle timeout (default: 30s)
 	localAddr          string            // Local IP address to bind outgoing connections
 	keyLogFile         string            // Path to write TLS key log for Wireshark decryption
+	disableECH            bool // Disable ECH lookup for faster first request
+	disableSpeculativeTLS bool // Disable speculative TLS optimization for proxy connections
 
 	// Distributed session cache
 	sessionCacheBackend       transport.SessionCacheBackend
@@ -430,6 +443,24 @@ func WithKeyLogFile(path string) SessionOption {
 	}
 }
 
+// WithDisableECH disables ECH (Encrypted Client Hello) lookup for faster first request.
+// ECH is an optional privacy feature that adds ~15-20ms to first connection.
+// Disabling it has no security impact, only privacy implications.
+func WithDisableECH() SessionOption {
+	return func(c *sessionConfig) {
+		c.disableECH = true
+	}
+}
+
+// WithDisableSpeculativeTLS disables the speculative TLS optimization for proxy connections.
+// By default, httpcloak sends the CONNECT request and TLS ClientHello together to save
+// one round-trip (~25% faster). Disable this if you experience issues with certain proxies.
+func WithDisableSpeculativeTLS() SessionOption {
+	return func(c *sessionConfig) {
+		c.disableSpeculativeTLS = true
+	}
+}
+
 // WithConnectTo sets a host mapping for domain fronting.
 // Requests to requestHost will connect to connectHost instead.
 // The TLS SNI and Host header will still use requestHost.
@@ -509,6 +540,8 @@ func NewSession(preset string, opts ...SessionOption) *Session {
 		QuicIdleTimeout:    int(cfg.quicIdleTimeout.Seconds()),
 		LocalAddress:       cfg.localAddr,
 		KeyLogFile:         cfg.keyLogFile,
+		DisableECH:            cfg.disableECH,
+		DisableSpeculativeTLS: cfg.disableSpeculativeTLS,
 	}
 
 	// Retry configuration

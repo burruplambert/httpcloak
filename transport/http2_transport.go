@@ -7,12 +7,11 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"net"
 	"net/url"
 	"sync"
 	"time"
-
-	"io"
 
 	http "github.com/sardanioss/http"
 	"github.com/sardanioss/httpcloak/dns"
@@ -533,7 +532,9 @@ func (t *HTTP2Transport) dialThroughSOCKS5(ctx context.Context, targetHost, targ
 	return conn, nil
 }
 
-// dialThroughHTTPProxy establishes a connection through an HTTP proxy using CONNECT
+// dialThroughHTTPProxy establishes a connection through an HTTP proxy using CONNECT.
+// By default, uses speculative TLS: sends CONNECT + ClientHello together to save one round-trip.
+// Can be disabled via TransportConfig.DisableSpeculativeTLS.
 func (t *HTTP2Transport) dialThroughHTTPProxy(ctx context.Context, targetHost, targetPort string) (net.Conn, error) {
 	// Parse proxy URL
 	proxyURL, err := url.Parse(t.proxy.URL)
@@ -590,6 +591,20 @@ func (t *HTTP2Transport) dialThroughHTTPProxy(ctx context.Context, targetHost, t
 
 	connectReq += "\r\n"
 
+	// Check if speculative TLS is disabled
+	if t.config != nil && t.config.DisableSpeculativeTLS {
+		// Traditional flow: send CONNECT, wait for 200 OK, then return conn for TLS
+		return t.dialHTTPProxyBlocking(conn, connectReq)
+	}
+
+	// Speculative TLS: return a SpeculativeConn that will send CONNECT + ClientHello together
+	// This saves one round-trip by overlapping the CONNECT wait with TLS handshake start
+	return NewSpeculativeConn(conn, connectReq), nil
+}
+
+// dialHTTPProxyBlocking performs the traditional blocking CONNECT flow.
+// Used when speculative TLS is disabled or as a fallback.
+func (t *HTTP2Transport) dialHTTPProxyBlocking(conn net.Conn, connectReq string) (net.Conn, error) {
 	// Send CONNECT request
 	if _, err := conn.Write([]byte(connectReq)); err != nil {
 		conn.Close()
