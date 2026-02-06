@@ -281,6 +281,12 @@ session = httpcloak.Session(proxy="masque://proxy:443")
 
 Known MASQUE providers (auto-detected): Bright Data, Oxylabs, Smartproxy, SOAX.
 
+**Speculative TLS** (enabled by default): CONNECT + TLS ClientHello are sent together, saving one proxy round-trip (~25% faster). Disable if you experience issues with certain proxies:
+
+```python
+session = httpcloak.Session(proxy="socks5://...", disable_speculative_tls=True)
+```
+
 ### 🎭 Domain Fronting
 
 Connect to a different host than what appears in TLS SNI.
