@@ -107,6 +107,15 @@ httpcloak.configure({
 // - http://user:pass@host:port
 // - socks5://host:port
 // - socks5://user:pass@host:port
+
+// Speculative TLS optimization (enabled by default):
+// Sends CONNECT + TLS ClientHello together, saving one round-trip (~25% faster).
+// If you experience issues with certain proxies, disable it:
+const session2 = new httpcloak.Session({
+  preset: "chrome-143",
+  proxy: "http://user:pass@proxy.example.com:8080",
+  disableSpeculativeTls: true
+});
 `);
 
   console.log("=".repeat(60));
