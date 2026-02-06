@@ -114,7 +114,7 @@ func NewHTTP1TransportWithConfig(preset *fingerprint.Preset, dnsCache *dns.Cache
 	return t
 }
 
-// SetConnectTo sets a host mapping for domain fronting (stub for HTTP/1.1)
+// SetConnectTo sets a host mapping for domain fronting
 func (t *HTTP1Transport) SetConnectTo(requestHost, connectHost string) {
 	if t.config == nil {
 		t.config = &TransportConfig{}
@@ -123,6 +123,17 @@ func (t *HTTP1Transport) SetConnectTo(requestHost, connectHost string) {
 		t.config.ConnectTo = make(map[string]string)
 	}
 	t.config.ConnectTo[requestHost] = connectHost
+}
+
+// getConnectHost returns the connection host for DNS resolution
+func (t *HTTP1Transport) getConnectHost(requestHost string) string {
+	if t.config == nil || t.config.ConnectTo == nil {
+		return requestHost
+	}
+	if connectHost, ok := t.config.ConnectTo[requestHost]; ok {
+		return connectHost
+	}
+	return requestHost
 }
 
 // SetInsecureSkipVerify sets whether to skip TLS verification
@@ -162,7 +173,9 @@ func (t *HTTP1Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 	}
 
-	key := fmt.Sprintf("%s://%s:%s", scheme, host, port)
+	// Use connect host for pool key (domain fronting: multiple request hosts share one connection)
+	connectHost := t.getConnectHost(host)
+	key := fmt.Sprintf("%s://%s:%s", scheme, connectHost, port)
 
 	// Try to get an idle connection
 	conn, err := t.getIdleConn(key)
@@ -184,7 +197,7 @@ func (t *HTTP1Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		conn.close()
 	}
 
-	// Create new connection
+	// Create new connection (pass request host for SNI, connectHost used internally for DNS)
 	conn, err = t.createConn(req.Context(), host, port, scheme)
 	if err != nil {
 		return nil, err
@@ -355,20 +368,24 @@ func (t *HTTP1Transport) StreamRoundTrip(req *http.Request) (*http.Response, err
 }
 
 // createConn creates a new HTTP/1.1 connection
+// host is the request host (used for TLS SNI), DNS resolution uses getConnectHost
 func (t *HTTP1Transport) createConn(ctx context.Context, host, port, scheme string) (*http1Conn, error) {
 	var rawConn net.Conn
 	var err error
 
-	targetAddr := net.JoinHostPort(host, port)
+	// Use connect host for DNS resolution and proxy CONNECT (may differ for domain fronting)
+	connectHost := t.getConnectHost(host)
+	targetAddr := net.JoinHostPort(connectHost, port)
 
 	if t.proxy != nil && t.proxy.URL != "" {
-		rawConn, err = t.dialThroughProxy(ctx, host, port)
+		rawConn, err = t.dialThroughProxy(ctx, connectHost, port)
 		if err != nil {
 			return nil, NewProxyError("dial_proxy", host, port, err)
 		}
 	} else {
 		// Direct connection with DNS resolution and IPv4/IPv6 fallback
-		ips, err := t.dnsCache.ResolveAllSorted(ctx, host)
+		// Resolve connectHost (may be different from request host for domain fronting)
+		ips, err := t.dnsCache.ResolveAllSorted(ctx, connectHost)
 		if err != nil {
 			return nil, NewDNSError(host, err)
 		}

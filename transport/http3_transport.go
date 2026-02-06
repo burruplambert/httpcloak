@@ -1159,6 +1159,26 @@ func (t *HTTP3Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 	}
 
+	// For domain fronting: swap req.URL.Host to connectHost so http3.Transport
+	// pools connections by connect host (multiple request hosts share one QUIC connection).
+	// Preserve original host in req.Host for the :authority pseudo-header.
+	requestHost := req.URL.Hostname()
+	connectHost := t.getConnectHost(requestHost)
+	if connectHost != requestHost {
+		// Set req.Host to preserve original :authority header
+		if req.Host == "" {
+			req.Host = req.URL.Host
+		}
+		// Swap URL host to connectHost for pool key
+		origURLHost := req.URL.Host
+		if req.URL.Port() != "" {
+			req.URL.Host = net.JoinHostPort(connectHost, req.URL.Port())
+		} else {
+			req.URL.Host = connectHost
+		}
+		defer func() { req.URL.Host = origURLHost }()
+	}
+
 	// Make request - http3.Transport handles connection pooling
 	// Retry up to 3 times on 0-RTT rejection (can happen multiple times after Refresh)
 	var resp *http.Response
@@ -1421,10 +1441,12 @@ func (t *HTTP3Transport) SetECHConfigCache(configs map[string][]byte) {
 // Connect establishes a QUIC connection to the host without making a request.
 // This is used for protocol racing - the first protocol to connect wins.
 func (t *HTTP3Transport) Connect(ctx context.Context, host, port string) error {
-	addr := net.JoinHostPort(host, port)
+	// Use connect host for DNS resolution (may differ for domain fronting)
+	connectHost := t.getConnectHost(host)
+	addr := net.JoinHostPort(connectHost, port)
 
-	// Use DNS cache for resolution
-	ip, err := t.dnsCache.ResolveOne(ctx, host)
+	// Use DNS cache for resolution - resolve connectHost, not request host
+	ip, err := t.dnsCache.ResolveOne(ctx, connectHost)
 	if err != nil {
 		return fmt.Errorf("DNS resolution failed: %w", err)
 	}
@@ -1439,7 +1461,7 @@ func (t *HTTP3Transport) Connect(ctx context.Context, host, port string) error {
 		keyLogWriter = GetKeyLogWriter()
 	}
 
-	// Create TLS config
+	// Create TLS config - use request host for SNI
 	tlsCfg := &tls.Config{
 		ServerName:         host,
 		NextProtos:         []string{"h3"},
@@ -1447,7 +1469,7 @@ func (t *HTTP3Transport) Connect(ctx context.Context, host, port string) error {
 		KeyLogWriter:       keyLogWriter,
 	}
 
-	// Fetch ECH configs from DNS HTTPS records
+	// Fetch ECH configs from DNS HTTPS records (use request host for ECH)
 	// This is non-blocking - if it fails, we proceed without ECH
 	echConfigList, _ := dns.FetchECHConfigs(ctx, host)
 

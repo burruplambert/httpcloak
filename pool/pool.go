@@ -105,7 +105,8 @@ func (c *Conn) Close() error {
 
 // HostPool manages connections to a single host
 type HostPool struct {
-	host        string
+	host        string // Connection host (for DNS resolution - may be connectTo target)
+	sniHost     string // SNI host (for TLS ServerName - always the original request host)
 	port        string
 	preset      *fingerprint.Preset
 	dnsCache    *dns.Cache
@@ -158,17 +159,24 @@ func NewHostPool(host, port string, preset *fingerprint.Preset, dnsCache *dns.Ca
 			cachedPSKSpec = &spec
 		}
 	}
-	return NewHostPoolWithConfig(host, port, preset, dnsCache, false, "", cachedSpec, cachedPSKSpec, shuffleSeed, nil)
+	return NewHostPoolWithConfig(host, "", port, preset, dnsCache, false, "", cachedSpec, cachedPSKSpec, shuffleSeed, nil)
 }
 
 // NewHostPoolWithConfig creates a pool with TLS and proxy configuration
-func NewHostPoolWithConfig(host, port string, preset *fingerprint.Preset, dnsCache *dns.Cache, insecureSkipVerify bool, proxyURL string, cachedSpec, cachedPSKSpec *utls.ClientHelloSpec, shuffleSeed int64, sessionCache utls.ClientSessionCache) *HostPool {
+// host is the connection host (for DNS resolution, may be connectTo target)
+// sniHost is the TLS ServerName host (original request host, used for SNI)
+// If sniHost is empty, host is used for both DNS and SNI
+func NewHostPoolWithConfig(host, sniHost, port string, preset *fingerprint.Preset, dnsCache *dns.Cache, insecureSkipVerify bool, proxyURL string, cachedSpec, cachedPSKSpec *utls.ClientHelloSpec, shuffleSeed int64, sessionCache utls.ClientSessionCache) *HostPool {
 	// Use provided session cache or create a new one for backward compatibility
 	if sessionCache == nil {
 		sessionCache = utls.NewLRUClientSessionCache(32)
 	}
+	if sniHost == "" {
+		sniHost = host
+	}
 	pool := &HostPool{
 		host:               host,
+		sniHost:            sniHost,
 		port:               port,
 		preset:             preset,
 		dnsCache:           dnsCache,
@@ -325,8 +333,9 @@ func (p *HostPool) createConn(ctx context.Context) (*Conn, error) {
 
 	// Wrap with uTLS for fingerprinting
 	// Enable session tickets for PSK resumption (Chrome does this)
+	// Use sniHost (original request host) for TLS ServerName, not p.host (which may be connectTo target)
 	tlsConfig := &utls.Config{
-		ServerName:                     p.host,
+		ServerName:                     p.sniHost,
 		InsecureSkipVerify:             p.insecureSkipVerify,
 		MinVersion:                     minVersion,
 		MaxVersion:                     tls.VersionTLS13,
@@ -1079,7 +1088,15 @@ func (m *Manager) GetPool(host, port string) (*HostPool, error) {
 	if port == "" {
 		port = "443"
 	}
-	key := net.JoinHostPort(host, port)
+
+	// Use connect host for pool key (domain fronting: multiple request hosts share one connection)
+	connectHost := host
+	if m.connectTo != nil {
+		if mapped, ok := m.connectTo[host]; ok {
+			connectHost = mapped
+		}
+	}
+	key := net.JoinHostPort(connectHost, port)
 
 	m.mu.RLock()
 	if m.closed {
@@ -1106,7 +1123,12 @@ func (m *Manager) GetPool(host, port string) (*HostPool, error) {
 		return pool, nil
 	}
 
-	pool = NewHostPoolWithConfig(host, port, m.preset, m.dnsCache, m.insecureSkipVerify, m.proxyURL, m.cachedSpec, m.cachedPSKSpec, m.shuffleSeed, m.sessionCache)
+	// Use connectHost for DNS resolution, but host (request host) for TLS SNI
+	sniHost := ""
+	if connectHost != host {
+		sniHost = host // Original request host for TLS ServerName
+	}
+	pool = NewHostPoolWithConfig(connectHost, sniHost, port, m.preset, m.dnsCache, m.insecureSkipVerify, m.proxyURL, m.cachedSpec, m.cachedPSKSpec, m.shuffleSeed, m.sessionCache)
 	if m.maxConnsPerHost > 0 {
 		pool.SetMaxConns(m.maxConnsPerHost)
 	}

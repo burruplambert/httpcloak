@@ -141,9 +141,11 @@ func (t *HTTP2Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if port == "" {
 		port = "443"
 	}
-	key := net.JoinHostPort(host, port)
+	// Use connect host for pool key (domain fronting: multiple request hosts share one connection)
+	connectHost := t.getConnectHost(host)
+	key := net.JoinHostPort(connectHost, port)
 
-	// Try to get existing connection
+	// Try to get existing connection (pass request host for SNI, connectHost used internally for DNS)
 	conn, err := t.getOrCreateConn(req.Context(), host, port, key)
 	if err != nil {
 		return nil, err
@@ -886,7 +888,9 @@ func (t *HTTP2Transport) getConnectHost(requestHost string) string {
 // Connect establishes a connection to the host without making a request.
 // This is used for protocol racing - the first protocol to connect wins.
 func (t *HTTP2Transport) Connect(ctx context.Context, host, port string) error {
-	key := net.JoinHostPort(host, port)
+	// Use connect host for pool key (domain fronting: multiple request hosts share one connection)
+	connectHost := t.getConnectHost(host)
+	key := net.JoinHostPort(connectHost, port)
 
 	// Check if we already have a usable connection
 	t.connsMu.RLock()

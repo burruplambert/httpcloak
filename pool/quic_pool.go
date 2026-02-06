@@ -192,7 +192,8 @@ func (c *QUICConn) Close() error {
 
 // QUICHostPool manages QUIC connections to a single host
 type QUICHostPool struct {
-	host        string
+	host        string // Connection host (for DNS resolution - may be connectTo target)
+	sniHost     string // SNI host (for TLS ServerName - always the original request host)
 	port        string
 	preset      *fingerprint.Preset
 	dnsCache    *dns.Cache
@@ -245,15 +246,21 @@ func NewQUICHostPool(host, port string, preset *fingerprint.Preset, dnsCache *dn
 			cachedPSKSpec = &spec
 		}
 	}
-	return NewQUICHostPoolWithCachedSpec(host, port, preset, dnsCache, cachedSpec, cachedPSKSpec, shuffleSeed)
+	return NewQUICHostPoolWithCachedSpec(host, "", port, preset, dnsCache, cachedSpec, cachedPSKSpec, shuffleSeed)
 }
 
 // NewQUICHostPoolWithCachedSpec creates a QUIC pool with a pre-cached ClientHelloSpec and shuffle seed
 // This ensures consistent TLS extension order and transport parameter order across all hosts in a session
 // cachedSpec is used for initial connections, cachedPSKSpec is used when resuming sessions
-func NewQUICHostPoolWithCachedSpec(host, port string, preset *fingerprint.Preset, dnsCache *dns.Cache, cachedSpec *utls.ClientHelloSpec, cachedPSKSpec *utls.ClientHelloSpec, shuffleSeed int64) *QUICHostPool {
+// host is the connection host (for DNS), sniHost is the TLS ServerName (original request host)
+// If sniHost is empty, host is used for both
+func NewQUICHostPoolWithCachedSpec(host, sniHost, port string, preset *fingerprint.Preset, dnsCache *dns.Cache, cachedSpec *utls.ClientHelloSpec, cachedPSKSpec *utls.ClientHelloSpec, shuffleSeed int64) *QUICHostPool {
+	if sniHost == "" {
+		sniHost = host
+	}
 	pool := &QUICHostPool{
 		host:                  host,
+		sniHost:               sniHost,
 		port:                  port,
 		preset:                preset,
 		dnsCache:              dnsCache,
@@ -340,8 +347,9 @@ func (p *QUICHostPool) createConn(ctx context.Context) (*QUICConn, error) {
 	var keyLogWriter io.Writer = transport.GetKeyLogWriter()
 
 	// TLS config for QUIC (HTTP/3)
+	// Use sniHost (original request host) for TLS ServerName, not p.host (which may be connectTo target)
 	tlsConfig := &tls.Config{
-		ServerName:         p.host,
+		ServerName:         p.sniHost,
 		InsecureSkipVerify: p.insecureSkipVerify,
 		NextProtos:         []string{http3.NextProtoH3}, // HTTP/3 ALPN
 		MinVersion:         tls.VersionTLS13,
@@ -395,7 +403,8 @@ func (p *QUICHostPool) createConn(ctx context.Context) (*QUICConn, error) {
 			echConfigList, _ = dns.FetchECHConfigs(ctx, p.echConfigDomain)
 		} else if clientHelloID != nil {
 			// Fetch ECH configs from DNS HTTPS records for real ECH negotiation
-			echConfigList, _ = dns.FetchECHConfigs(ctx, p.host)
+			// Use sniHost since ECH encrypts the SNI (original request host)
+			echConfigList, _ = dns.FetchECHConfigs(ctx, p.sniHost)
 		}
 	}
 
@@ -593,8 +602,8 @@ func (p *QUICHostPool) hasSessionForHost() bool {
 	if p.sessionCache == nil {
 		return false
 	}
-	// TLS 1.3 session key is typically just the server name
-	session, ok := p.sessionCache.Get(p.host)
+	// TLS 1.3 session key is typically just the server name (use sniHost for consistency)
+	session, ok := p.sessionCache.Get(p.sniHost)
 	// Must have both a valid lookup AND a non-nil session state
 	return ok && session != nil
 }
@@ -739,7 +748,15 @@ func (m *QUICManager) GetPool(host, port string) (*QUICHostPool, error) {
 	if port == "" {
 		port = "443"
 	}
-	key := net.JoinHostPort(host, port)
+
+	// Use connect host for pool key (domain fronting: multiple request hosts share one connection)
+	connectHost := host
+	if m.connectTo != nil {
+		if mapped, ok := m.connectTo[host]; ok {
+			connectHost = mapped
+		}
+	}
+	key := net.JoinHostPort(connectHost, port)
 
 	m.mu.RLock()
 	if m.closed {
@@ -766,7 +783,12 @@ func (m *QUICManager) GetPool(host, port string) (*QUICHostPool, error) {
 		return pool, nil
 	}
 
-	pool = NewQUICHostPoolWithCachedSpec(host, port, m.preset, m.dnsCache, m.cachedSpec, m.cachedPSKSpec, m.shuffleSeed)
+	// Use connectHost for DNS resolution, but host (request host) for TLS SNI
+	sniHost := ""
+	if connectHost != host {
+		sniHost = host // Original request host for TLS ServerName
+	}
+	pool = NewQUICHostPoolWithCachedSpec(connectHost, sniHost, port, m.preset, m.dnsCache, m.cachedSpec, m.cachedPSKSpec, m.shuffleSeed)
 	if m.maxConnsPerHost > 0 {
 		pool.SetMaxConns(m.maxConnsPerHost)
 	}
