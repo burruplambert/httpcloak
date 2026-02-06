@@ -150,6 +150,24 @@ Example with your machine's IPs:
 	//     fmt.Printf("Server saw IP: %s\n", body)
 	// }
 
+	// ==========================================================
+	// Example 4: Speculative TLS for Proxy Connections
+	// ==========================================================
+	fmt.Println("\n" + strings.Repeat("=", 60))
+	fmt.Println("Example 4: Speculative TLS for Proxy Connections")
+	fmt.Println(strings.Repeat("-", 60))
+
+	fmt.Println(`
+Speculative TLS (enabled by default):
+Sends CONNECT + TLS ClientHello together, saving one round-trip (~25% faster).
+If you experience issues with certain proxies, disable it:
+
+session := httpcloak.NewSession("chrome-144",
+    httpcloak.WithProxy("http://user:pass@proxy.example.com:8080"),
+    httpcloak.WithDisableSpeculativeTLS(),
+)
+`)
+
 	fmt.Println("\n" + strings.Repeat("=", 60))
 	fmt.Println("New features examples completed!")
 	fmt.Println(strings.Repeat("=", 60))
