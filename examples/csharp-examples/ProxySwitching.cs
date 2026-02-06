@@ -141,6 +141,23 @@ for (int i = 0; i < proxies.Length; i++)
 }
 ");
 
+// Speculative TLS
+Console.WriteLine("\n" + new string('=', 60));
+Console.WriteLine("Example 6: Speculative TLS Optimization");
+Console.WriteLine(new string('-', 60));
+
+Console.WriteLine(@"
+// Speculative TLS (enabled by default):
+// Sends CONNECT + TLS ClientHello together, saving one round-trip (~25% faster).
+// If you experience issues with certain proxies, disable it:
+
+using var session = new Session(
+    preset: ""chrome-143"",
+    proxy: ""http://user:pass@proxy.example.com:8080"",
+    disableSpeculativeTls: true
+);
+");
+
 Console.WriteLine("\n" + new string('=', 60));
 Console.WriteLine("Proxy switching examples completed!");
 Console.WriteLine(new string('=', 60));
