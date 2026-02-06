@@ -123,6 +123,9 @@ internal static class Native
     [DllImport(LibraryName, EntryPoint = "httpcloak_unregister_callback", CallingConvention = CallingConvention.Cdecl)]
     public static extern void UnregisterCallback(long callbackId);
 
+    [DllImport(LibraryName, EntryPoint = "httpcloak_cancel_request", CallingConvention = CallingConvention.Cdecl)]
+    public static extern void CancelRequest(long callbackId);
+
     [DllImport(LibraryName, EntryPoint = "httpcloak_get_async", CallingConvention = CallingConvention.Cdecl)]
     public static extern void GetAsync(long handle, [MarshalAs(UnmanagedType.LPUTF8Str)] string url, [MarshalAs(UnmanagedType.LPUTF8Str)] string? headersJson, long callbackId);
 

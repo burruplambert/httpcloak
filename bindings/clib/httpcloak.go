@@ -187,6 +187,7 @@ var (
 	callbackMu      sync.Mutex
 	callbackCounter int64
 	asyncCallbacks  = make(map[int64]C.async_callback)
+	cancelFuncs     = make(map[int64]context.CancelFunc) // For cancelling in-flight async requests
 )
 
 // Request configuration for JSON parsing
@@ -1208,16 +1209,28 @@ func httpcloak_register_callback(callback C.async_callback) C.int64_t {
 func httpcloak_unregister_callback(callbackID C.int64_t) {
 	callbackMu.Lock()
 	delete(asyncCallbacks, int64(callbackID))
+	delete(cancelFuncs, int64(callbackID))
 	callbackMu.Unlock()
+}
+
+//export httpcloak_cancel_request
+func httpcloak_cancel_request(callbackID C.int64_t) {
+	callbackMu.Lock()
+	cancel, exists := cancelFuncs[int64(callbackID)]
+	callbackMu.Unlock()
+	if exists {
+		cancel()
+	}
 }
 
 func invokeCallback(callbackID int64, responseJSON string, errStr string) {
 	callbackMu.Lock()
 	callback, exists := asyncCallbacks[callbackID]
-	// Auto-cleanup: remove callback after retrieval to prevent memory leaks
+	// Auto-cleanup: remove callback and cancel func after retrieval to prevent memory leaks
 	if exists {
 		delete(asyncCallbacks, callbackID)
 	}
+	delete(cancelFuncs, callbackID)
 	callbackMu.Unlock()
 
 	if !exists {
@@ -1258,13 +1271,19 @@ func httpcloak_get_async(handle C.int64_t, url *C.char, optionsJSON *C.char, cal
 		}
 	}
 
+	// Create cancellable context and store cancel func for this request
+	ctx, cancel := context.WithCancel(context.Background())
+	callbackMu.Lock()
+	cancelFuncs[int64(callbackID)] = cancel
+	callbackMu.Unlock()
+
 	go func() {
+		defer cancel()
 		if session == nil {
 			invokeCallback(int64(callbackID), "", ErrInvalidSession.Error())
 			return
 		}
 
-		ctx := context.Background()
 		req := &httpcloak.Request{
 			Method:  "GET",
 			URL:     urlStr,
@@ -1334,7 +1353,14 @@ func httpcloak_post_async(handle C.int64_t, url *C.char, body *C.char, optionsJS
 		}
 	}
 
+	// Create cancellable context and store cancel func for this request
+	ctx, cancel := context.WithCancel(context.Background())
+	callbackMu.Lock()
+	cancelFuncs[int64(callbackID)] = cancel
+	callbackMu.Unlock()
+
 	go func() {
+		defer cancel()
 		if session == nil {
 			invokeCallback(int64(callbackID), "", ErrInvalidSession.Error())
 			return
@@ -1345,7 +1371,6 @@ func httpcloak_post_async(handle C.int64_t, url *C.char, body *C.char, optionsJS
 			bodyReader = bytes.NewReader([]byte(bodyStr))
 		}
 
-		ctx := context.Background()
 		req := &httpcloak.Request{
 			Method:  "POST",
 			URL:     urlStr,
@@ -1408,7 +1433,14 @@ func httpcloak_request_async(handle C.int64_t, requestJSON *C.char, callbackID C
 		json.Unmarshal([]byte(jsonStr), &config)
 	}
 
+	// Create cancellable context and store cancel func for this request
+	ctx, cancel := context.WithCancel(context.Background())
+	callbackMu.Lock()
+	cancelFuncs[int64(callbackID)] = cancel
+	callbackMu.Unlock()
+
 	go func() {
+		defer cancel()
 		if session == nil {
 			invokeCallback(int64(callbackID), "", ErrInvalidSession.Error())
 			return
@@ -1418,11 +1450,11 @@ func httpcloak_request_async(handle C.int64_t, requestJSON *C.char, callbackID C
 			config.Method = "GET"
 		}
 
-		ctx := context.Background()
+		// Layer timeout on top of the cancellable context
 		if config.Timeout > 0 {
-			var cancel context.CancelFunc
-			ctx, cancel = context.WithTimeout(ctx, time.Duration(config.Timeout)*time.Second)
-			defer cancel()
+			var timeoutCancel context.CancelFunc
+			ctx, timeoutCancel = context.WithTimeout(ctx, time.Duration(config.Timeout)*time.Second)
+			defer timeoutCancel()
 		}
 
 		var bodyReader io.Reader

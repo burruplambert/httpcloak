@@ -88,8 +88,10 @@ internal sealed class AsyncCallbackManager
 
     /// <summary>
     /// Register a new async request. Returns (callbackId, Task).
+    /// When a CancellationToken is provided, cancellation will cancel the Task
+    /// (the Go goroutine continues but the caller is unblocked immediately).
     /// </summary>
-    public (long CallbackId, Task<Response> Task) RegisterRequest()
+    public (long CallbackId, Task<Response> Task) RegisterRequest(CancellationToken cancellationToken = default)
     {
         var tcs = new TaskCompletionSource<Response>(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -97,6 +99,20 @@ internal sealed class AsyncCallbackManager
         long callbackId = Native.RegisterCallback(_callback);
 
         _pendingRequests[callbackId] = tcs;
+
+        // Wire up cancellation: cancel the Go context and the TCS
+        if (cancellationToken.CanBeCanceled)
+        {
+            var id = callbackId;
+            cancellationToken.Register(() =>
+            {
+                // Cancel the in-flight Go request (cancels context.Context → aborts DNS/TCP/TLS/HTTP)
+                Native.CancelRequest(id);
+                // Cancel the C# Task so the caller is unblocked immediately
+                if (_pendingRequests.TryRemove(id, out var removed))
+                    removed.TrySetCanceled(cancellationToken);
+            });
+        }
 
         return (callbackId, tcs.Task);
     }
@@ -599,7 +615,7 @@ public sealed class Session : IDisposable
     /// <param name="cookies">Cookies to send with this request</param>
     /// <param name="auth">Basic auth (username, password). If null, uses session Auth.</param>
     /// <param name="timeout">Request timeout in seconds</param>
-    public Task<Response> GetAsync(string url, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
+    public Task<Response> GetAsync(string url, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null, CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
 
@@ -608,7 +624,7 @@ public sealed class Session : IDisposable
         headers = ApplyCookies(headers, cookies);
 
         if (timeout != null)
-            return RequestAsync("GET", url, null, headers, timeout, auth, parameters, cookies);
+            return RequestAsync("GET", url, null, headers, timeout, auth, parameters, cookies, cancellationToken);
 
         // Wrap headers in RequestOptions structure (Go expects {"headers": {...}, "timeout": ...})
         var options = new RequestOptions { Headers = headers.Count > 0 ? headers : null };
@@ -616,7 +632,7 @@ public sealed class Session : IDisposable
             ? JsonSerializer.Serialize(options, JsonContext.Default.RequestOptions)
             : null;
 
-        var (callbackId, task) = AsyncCallbackManager.Instance.RegisterRequest();
+        var (callbackId, task) = AsyncCallbackManager.Instance.RegisterRequest(cancellationToken);
         Native.GetAsync(_handle, url, optionsJson, callbackId);
 
         return task;
@@ -632,7 +648,7 @@ public sealed class Session : IDisposable
     /// <param name="cookies">Cookies to send with this request</param>
     /// <param name="auth">Basic auth (username, password). If null, uses session Auth.</param>
     /// <param name="timeout">Request timeout in seconds</param>
-    public Task<Response> PostAsync(string url, string? body = null, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
+    public Task<Response> PostAsync(string url, string? body = null, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null, CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
 
@@ -641,7 +657,7 @@ public sealed class Session : IDisposable
         headers = ApplyCookies(headers, cookies);
 
         if (timeout != null)
-            return RequestAsync("POST", url, body, headers, timeout, auth, parameters, cookies);
+            return RequestAsync("POST", url, body, headers, timeout, auth, parameters, cookies, cancellationToken);
 
         // Wrap headers in RequestOptions structure (Go expects {"headers": {...}, "timeout": ...})
         var options = new RequestOptions { Headers = headers.Count > 0 ? headers : null };
@@ -649,7 +665,7 @@ public sealed class Session : IDisposable
             ? JsonSerializer.Serialize(options, JsonContext.Default.RequestOptions)
             : null;
 
-        var (callbackId, task) = AsyncCallbackManager.Instance.RegisterRequest();
+        var (callbackId, task) = AsyncCallbackManager.Instance.RegisterRequest(cancellationToken);
         Native.PostAsync(_handle, url, body, optionsJson, callbackId);
 
         return task;
@@ -658,27 +674,27 @@ public sealed class Session : IDisposable
     /// <summary>
     /// Perform an async POST request with JSON body using native Go goroutines.
     /// </summary>
-    public Task<Response> PostJsonAsync<T>(string url, T data, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
+    public Task<Response> PostJsonAsync<T>(string url, T data, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null, CancellationToken cancellationToken = default)
     {
         headers ??= new Dictionary<string, string>();
         if (!headers.ContainsKey("Content-Type"))
             headers["Content-Type"] = "application/json";
 
         string body = JsonSerializer.Serialize(data);
-        return PostAsync(url, body, headers, parameters, cookies, auth, timeout);
+        return PostAsync(url, body, headers, parameters, cookies, auth, timeout, cancellationToken);
     }
 
     /// <summary>
     /// Perform an async POST request with form data using native Go goroutines.
     /// </summary>
-    public Task<Response> PostFormAsync(string url, Dictionary<string, string> formData, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
+    public Task<Response> PostFormAsync(string url, Dictionary<string, string> formData, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null, CancellationToken cancellationToken = default)
     {
         headers ??= new Dictionary<string, string>();
         if (!headers.ContainsKey("Content-Type"))
             headers["Content-Type"] = "application/x-www-form-urlencoded";
 
         string body = string.Join("&", formData.Select(kvp => $"{Uri.EscapeDataString(kvp.Key)}={Uri.EscapeDataString(kvp.Value)}"));
-        return PostAsync(url, body, headers, parameters, cookies, auth, timeout);
+        return PostAsync(url, body, headers, parameters, cookies, auth, timeout, cancellationToken);
     }
 
     /// <summary>
@@ -692,7 +708,7 @@ public sealed class Session : IDisposable
     /// <param name="auth">Basic auth (username, password). If null, uses session Auth.</param>
     /// <param name="parameters">Query parameters</param>
     /// <param name="cookies">Cookies to send with this request</param>
-    public Task<Response> RequestAsync(string method, string url, string? body = null, Dictionary<string, string>? headers = null, int? timeout = null, (string, string)? auth = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null)
+    public Task<Response> RequestAsync(string method, string url, string? body = null, Dictionary<string, string>? headers = null, int? timeout = null, (string, string)? auth = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
 
@@ -711,7 +727,7 @@ public sealed class Session : IDisposable
 
         string requestJson = JsonSerializer.Serialize(request, JsonContext.Default.RequestConfig);
 
-        var (callbackId, task) = AsyncCallbackManager.Instance.RegisterRequest();
+        var (callbackId, task) = AsyncCallbackManager.Instance.RegisterRequest(cancellationToken);
         Native.RequestAsync(_handle, requestJson, callbackId);
 
         return task;
@@ -720,58 +736,58 @@ public sealed class Session : IDisposable
     /// <summary>
     /// Perform an async PUT request using native Go goroutines.
     /// </summary>
-    public Task<Response> PutAsync(string url, string? body = null, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
-        => RequestAsync("PUT", url, body, headers, timeout, auth, parameters, cookies);
+    public Task<Response> PutAsync(string url, string? body = null, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null, CancellationToken cancellationToken = default)
+        => RequestAsync("PUT", url, body, headers, timeout, auth, parameters, cookies, cancellationToken);
 
     /// <summary>
     /// Perform an async PUT request with JSON body using native Go goroutines.
     /// </summary>
-    public Task<Response> PutJsonAsync<T>(string url, T data, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
+    public Task<Response> PutJsonAsync<T>(string url, T data, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null, CancellationToken cancellationToken = default)
     {
         headers ??= new Dictionary<string, string>();
         if (!headers.ContainsKey("Content-Type"))
             headers["Content-Type"] = "application/json";
 
         string body = JsonSerializer.Serialize(data);
-        return PutAsync(url, body, headers, parameters, cookies, auth, timeout);
+        return PutAsync(url, body, headers, parameters, cookies, auth, timeout, cancellationToken);
     }
 
     /// <summary>
     /// Perform an async DELETE request using native Go goroutines.
     /// </summary>
-    public Task<Response> DeleteAsync(string url, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
-        => RequestAsync("DELETE", url, null, headers, timeout, auth, parameters, cookies);
+    public Task<Response> DeleteAsync(string url, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null, CancellationToken cancellationToken = default)
+        => RequestAsync("DELETE", url, null, headers, timeout, auth, parameters, cookies, cancellationToken);
 
     /// <summary>
     /// Perform an async PATCH request using native Go goroutines.
     /// </summary>
-    public Task<Response> PatchAsync(string url, string? body = null, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
-        => RequestAsync("PATCH", url, body, headers, timeout, auth, parameters, cookies);
+    public Task<Response> PatchAsync(string url, string? body = null, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null, CancellationToken cancellationToken = default)
+        => RequestAsync("PATCH", url, body, headers, timeout, auth, parameters, cookies, cancellationToken);
 
     /// <summary>
     /// Perform an async PATCH request with JSON body using native Go goroutines.
     /// </summary>
-    public Task<Response> PatchJsonAsync<T>(string url, T data, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
+    public Task<Response> PatchJsonAsync<T>(string url, T data, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null, CancellationToken cancellationToken = default)
     {
         headers ??= new Dictionary<string, string>();
         if (!headers.ContainsKey("Content-Type"))
             headers["Content-Type"] = "application/json";
 
         string body = JsonSerializer.Serialize(data);
-        return PatchAsync(url, body, headers, parameters, cookies, auth, timeout);
+        return PatchAsync(url, body, headers, parameters, cookies, auth, timeout, cancellationToken);
     }
 
     /// <summary>
     /// Perform an async HEAD request using native Go goroutines.
     /// </summary>
-    public Task<Response> HeadAsync(string url, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
-        => RequestAsync("HEAD", url, null, headers, timeout, auth, parameters, cookies);
+    public Task<Response> HeadAsync(string url, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null, CancellationToken cancellationToken = default)
+        => RequestAsync("HEAD", url, null, headers, timeout, auth, parameters, cookies, cancellationToken);
 
     /// <summary>
     /// Perform an async OPTIONS request using native Go goroutines.
     /// </summary>
-    public Task<Response> OptionsAsync(string url, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
-        => RequestAsync("OPTIONS", url, null, headers, timeout, auth, parameters, cookies);
+    public Task<Response> OptionsAsync(string url, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null, CancellationToken cancellationToken = default)
+        => RequestAsync("OPTIONS", url, null, headers, timeout, auth, parameters, cookies, cancellationToken);
 
     // =========================================================================
     // Cookie Management
