@@ -875,10 +875,35 @@ func (t *HTTP3Transport) dialQUICWithProxy(ctx context.Context, addr string, tls
 	// Get the connection host (may be different for domain fronting)
 	connectHost := t.getConnectHost(host)
 
-	// Resolve DNS to get all addresses - resolve connection host, not request host
-	ips, err := t.dnsCache.Resolve(ctx, connectHost)
-	if err != nil {
-		return nil, fmt.Errorf("DNS resolution failed for %s: %w", connectHost, err)
+	// Run DNS resolution and ECH config fetch in parallel
+	// Both are independent network lookups that can be done concurrently
+	var ips []net.IP
+	var dnsErr error
+	var echConfigList []byte
+
+	if t.disableECH {
+		// ECH disabled - just do DNS
+		ips, dnsErr = t.dnsCache.Resolve(ctx, connectHost)
+	} else {
+		// Run DNS and ECH in parallel
+		var wg sync.WaitGroup
+		wg.Add(2)
+
+		go func() {
+			defer wg.Done()
+			ips, dnsErr = t.dnsCache.Resolve(ctx, connectHost)
+		}()
+
+		go func() {
+			defer wg.Done()
+			echConfigList = t.getECHConfig(ctx, host)
+		}()
+
+		wg.Wait()
+	}
+
+	if dnsErr != nil {
+		return nil, fmt.Errorf("DNS resolution failed for %s: %w", connectHost, dnsErr)
 	}
 	if len(ips) == 0 {
 		return nil, fmt.Errorf("no IP addresses found for %s", connectHost)
@@ -917,9 +942,8 @@ func (t *HTTP3Transport) dialQUICWithProxy(ctx context.Context, addr string, tls
 	cfgCopy.CachedClientHelloSpec = t.getSpecForHost(host)
 
 	// Race IPv6 and IPv4 connections (Happy Eyeballs style)
-	// Try IPv6 first, then IPv4 after short timeout
-	// Pass request host for ECH config fetching
-	return t.raceQUICDial(ctx, host, ipv6Addrs, ipv4Addrs, tlsCfgCopy, cfgCopy)
+	// Use pre-fetched ECH config directly to avoid redundant fetch
+	return t.raceQUICDialWithECH(ctx, host, ipv6Addrs, ipv4Addrs, tlsCfgCopy, cfgCopy, echConfigList)
 }
 
 // raceQUICDial implements Happy Eyeballs-style connection racing (legacy, fetches ECH internally)
