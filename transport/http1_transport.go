@@ -502,7 +502,40 @@ func (t *HTTP1Transport) createConn(ctx context.Context, host, port, scheme stri
 
 		if err := tlsConn.HandshakeContext(ctx); err != nil {
 			rawConn.Close()
-			return nil, NewTLSError("tls_handshake", host, port, "h1", err)
+
+			// Speculative TLS fallback: if the proxy can't handle combined
+			// CONNECT+ClientHello, re-dial with blocking CONNECT flow.
+			if IsSpeculativeTLSError(err) && t.proxy != nil && t.proxy.URL != "" {
+				MarkProxyNoSpeculative(t.proxy.URL)
+
+				rawConn, dialErr := t.dialHTTPProxyBlockingFresh(ctx, connectHost, port)
+				if dialErr != nil {
+					return nil, NewTLSError("speculative_fallback_dial", host, port, "h1", dialErr)
+				}
+
+				// Redo TLS setup on the clean connection
+				tlsConn = utls.UClient(rawConn, tlsConfig, t.preset.ClientHelloID)
+				tlsConn.SetSessionCache(t.sessionCache)
+				if buildErr := tlsConn.BuildHandshakeState(); buildErr != nil {
+					rawConn.Close()
+					return nil, NewTLSError("build_handshake", host, port, "h1", buildErr)
+				}
+				for _, ext := range tlsConn.Extensions {
+					if alpn, ok := ext.(*utls.ALPNExtension); ok {
+						alpn.AlpnProtocols = []string{"http/1.1"}
+						break
+					}
+				}
+				if hsErr := tlsConn.HandshakeContext(ctx); hsErr != nil {
+					rawConn.Close()
+					return nil, NewTLSError("tls_handshake", host, port, "h1", hsErr)
+				}
+
+				// Update conn to use new rawConn
+				conn.conn = rawConn
+			} else {
+				return nil, NewTLSError("tls_handshake", host, port, "h1", err)
+			}
 		}
 
 		conn.tlsConn = tlsConn
@@ -605,8 +638,8 @@ func (t *HTTP1Transport) dialThroughHTTPProxy(ctx context.Context, targetHost, t
 
 	connectReq += "Connection: keep-alive\r\n\r\n"
 
-	// Check if speculative TLS is disabled
-	if t.config != nil && t.config.DisableSpeculativeTLS {
+	// Check if speculative TLS is disabled (explicitly or via blocklist)
+	if (t.config != nil && t.config.DisableSpeculativeTLS) || IsProxyNoSpeculative(proxyAddr) {
 		// Traditional flow: send CONNECT, wait for 200 OK, then return conn for TLS
 		return t.dialHTTPProxyBlocking(conn, connectReq)
 	}
@@ -614,6 +647,60 @@ func (t *HTTP1Transport) dialThroughHTTPProxy(ctx context.Context, targetHost, t
 	// Speculative TLS: return a SpeculativeConn that will send CONNECT + ClientHello together
 	// This saves one round-trip by overlapping the CONNECT wait with TLS handshake start
 	return NewSpeculativeConn(conn, connectReq), nil
+}
+
+// dialHTTPProxyBlockingFresh opens a new TCP connection to the proxy and performs
+// the traditional blocking CONNECT flow. Used as fallback when speculative TLS fails
+// and the original connection is corrupted.
+func (t *HTTP1Transport) dialHTTPProxyBlockingFresh(ctx context.Context, targetHost, targetPort string) (net.Conn, error) {
+	proxyURL, err := url.Parse(t.proxy.URL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid proxy URL: %w", err)
+	}
+
+	proxyHost := proxyURL.Hostname()
+	proxyPort := proxyURL.Port()
+	if proxyPort == "" {
+		if proxyURL.Scheme == "https" {
+			proxyPort = "443"
+		} else {
+			proxyPort = "8080"
+		}
+	}
+
+	resolver := &net.Resolver{PreferGo: false}
+	proxyIPs, err := resolver.LookupHost(ctx, proxyHost)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve proxy host %s: %w", proxyHost, err)
+	}
+	if len(proxyIPs) == 0 {
+		return nil, fmt.Errorf("no IP addresses found for proxy host %s", proxyHost)
+	}
+
+	dialer := &net.Dialer{
+		Timeout:   t.connectTimeout,
+		KeepAlive: 30 * time.Second,
+	}
+	if t.localAddr != "" {
+		dialer.LocalAddr = &net.TCPAddr{IP: net.ParseIP(t.localAddr)}
+	}
+
+	proxyAddr := net.JoinHostPort(proxyIPs[0], proxyPort)
+	conn, err := dialer.DialContext(ctx, "tcp", proxyAddr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to proxy: %w", err)
+	}
+
+	targetAddr := net.JoinHostPort(targetHost, targetPort)
+	connectReq := fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\n", targetAddr, targetAddr)
+
+	proxyAuth := t.getProxyAuth(proxyURL)
+	if proxyAuth != "" {
+		connectReq += fmt.Sprintf("Proxy-Authorization: Basic %s\r\n", proxyAuth)
+	}
+	connectReq += "Connection: keep-alive\r\n\r\n"
+
+	return t.dialHTTPProxyBlocking(conn, connectReq)
 }
 
 // dialHTTPProxyBlocking performs the traditional blocking CONNECT flow.

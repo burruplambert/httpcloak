@@ -3,6 +3,7 @@ package transport
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"net"
 	"sync"
@@ -10,6 +11,24 @@ import (
 
 	http "github.com/sardanioss/http"
 )
+
+// speculativeTLSBlocklist tracks proxy addresses that don't support speculative TLS.
+// When a proxy fails with SpeculativeTLSError, its address is added here so future
+// connections fall back to blocking CONNECT immediately without wasting a round-trip.
+var speculativeTLSBlocklist sync.Map // map[string]struct{}
+
+// MarkProxyNoSpeculative records that a proxy address does not support speculative TLS.
+// Future connections to this proxy will use blocking CONNECT flow automatically.
+func MarkProxyNoSpeculative(proxyAddr string) {
+	speculativeTLSBlocklist.Store(proxyAddr, struct{}{})
+}
+
+// IsProxyNoSpeculative checks if a proxy address has been recorded as not supporting
+// speculative TLS.
+func IsProxyNoSpeculative(proxyAddr string) bool {
+	_, ok := speculativeTLSBlocklist.Load(proxyAddr)
+	return ok
+}
 
 // SpeculativeTLSError wraps errors that occur during speculative TLS handling.
 // This allows callers to identify speculative-specific failures and potentially retry
@@ -37,8 +56,8 @@ func (e *SpeculativeTLSError) Unwrap() error {
 // IsSpeculativeTLSError checks if an error is a SpeculativeTLSError.
 // Useful for deciding whether to retry with normal flow.
 func IsSpeculativeTLSError(err error) bool {
-	_, ok := err.(*SpeculativeTLSError)
-	return ok
+	var specErr *SpeculativeTLSError
+	return errors.As(err, &specErr)
 }
 
 // SpeculativeConn is a connection wrapper that implements speculative TLS handshakes.
@@ -74,7 +93,8 @@ type SpeculativeConn struct {
 	httpResponseDone bool
 	readBuffer       bytes.Buffer
 	headerBuffer     bytes.Buffer // Accumulates partial HTTP headers
-	mu               sync.Mutex
+	writeMu          sync.Mutex   // Protects firstWrite and write interception
+	readMu           sync.Mutex   // Protects httpResponseDone and read interception
 }
 
 // NewSpeculativeConn creates a new speculative connection wrapper.
@@ -89,46 +109,57 @@ func NewSpeculativeConn(conn net.Conn, connectRequest string) *SpeculativeConn {
 // Write intercepts the first write (TLS ClientHello) and prepends the HTTP CONNECT request.
 // All subsequent writes pass through directly to the underlying connection.
 func (c *SpeculativeConn) Write(b []byte) (n int, err error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if !c.firstWrite {
-		// First write is the TLS ClientHello - prepend CONNECT and send together
-		// The proxy will:
-		// 1. Parse the CONNECT request (reads until \r\n\r\n)
-		// 2. Buffer remaining data (our ClientHello) in TCP receive buffer
-		// 3. Establish connection to target
-		// 4. Send 200 OK back to us
-		// 5. Forward the buffered ClientHello to the target
-		combined := append([]byte(c.connectRequest), b...)
-		_, err = c.Conn.Write(combined)
-		if err != nil {
-			return 0, &SpeculativeTLSError{Op: "write", Err: err}
-		}
-		c.firstWrite = true
-		return len(b), nil
+	c.writeMu.Lock()
+	if c.firstWrite {
+		// Fast path: speculative phase done, pass through without holding lock
+		c.writeMu.Unlock()
+		return c.Conn.Write(b)
 	}
 
-	return c.Conn.Write(b)
+	// First write is the TLS ClientHello - prepend CONNECT and send together
+	// The proxy will:
+	// 1. Parse the CONNECT request (reads until \r\n\r\n)
+	// 2. Buffer remaining data (our ClientHello) in TCP receive buffer
+	// 3. Establish connection to target
+	// 4. Send 200 OK back to us
+	// 5. Forward the buffered ClientHello to the target
+	combined := append([]byte(c.connectRequest), b...)
+	_, err = c.Conn.Write(combined)
+	if err != nil {
+		c.writeMu.Unlock()
+		return 0, &SpeculativeTLSError{Op: "write", Err: err}
+	}
+	c.firstWrite = true
+	c.writeMu.Unlock()
+	return len(b), nil
 }
 
 // Read strips the HTTP 200 OK response from the first read and returns only TLS data.
 // The proxy sends: "HTTP/1.1 200 Connection established\r\n\r\n" + TLS ServerHello
 // We parse and validate the HTTP response, then return only the TLS data.
 func (c *SpeculativeConn) Read(b []byte) (n int, err error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.readMu.Lock()
+	if c.httpResponseDone && c.readBuffer.Len() == 0 {
+		// Fast path: speculative phase done, pass through without holding lock
+		c.readMu.Unlock()
+		return c.Conn.Read(b)
+	}
 
 	// If we have buffered TLS data from a previous read, return it first
 	if c.readBuffer.Len() > 0 {
-		return c.readBuffer.Read(b)
+		n, err = c.readBuffer.Read(b)
+		c.readMu.Unlock()
+		return n, err
 	}
 
 	if !c.httpResponseDone {
 		// First read(s) need to parse and strip the HTTP CONNECT response
-		return c.readAndStripHTTPResponse(b)
+		n, err = c.readAndStripHTTPResponse(b)
+		c.readMu.Unlock()
+		return n, err
 	}
 
+	c.readMu.Unlock()
 	return c.Conn.Read(b)
 }
 

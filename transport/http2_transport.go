@@ -406,9 +406,59 @@ func (t *HTTP2Transport) createConn(ctx context.Context, host, port string) (*pe
 	// Perform TLS handshake
 	if err := tlsConn.HandshakeContext(ctx); err != nil {
 		rawConn.Close()
+
+		// Speculative TLS fallback: if the handshake failed because the proxy can't
+		// handle combined CONNECT+ClientHello, re-dial with blocking CONNECT flow.
+		// This is transparent to the caller and doesn't consume a retry attempt.
+		if IsSpeculativeTLSError(err) && t.proxy != nil && t.proxy.URL != "" {
+			// Remember this proxy doesn't support speculative TLS
+			MarkProxyNoSpeculative(t.proxy.URL)
+
+			// Re-dial with fresh TCP connection using blocking CONNECT
+			rawConn, dialErr := t.dialHTTPProxyBlockingFresh(ctx, connectHost, port)
+			if dialErr != nil {
+				return nil, fmt.Errorf("speculative TLS fallback dial failed: %w", dialErr)
+			}
+
+			// Regenerate fresh TLS spec (the previous one was consumed)
+			var fallbackSpec *utls.ClientHelloSpec
+			if t.hasPSKSpec {
+				if spec, specErr := utls.UTLSIdToSpecWithSeed(t.preset.PSKClientHelloID, t.shuffleSeed); specErr == nil {
+					fallbackSpec = &spec
+				}
+			}
+			if fallbackSpec == nil {
+				if spec, specErr := utls.UTLSIdToSpecWithSeed(t.preset.ClientHelloID, t.shuffleSeed); specErr == nil {
+					fallbackSpec = &spec
+				}
+			}
+
+			// Redo TLS handshake on the clean connection
+			if fallbackSpec != nil {
+				tlsConn = utls.UClient(rawConn, tlsConfig, utls.HelloCustom)
+				if applyErr := tlsConn.ApplyPreset(fallbackSpec); applyErr != nil {
+					rawConn.Close()
+					return nil, fmt.Errorf("speculative TLS fallback preset failed: %w", applyErr)
+				}
+			} else {
+				tlsConn = utls.UClient(rawConn, tlsConfig, t.preset.ClientHelloID)
+			}
+			if t.hasPSKSpec {
+				tlsConn.SetSessionCache(t.sessionCache)
+			}
+
+			if hsErr := tlsConn.HandshakeContext(ctx); hsErr != nil {
+				rawConn.Close()
+				return nil, fmt.Errorf("TLS handshake failed (after speculative fallback): %w", hsErr)
+			}
+			// Fall through to ALPN check below
+			goto alpnCheck
+		}
+
 		return nil, fmt.Errorf("TLS handshake failed: %w", err)
 	}
 
+alpnCheck:
 	// Check ALPN negotiation result
 	state := tlsConn.ConnectionState()
 	if state.NegotiatedProtocol != "h2" {
@@ -593,8 +643,8 @@ func (t *HTTP2Transport) dialThroughHTTPProxy(ctx context.Context, targetHost, t
 
 	connectReq += "\r\n"
 
-	// Check if speculative TLS is disabled
-	if t.config != nil && t.config.DisableSpeculativeTLS {
+	// Check if speculative TLS is disabled (explicitly or via blocklist)
+	if (t.config != nil && t.config.DisableSpeculativeTLS) || IsProxyNoSpeculative(proxyAddr) {
 		// Traditional flow: send CONNECT, wait for 200 OK, then return conn for TLS
 		return t.dialHTTPProxyBlocking(conn, connectReq)
 	}
@@ -602,6 +652,60 @@ func (t *HTTP2Transport) dialThroughHTTPProxy(ctx context.Context, targetHost, t
 	// Speculative TLS: return a SpeculativeConn that will send CONNECT + ClientHello together
 	// This saves one round-trip by overlapping the CONNECT wait with TLS handshake start
 	return NewSpeculativeConn(conn, connectReq), nil
+}
+
+// dialHTTPProxyBlockingFresh opens a new TCP connection to the proxy and performs
+// the traditional blocking CONNECT flow. Used as fallback when speculative TLS fails
+// and the original connection is corrupted.
+func (t *HTTP2Transport) dialHTTPProxyBlockingFresh(ctx context.Context, targetHost, targetPort string) (net.Conn, error) {
+	proxyURL, err := url.Parse(t.proxy.URL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid proxy URL: %w", err)
+	}
+
+	proxyHost := proxyURL.Hostname()
+	proxyPort := proxyURL.Port()
+	if proxyPort == "" {
+		if proxyURL.Scheme == "https" {
+			proxyPort = "443"
+		} else {
+			proxyPort = "8080"
+		}
+	}
+
+	resolver := &net.Resolver{PreferGo: false}
+	proxyIPs, err := resolver.LookupHost(ctx, proxyHost)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve proxy host %s: %w", proxyHost, err)
+	}
+	if len(proxyIPs) == 0 {
+		return nil, fmt.Errorf("no IP addresses found for proxy host %s", proxyHost)
+	}
+
+	dialer := &net.Dialer{
+		Timeout:   t.connectTimeout,
+		KeepAlive: 30 * time.Second,
+	}
+	if t.localAddr != "" {
+		dialer.LocalAddr = &net.TCPAddr{IP: net.ParseIP(t.localAddr)}
+	}
+
+	proxyAddr := net.JoinHostPort(proxyIPs[0], proxyPort)
+	conn, err := dialer.DialContext(ctx, "tcp", proxyAddr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to proxy: %w", err)
+	}
+
+	targetAddr := net.JoinHostPort(targetHost, targetPort)
+	connectReq := fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\n", targetAddr, targetAddr)
+
+	proxyAuth := t.getProxyAuth(proxyURL)
+	if proxyAuth != "" {
+		connectReq += fmt.Sprintf("Proxy-Authorization: Basic %s\r\n", proxyAuth)
+	}
+	connectReq += "\r\n"
+
+	return t.dialHTTPProxyBlocking(conn, connectReq)
 }
 
 // dialHTTPProxyBlocking performs the traditional blocking CONNECT flow.

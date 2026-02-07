@@ -1721,9 +1721,36 @@ func readBodyOptimized(body io.Reader, contentLength int64) ([]byte, func(), err
 		}
 		return buf[:n], func() {}, nil
 	}
-	// Fall back to io.ReadAll for unknown/chunked content length
-	data, err := io.ReadAll(body)
-	return data, func() {}, err
+	// For unknown/chunked content length, use pooled buffer to avoid repeated grow+copy.
+	// io.ReadAll starts at 512 bytes and doubles — wasteful for typical 50-500KB responses.
+	// We use a 1MB pooled buffer and read into it directly.
+	bufPtr, release := getPooledBuffer(1 * 1024 * 1024)
+	buf := *bufPtr
+	n := 0
+	for {
+		if n == len(buf) {
+			// Buffer full — grow by doubling (rare: response > 1MB with no Content-Length)
+			release() // release pool buffer, we're outgrowing it
+			release = func() {}
+			newBuf := make([]byte, len(buf)*2)
+			copy(newBuf, buf[:n])
+			buf = newBuf
+		}
+		nn, err := body.Read(buf[n:])
+		n += nn
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			release()
+			return nil, nil, err
+		}
+	}
+	// Copy to right-sized slice so we don't hold the full pool buffer
+	result := make([]byte, n)
+	copy(result, buf[:n])
+	release()
+	return result, func() {}, nil
 }
 
 func decompress(data []byte, encoding string) ([]byte, error) {
