@@ -1131,7 +1131,9 @@ function version() {
 }
 
 /**
- * Get list of available browser presets
+ * Get available browser presets with their supported protocols.
+ * Returns an object mapping preset names to their info:
+ *   { "chrome-144": { protocols: ["h1", "h2", "h3"] }, ... }
  */
 function availablePresets() {
   const nativeLib = getLib();
@@ -1140,7 +1142,7 @@ function availablePresets() {
   if (result) {
     return JSON.parse(result);
   }
-  return [];
+  return {};
 }
 
 /**

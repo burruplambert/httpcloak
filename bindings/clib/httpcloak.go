@@ -1764,8 +1764,8 @@ func httpcloak_version() *C.char {
 
 //export httpcloak_available_presets
 func httpcloak_available_presets() *C.char {
-	// Use the actual preset list from fingerprint package
-	presets := fingerprint.Available()
+	// Return preset names with their supported protocols
+	presets := fingerprint.AvailableWithInfo()
 	data, _ := json.Marshal(presets)
 	return C.CString(string(data))
 }

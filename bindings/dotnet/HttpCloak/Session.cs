@@ -2210,16 +2210,18 @@ public static class HttpCloakInfo
         return Native.PtrToStringAndFree(ptr) ?? "unknown";
     }
 
-    /// <summary>Get list of available presets.</summary>
-    public static string[] AvailablePresets()
+    /// <summary>Get available presets with their supported protocols.</summary>
+    /// <returns>Dictionary mapping preset names to their protocol support info.</returns>
+    public static Dictionary<string, PresetInfo> AvailablePresets()
     {
         IntPtr ptr = Native.AvailablePresets();
         string? json = Native.PtrToStringAndFree(ptr);
 
         if (string.IsNullOrEmpty(json))
-            return Array.Empty<string>();
+            return new Dictionary<string, PresetInfo>();
 
-        return JsonSerializer.Deserialize(json, JsonContext.Default.StringArray) ?? Array.Empty<string>();
+        return JsonSerializer.Deserialize(json, JsonContext.Default.DictionaryStringPresetInfo)
+            ?? new Dictionary<string, PresetInfo>();
     }
 
     /// <summary>
@@ -2449,6 +2451,15 @@ internal class ErrorResponse
 }
 
 /// <summary>
+/// Protocol support information for a browser preset.
+/// </summary>
+public class PresetInfo
+{
+    [JsonPropertyName("protocols")]
+    public string[] Protocols { get; set; } = Array.Empty<string>();
+}
+
+/// <summary>
 /// Request options for async requests (matches Go's RequestOptions struct).
 /// </summary>
 internal class RequestOptions
@@ -2643,4 +2654,6 @@ public sealed class HttpCloakHandler : DelegatingHandler
 [JsonSerializable(typeof(RequestOptions))]
 [JsonSerializable(typeof(StreamOptions))]
 [JsonSerializable(typeof(StreamMetadata))]
+[JsonSerializable(typeof(PresetInfo))]
+[JsonSerializable(typeof(Dictionary<string, PresetInfo>))]
 internal partial class JsonContext : JsonSerializerContext { }

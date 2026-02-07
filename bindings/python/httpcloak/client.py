@@ -1260,14 +1260,22 @@ def version() -> str:
     return result if result else "unknown"
 
 
-def available_presets() -> List[str]:
-    """Get list of available browser presets."""
+def available_presets() -> dict:
+    """Get available browser presets with their supported protocols.
+
+    Returns a dict mapping preset names to their info:
+        {
+            "chrome-144": {"protocols": ["h1", "h2", "h3"]},
+            "firefox-133": {"protocols": ["h1", "h2"]},
+            ...
+        }
+    """
     lib = _get_lib()
     result_ptr = lib.httpcloak_available_presets()
     result = _ptr_to_string(result_ptr)
     if result:
         return json.loads(result)
-    return []
+    return {}
 
 
 def set_ech_dns_servers(servers: Optional[List[str]] = None) -> None:

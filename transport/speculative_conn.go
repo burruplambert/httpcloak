@@ -116,13 +116,9 @@ func (c *SpeculativeConn) Write(b []byte) (n int, err error) {
 		return c.Conn.Write(b)
 	}
 
-	// First write is the TLS ClientHello - prepend CONNECT and send together
-	// The proxy will:
-	// 1. Parse the CONNECT request (reads until \r\n\r\n)
-	// 2. Buffer remaining data (our ClientHello) in TCP receive buffer
-	// 3. Establish connection to target
-	// 4. Send 200 OK back to us
-	// 5. Forward the buffered ClientHello to the target
+	// Send CONNECT + ClientHello together in one write.
+	// The proxy parses CONNECT (delimited by \r\n\r\n), buffers the ClientHello,
+	// establishes the tunnel, then forwards the buffered data to the target.
 	combined := append([]byte(c.connectRequest), b...)
 	_, err = c.Conn.Write(combined)
 	if err != nil {
@@ -257,3 +253,4 @@ func (c *SpeculativeConn) SetReadDeadline(t time.Time) error {
 func (c *SpeculativeConn) SetWriteDeadline(t time.Time) error {
 	return c.Conn.SetWriteDeadline(t)
 }
+
