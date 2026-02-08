@@ -1288,37 +1288,23 @@ func (t *HTTP3Transport) GetRequestCount() int64 {
 
 // Close shuts down the transport and all connections
 func (t *HTTP3Transport) Close() error {
-	var errs []error
+	// Use timeout for QUIC closes to prevent blocking on graceful drain
+	closeWithTimeout(t.transport, 3*time.Second)
 
-	// Close HTTP/3 transport
-	if err := t.transport.Close(); err != nil {
-		errs = append(errs, err)
-	}
-
-	// Close QUIC transport if using proxy
 	if t.quicTransport != nil {
-		if err := t.quicTransport.Close(); err != nil {
-			errs = append(errs, err)
-		}
+		closeWithTimeout(t.quicTransport, 3*time.Second)
 	}
 
 	// Close SOCKS5 UDP connection if using proxy
 	if t.socks5Conn != nil {
-		if err := t.socks5Conn.Close(); err != nil {
-			errs = append(errs, err)
-		}
+		t.socks5Conn.Close()
 	}
 
 	// Close MASQUE connection if using MASQUE proxy
 	if t.masqueConn != nil {
-		if err := t.masqueConn.Close(); err != nil {
-			errs = append(errs, err)
-		}
+		t.masqueConn.Close()
 	}
 
-	if len(errs) > 0 {
-		return errs[0]
-	}
 	return nil
 }
 
