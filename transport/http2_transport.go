@@ -157,6 +157,11 @@ func (t *HTTP2Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		// Connection might be dead, remove it and retry once
 		t.removeConn(key)
 
+		// Don't retry if context is already done (e.g. timeout expired)
+		if req.Context().Err() != nil {
+			return nil, req.Context().Err()
+		}
+
 		conn, err = t.getOrCreateConn(req.Context(), host, port, key)
 		if err != nil {
 			return nil, err
@@ -717,9 +722,11 @@ func (t *HTTP2Transport) dialHTTPProxyBlocking(conn net.Conn, connectReq string)
 		return nil, fmt.Errorf("failed to send CONNECT request: %w", err)
 	}
 
-	// Read response
+	// Set deadline for proxy response to prevent blocking forever
+	conn.SetReadDeadline(time.Now().Add(30 * time.Second))
 	reader := bufio.NewReader(conn)
 	resp, err := http.ReadResponse(reader, nil)
+	conn.SetReadDeadline(time.Time{}) // Clear deadline after response
 	if err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("failed to read CONNECT response: %w", err)

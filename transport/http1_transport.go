@@ -712,9 +712,11 @@ func (t *HTTP1Transport) dialHTTPProxyBlocking(conn net.Conn, connectReq string)
 		return nil, fmt.Errorf("failed to send CONNECT request: %w", err)
 	}
 
-	// Read response
+	// Set deadline for proxy response to prevent blocking forever
+	conn.SetReadDeadline(time.Now().Add(30 * time.Second))
 	br := bufio.NewReader(conn)
 	resp, err := http.ReadResponse(br, nil)
+	conn.SetReadDeadline(time.Time{}) // Clear deadline after response
 	if err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("failed to read CONNECT response: %w", err)
@@ -763,8 +765,11 @@ func (t *HTTP1Transport) doRequest(conn *http1Conn, req *http.Request) (*http.Re
 	conn.lastUsedAt = time.Now()
 	conn.useCount++
 
-	// Set deadline
+	// Set deadline - use the earlier of context deadline and response timeout
 	deadline := time.Now().Add(t.responseTimeout)
+	if ctxDeadline, ok := req.Context().Deadline(); ok && ctxDeadline.Before(deadline) {
+		deadline = ctxDeadline
+	}
 	conn.conn.SetDeadline(deadline)
 	defer conn.conn.SetDeadline(time.Time{})
 

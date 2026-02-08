@@ -899,7 +899,17 @@ func (t *HTTP3Transport) dialQUICWithProxy(ctx context.Context, addr string, tls
 			echConfigList = t.getECHConfig(ctx, host)
 		}()
 
-		wg.Wait()
+		// Context-aware wait: unblock if context expires even if goroutines are still running
+		done := make(chan struct{})
+		go func() {
+			wg.Wait()
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
 
 	if dnsErr != nil {
@@ -1002,17 +1012,29 @@ func (t *HTTP3Transport) raceQUICDialWithECH(ctx context.Context, host string, i
 	return t.dialFirstSuccessful(ctx, ipv4Addrs, tlsCfg, makeConfig())
 }
 
-// dialFirstSuccessful tries each address in order until one succeeds
+// dialFirstSuccessful tries each address in order until one succeeds.
+// Per-address timeout prevents a single unresponsive IP from consuming the entire timeout budget.
 func (t *HTTP3Transport) dialFirstSuccessful(ctx context.Context, addrs []*net.UDPAddr, tlsCfg *tls.Config, cfg *quic.Config) (*quic.Conn, error) {
 	var lastErr error
-	for _, addr := range addrs {
+	for i, addr := range addrs {
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		default:
 		}
 
-		conn, err := t.quicTransport.DialEarly(ctx, addr, tlsCfg, cfg)
+		// Per-address timeout: divide remaining time evenly, cap at 10s
+		remaining := len(addrs) - i
+		perAddrTimeout := 10 * time.Second
+		if deadline, ok := ctx.Deadline(); ok {
+			budget := time.Until(deadline) / time.Duration(remaining)
+			if budget < perAddrTimeout {
+				perAddrTimeout = budget
+			}
+		}
+		addrCtx, addrCancel := context.WithTimeout(ctx, perAddrTimeout)
+		conn, err := t.quicTransport.DialEarly(addrCtx, addr, tlsCfg, cfg)
+		addrCancel()
 		if err == nil {
 			return conn, nil
 		}
@@ -1073,7 +1095,17 @@ func (t *HTTP3Transport) dialQUIC(ctx context.Context, addr string, tlsCfg *tls.
 			echConfigList = t.getECHConfig(ctx, host)
 		}()
 
-		wg.Wait()
+		// Context-aware wait: unblock if context expires even if goroutines are still running
+		done := make(chan struct{})
+		go func() {
+			wg.Wait()
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
 
 	// Check DNS result
@@ -1213,7 +1245,8 @@ func (t *HTTP3Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 			break
 		}
 		// 0-RTT rejected - close unusable connection and recreate transport
-		t.transport.Close()
+		// Use timeout to prevent blocking if QUIC drain takes too long
+		closeWithTimeout(t.transport, 3*time.Second)
 		t.recreateTransport()
 	}
 
@@ -1296,13 +1329,14 @@ func (t *HTTP3Transport) Refresh() error {
 	defer t.mu.Unlock()
 
 	// Close the current transport (this closes all QUIC connections)
+	// Use timeout to prevent blocking if QUIC drain takes too long
 	if t.transport != nil {
-		t.transport.Close()
+		closeWithTimeout(t.transport, 3*time.Second)
 	}
 
 	// Close and recreate quicTransport if it exists (for direct connections)
 	if t.quicTransport != nil && t.socks5Conn == nil && t.masqueConn == nil {
-		t.quicTransport.Close()
+		closeWithTimeout(t.quicTransport, 3*time.Second)
 		// Create new UDP socket with localAddr binding if configured
 		var localUDPAddr *net.UDPAddr
 		if t.localAddr != "" {
@@ -1365,6 +1399,20 @@ func (t *HTTP3Transport) Refresh() error {
 	}
 
 	return nil
+}
+
+// closeWithTimeout closes a closer with a timeout to prevent blocking indefinitely.
+// QUIC connections may block on Close() waiting for graceful drain.
+func closeWithTimeout(c io.Closer, timeout time.Duration) {
+	done := make(chan struct{})
+	go func() {
+		c.Close()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(timeout):
+	}
 }
 
 // is0RTTRejectedError checks if the error is due to 0-RTT rejection

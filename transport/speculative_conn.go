@@ -161,67 +161,70 @@ func (c *SpeculativeConn) Read(b []byte) (n int, err error) {
 
 // readAndStripHTTPResponse reads data from the connection, parses the HTTP response,
 // and returns only the TLS data that follows.
+// Uses an iterative loop instead of recursion to avoid unbounded stack growth
+// when the proxy sends data slowly.
 func (c *SpeculativeConn) readAndStripHTTPResponse(b []byte) (int, error) {
-	// Read into a temporary buffer
-	tempBuf := make([]byte, 8192)
-	n, err := c.Conn.Read(tempBuf)
-	if err != nil {
-		return 0, &SpeculativeTLSError{Op: "read", Err: err}
-	}
+	for {
+		// Read into a temporary buffer
+		tempBuf := make([]byte, 8192)
+		n, err := c.Conn.Read(tempBuf)
+		if err != nil {
+			return 0, &SpeculativeTLSError{Op: "read", Err: err}
+		}
 
-	// Append to header buffer (handles partial reads)
-	c.headerBuffer.Write(tempBuf[:n])
-	data := c.headerBuffer.Bytes()
+		// Append to header buffer (handles partial reads)
+		c.headerBuffer.Write(tempBuf[:n])
+		data := c.headerBuffer.Bytes()
 
-	// Look for end of HTTP response headers (\r\n\r\n)
-	headerEnd := bytes.Index(data, []byte("\r\n\r\n"))
-	if headerEnd == -1 {
-		// Incomplete HTTP response - need more data
-		// Safety check: HTTP headers shouldn't be huge
-		if c.headerBuffer.Len() > 16384 {
+		// Look for end of HTTP response headers (\r\n\r\n)
+		headerEnd := bytes.Index(data, []byte("\r\n\r\n"))
+		if headerEnd == -1 {
+			// Incomplete HTTP response - need more data
+			// Safety check: HTTP headers shouldn't be huge
+			if c.headerBuffer.Len() > 16384 {
+				return 0, &SpeculativeTLSError{
+					Op:  "parse",
+					Err: fmt.Errorf("HTTP response headers exceed 16KB limit"),
+				}
+			}
+			continue // Loop to read more data instead of recursing
+		}
+
+		// Parse the HTTP response to validate status
+		reader := bufio.NewReader(bytes.NewReader(data[:headerEnd+4]))
+		resp, err := http.ReadResponse(reader, nil)
+		if err != nil {
+			return 0, &SpeculativeTLSError{Op: "parse", Err: err}
+		}
+		resp.Body.Close()
+
+		// Check for non-200 status codes
+		if resp.StatusCode != http.StatusOK {
 			return 0, &SpeculativeTLSError{
-				Op:  "parse",
-				Err: fmt.Errorf("HTTP response headers exceed 16KB limit"),
+				Op:         "status",
+				StatusCode: resp.StatusCode,
+				Err:        fmt.Errorf("%s", resp.Status),
 			}
 		}
-		// Recursively read more (will append to headerBuffer)
-		return c.readAndStripHTTPResponse(b)
-	}
 
-	// Parse the HTTP response to validate status
-	reader := bufio.NewReader(bytes.NewReader(data[:headerEnd+4]))
-	resp, err := http.ReadResponse(reader, nil)
-	if err != nil {
-		return 0, &SpeculativeTLSError{Op: "parse", Err: err}
-	}
-	resp.Body.Close()
+		c.httpResponseDone = true
+		c.headerBuffer.Reset() // Free memory
 
-	// Check for non-200 status codes
-	if resp.StatusCode != http.StatusOK {
-		return 0, &SpeculativeTLSError{
-			Op:         "status",
-			StatusCode: resp.StatusCode,
-			Err:        fmt.Errorf("%s", resp.Status),
+		// Everything after \r\n\r\n is TLS data (ServerHello)
+		tlsData := data[headerEnd+4:]
+		if len(tlsData) > 0 {
+			// Copy TLS data to output buffer
+			copied := copy(b, tlsData)
+			if copied < len(tlsData) {
+				// Buffer remaining TLS data for next read
+				c.readBuffer.Write(tlsData[copied:])
+			}
+			return copied, nil
 		}
+
+		// No TLS data in this read - do a normal read
+		return c.Conn.Read(b)
 	}
-
-	c.httpResponseDone = true
-	c.headerBuffer.Reset() // Free memory
-
-	// Everything after \r\n\r\n is TLS data (ServerHello)
-	tlsData := data[headerEnd+4:]
-	if len(tlsData) > 0 {
-		// Copy TLS data to output buffer
-		copied := copy(b, tlsData)
-		if copied < len(tlsData) {
-			// Buffer remaining TLS data for next read
-			c.readBuffer.Write(tlsData[copied:])
-		}
-		return copied, nil
-	}
-
-	// No TLS data in this read - do a normal read
-	return c.Conn.Read(b)
 }
 
 // Close closes the underlying connection.
