@@ -930,6 +930,8 @@ def _setup_lib(lib):
     lib.httpcloak_session_free.restype = None
     lib.httpcloak_session_refresh.argtypes = [c_int64]
     lib.httpcloak_session_refresh.restype = None
+    lib.httpcloak_session_refresh_protocol.argtypes = [c_int64, c_char_p]
+    lib.httpcloak_session_refresh_protocol.restype = c_void_p
     # Use c_void_p for string returns so we can free them properly
     lib.httpcloak_get.argtypes = [c_int64, c_char_p, c_char_p]
     lib.httpcloak_get.restype = c_void_p
@@ -1424,6 +1426,7 @@ class Session:
         local_address: Optional[str] = None,
         key_log_file: Optional[str] = None,
         disable_speculative_tls: bool = False,
+        switch_protocol: Optional[str] = None,
     ):
         self._lib = _get_lib()
         self._default_timeout = timeout
@@ -1467,6 +1470,8 @@ class Session:
             config["key_log_file"] = key_log_file
         if disable_speculative_tls:
             config["disable_speculative_tls"] = True
+        if switch_protocol:
+            config["switch_protocol"] = switch_protocol
 
         config_json = json.dumps(config).encode("utf-8")
         self._handle = self._lib.httpcloak_session_new(config_json)
@@ -1489,14 +1494,30 @@ class Session:
             self._lib.httpcloak_session_free(self._handle)
             self._handle = 0
 
-    def refresh(self):
+    def refresh(self, switch_protocol: Optional[str] = None):
         """Refresh the session by closing all connections while keeping TLS session tickets.
 
         This simulates a browser page refresh - connections are severed but 0-RTT
         early data can be used on reconnection due to preserved session tickets.
+
+        Args:
+            switch_protocol: Optional protocol to switch to ("h1", "h2", "h3").
+                Overrides any switch_protocol set at construction time.
+                The change persists for future refresh() calls.
         """
         if hasattr(self, "_handle") and self._handle:
-            self._lib.httpcloak_session_refresh(self._handle)
+            if switch_protocol:
+                result_ptr = self._lib.httpcloak_session_refresh_protocol(
+                    self._handle, switch_protocol.encode("utf-8")
+                )
+                if result_ptr is not None and result_ptr != 0:
+                    result = _ptr_to_string(result_ptr)
+                    if result:
+                        data = json.loads(result)
+                        if "error" in data:
+                            raise HTTPCloakError(data["error"])
+            else:
+                self._lib.httpcloak_session_refresh(self._handle)
 
     def _merge_headers(self, headers: Optional[Dict[str, str]]) -> Optional[Dict[str, str]]:
         """Merge session headers with request headers."""

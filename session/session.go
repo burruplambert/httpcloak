@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sardanioss/httpcloak/fingerprint"
 	"github.com/sardanioss/httpcloak/protocol"
 	"github.com/sardanioss/httpcloak/transport"
 )
@@ -68,6 +69,9 @@ type Session struct {
 
 	// refreshed indicates Refresh() was called - adds cache-control: max-age=0 to requests
 	refreshed bool
+
+	// switchProtocol is the protocol to switch to on Refresh()
+	switchProtocol transport.Protocol
 
 	mu     sync.RWMutex
 	active bool
@@ -166,18 +170,28 @@ func NewSessionWithOptions(id string, config *protocol.SessionConfig, opts *Sess
 		t.SetDisableECH(true)
 	}
 
+	// Parse switch protocol if configured
+	switchProto := transport.ProtocolAuto
+	if config.SwitchProtocol != "" {
+		p, err := parseProtocol(config.SwitchProtocol)
+		if err == nil {
+			switchProto = p
+		}
+	}
+
 	return &Session{
-		ID:           id,
-		CreatedAt:    time.Now(),
-		LastUsed:     time.Now(),
-		RequestCount: 0,
-		Config:       config,
-		transport:    t,
-		cookies:      NewCookieJar(),
-		cacheEntries: make(map[string]*cacheEntry),
-		clientHints:  make(map[string]map[string]bool),
-		keyLogWriter: keyLogWriter,
-		active:       true,
+		ID:             id,
+		CreatedAt:      time.Now(),
+		LastUsed:       time.Now(),
+		RequestCount:   0,
+		Config:         config,
+		transport:      t,
+		cookies:        NewCookieJar(),
+		cacheEntries:   make(map[string]*cacheEntry),
+		clientHints:    make(map[string]map[string]bool),
+		keyLogWriter:   keyLogWriter,
+		switchProtocol: switchProto,
+		active:         true,
 	}
 }
 
@@ -884,9 +898,25 @@ func (s *Session) Close() {
 	}
 }
 
+// parseProtocol converts a protocol string to transport.Protocol.
+func parseProtocol(proto string) (transport.Protocol, error) {
+	switch proto {
+	case "h1", "http1", "1":
+		return transport.ProtocolHTTP1, nil
+	case "h2", "http2", "2":
+		return transport.ProtocolHTTP2, nil
+	case "h3", "http3", "3":
+		return transport.ProtocolHTTP3, nil
+	case "auto", "":
+		return transport.ProtocolAuto, nil
+	default:
+		return transport.ProtocolAuto, fmt.Errorf("invalid protocol %q: must be h1, h2, h3, or auto", proto)
+	}
+}
+
 // Refresh closes all connections but keeps TLS session caches and cookies intact.
 // This simulates a browser page refresh - new TCP/QUIC connections but TLS resumption.
-// Useful for resetting connection state without losing session tickets or cookies.
+// If a switchProtocol was configured, the session switches to that protocol.
 func (s *Session) Refresh() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -899,8 +929,46 @@ func (s *Session) Refresh() {
 	s.refreshed = true
 
 	if s.transport != nil {
-		s.transport.Refresh()
+		if s.switchProtocol != transport.ProtocolAuto {
+			s.transport.RefreshWithProtocol(s.switchProtocol)
+		} else {
+			s.transport.Refresh()
+		}
 	}
+}
+
+// RefreshWithProtocol closes all connections and switches to a new protocol.
+// The protocol change persists for future Refresh() calls as well.
+// Valid protocols: "h1", "h2", "h3", "auto".
+func (s *Session) RefreshWithProtocol(proto string) error {
+	p, err := parseProtocol(proto)
+	if err != nil {
+		return err
+	}
+
+	// Validate H3 support if switching to H3
+	if p == transport.ProtocolHTTP3 && s.Config != nil {
+		preset := fingerprint.Get(s.Config.Preset)
+		if preset != nil && !preset.SupportHTTP3 {
+			return fmt.Errorf("preset %q does not support HTTP/3", s.Config.Preset)
+		}
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.active {
+		return ErrSessionClosed
+	}
+
+	s.refreshed = true
+	s.switchProtocol = p
+
+	if s.transport != nil {
+		s.transport.RefreshWithProtocol(p)
+	}
+
+	return nil
 }
 
 // Touch updates the last used timestamp

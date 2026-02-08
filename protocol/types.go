@@ -203,6 +203,13 @@ type SessionConfig struct {
 	// experience issues with certain proxies.
 	DisableSpeculativeTLS bool `json:"disableSpeculativeTls,omitempty"`
 
+	// SwitchProtocol is the protocol to switch to after Refresh().
+	// Valid values: "h1", "h2", "h3", "" (no switch).
+	// When set, Refresh() will close connections and switch to this protocol,
+	// enabling warm-up on one protocol (e.g. H3) then serving on another (e.g. H2)
+	// with TLS session resumption.
+	SwitchProtocol string `json:"switchProtocol,omitempty"`
+
 	// Default authentication (can be overridden per-request)
 	Auth *AuthConfig `json:"auth,omitempty"`
 }

@@ -312,8 +312,9 @@ type sessionConfig struct {
 	quicIdleTimeout    time.Duration     // QUIC idle timeout (default: 30s)
 	localAddr          string            // Local IP address to bind outgoing connections
 	keyLogFile         string            // Path to write TLS key log for Wireshark decryption
-	disableECH            bool // Disable ECH lookup for faster first request
-	disableSpeculativeTLS bool // Disable speculative TLS optimization for proxy connections
+	disableECH            bool   // Disable ECH lookup for faster first request
+	disableSpeculativeTLS bool   // Disable speculative TLS optimization for proxy connections
+	switchProtocol        string // Protocol to switch to after Refresh() (e.g. "h1", "h2", "h3")
 
 	// Distributed session cache
 	sessionCacheBackend       transport.SessionCacheBackend
@@ -461,6 +462,16 @@ func WithDisableSpeculativeTLS() SessionOption {
 	}
 }
 
+// WithSwitchProtocol sets the protocol to switch to after Refresh().
+// This enables warming up TLS tickets on one protocol (e.g. H3) then serving
+// requests on another (e.g. H2) with TLS session resumption.
+// Valid values: "h1", "h2", "h3".
+func WithSwitchProtocol(protocol string) SessionOption {
+	return func(c *sessionConfig) {
+		c.switchProtocol = protocol
+	}
+}
+
 // WithConnectTo sets a host mapping for domain fronting.
 // Requests to requestHost will connect to connectHost instead.
 // The TLS SNI and Host header will still use requestHost.
@@ -542,6 +553,7 @@ func NewSession(preset string, opts ...SessionOption) *Session {
 		KeyLogFile:         cfg.keyLogFile,
 		DisableECH:            cfg.disableECH,
 		DisableSpeculativeTLS: cfg.disableSpeculativeTLS,
+		SwitchProtocol:        cfg.switchProtocol,
 	}
 
 	// Retry configuration
@@ -736,9 +748,16 @@ func (s *Session) Close() {
 
 // Refresh closes all connections but keeps TLS session caches and cookies intact.
 // This simulates a browser page refresh - new TCP/QUIC connections but TLS resumption.
-// Useful for resetting connection state without losing session tickets or cookies.
+// If a switchProtocol was configured, the session switches to that protocol.
 func (s *Session) Refresh() {
 	s.inner.Refresh()
+}
+
+// RefreshWithProtocol closes all connections and switches to a new protocol.
+// The protocol change persists for future Refresh() calls as well.
+// Valid protocols: "h1", "h2", "h3", "auto".
+func (s *Session) RefreshWithProtocol(protocol string) error {
+	return s.inner.RefreshWithProtocol(protocol)
 }
 
 // Save exports session state (cookies, TLS sessions) to a file

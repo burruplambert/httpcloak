@@ -1538,6 +1538,18 @@ func (t *Transport) Refresh() {
 	t.h3Transport.Refresh()
 }
 
+// RefreshWithProtocol closes all connections and switches to a new protocol.
+// TLS session caches are preserved for 0-RTT resumption on the new protocol.
+// This enables warming up TLS tickets on one protocol (e.g. H3) then serving
+// requests on another (e.g. H2) with session resumption.
+func (t *Transport) RefreshWithProtocol(p Protocol) {
+	t.h1Transport.Refresh()
+	t.h2Transport.Refresh()
+	t.h3Transport.Refresh()
+	t.SetProtocol(p)
+	t.ClearProtocolCache()
+}
+
 // Stats returns transport statistics
 func (t *Transport) Stats() map[string]interface{} {
 	return map[string]interface{}{

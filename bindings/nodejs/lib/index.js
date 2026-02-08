@@ -756,6 +756,7 @@ function getLib() {
       httpcloak_session_new: nativeLibHandle.func("httpcloak_session_new", "int64", ["str"]),
       httpcloak_session_free: nativeLibHandle.func("httpcloak_session_free", "void", ["int64"]),
       httpcloak_session_refresh: nativeLibHandle.func("httpcloak_session_refresh", "void", ["int64"]),
+      httpcloak_session_refresh_protocol: nativeLibHandle.func("httpcloak_session_refresh_protocol", "str", ["int64", "str"]),
       httpcloak_get: nativeLibHandle.func("httpcloak_get", "str", ["int64", "str", "str"]),
       httpcloak_post: nativeLibHandle.func("httpcloak_post", "str", ["int64", "str", "str", "str"]),
       httpcloak_request: nativeLibHandle.func("httpcloak_request", "str", ["int64", "str"]),
@@ -1242,6 +1243,7 @@ class Session {
       localAddress = null,
       keyLogFile = null,
       disableSpeculativeTls = false,
+      switchProtocol = null,
     } = options;
 
     this._lib = getLib();
@@ -1305,6 +1307,9 @@ class Session {
     if (disableSpeculativeTls) {
       config.disable_speculative_tls = true;
     }
+    if (switchProtocol) {
+      config.switch_protocol = switchProtocol;
+    }
 
     this._handle = this._lib.httpcloak_session_new(JSON.stringify(config));
 
@@ -1327,10 +1332,22 @@ class Session {
    * Refresh the session by closing all connections while keeping TLS session tickets.
    * This simulates a browser page refresh - connections are severed but 0-RTT
    * early data can be used on reconnection due to preserved session tickets.
+   * @param {string} [switchProtocol] - Optional protocol to switch to ("h1", "h2", "h3").
+   *   Overrides any switchProtocol set at construction time. Persists for future refresh() calls.
    */
-  refresh() {
+  refresh(switchProtocol) {
     if (this._handle) {
-      this._lib.httpcloak_session_refresh(this._handle);
+      if (switchProtocol) {
+        const result = this._lib.httpcloak_session_refresh_protocol(this._handle, switchProtocol);
+        if (result) {
+          const data = JSON.parse(result);
+          if (data.error) {
+            throw new HTTPCloakError(data.error);
+          }
+        }
+      } else {
+        this._lib.httpcloak_session_refresh(this._handle);
+      }
     }
   }
 

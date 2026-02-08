@@ -278,6 +278,7 @@ type SessionConfig struct {
 	KeyLogFile      string            `json:"key_log_file,omitempty"`      // Path to write TLS key log for Wireshark decryption
 	DisableECH            bool              `json:"disable_ech,omitempty"`             // Disable ECH lookup for faster first request
 	DisableSpeculativeTLS bool              `json:"disable_speculative_tls,omitempty"` // Disable speculative TLS optimization for proxy connections
+	SwitchProtocol        string            `json:"switch_protocol,omitempty"`         // Protocol to switch to after Refresh()
 }
 
 // Error response
@@ -986,6 +987,11 @@ func httpcloak_session_new(configJSON *C.char) C.int64_t {
 		opts = append(opts, httpcloak.WithDisableSpeculativeTLS())
 	}
 
+	// Handle switch protocol
+	if config.SwitchProtocol != "" {
+		opts = append(opts, httpcloak.WithSwitchProtocol(config.SwitchProtocol))
+	}
+
 	// Handle session cache if configured globally
 	backend, errorCallback := getSessionCacheBackend()
 	if backend != nil {
@@ -1023,6 +1029,21 @@ func httpcloak_session_refresh(handle C.int64_t) {
 	if session != nil {
 		session.Refresh()
 	}
+}
+
+//export httpcloak_session_refresh_protocol
+func httpcloak_session_refresh_protocol(handle C.int64_t, protocol *C.char) *C.char {
+	session := getSession(handle)
+	if session == nil {
+		return makeErrorJSON(ErrInvalidSession)
+	}
+
+	proto := C.GoString(protocol)
+	if err := session.RefreshWithProtocol(proto); err != nil {
+		return makeErrorJSON(err)
+	}
+
+	return nil
 }
 
 func getSession(handle C.int64_t) *httpcloak.Session {

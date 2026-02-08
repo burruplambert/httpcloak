@@ -160,6 +160,7 @@ public sealed class Session : IDisposable
     /// <param name="echConfigDomain">Domain to fetch ECH config from (e.g., "cloudflare-ech.com")</param>
     /// <param name="tlsOnly">TLS-only mode: use TLS fingerprint but skip preset HTTP headers (default: false)</param>
     /// <param name="quicIdleTimeout">QUIC idle timeout in seconds (default: 30). Set higher for long-lived HTTP/3 connections.</param>
+    /// <param name="switchProtocol">Protocol to switch to after Refresh(): "h1", "h2", "h3" (default: null, no switch)</param>
     public Session(
         string preset = "chrome-144",
         string? proxy = null,
@@ -182,7 +183,8 @@ public sealed class Session : IDisposable
         int quicIdleTimeout = 0,
         string? localAddress = null,
         string? keyLogFile = null,
-        bool disableSpeculativeTls = false)
+        bool disableSpeculativeTls = false,
+        string? switchProtocol = null)
     {
         Auth = auth;
 
@@ -208,7 +210,8 @@ public sealed class Session : IDisposable
             QuicIdleTimeout = quicIdleTimeout,
             LocalAddress = localAddress,
             KeyLogFile = keyLogFile,
-            DisableSpeculativeTls = disableSpeculativeTls
+            DisableSpeculativeTls = disableSpeculativeTls,
+            SwitchProtocol = switchProtocol
         };
 
         string configJson = JsonSerializer.Serialize(config, JsonContext.Default.SessionConfig);
@@ -1495,10 +1498,29 @@ public sealed class Session : IDisposable
     /// This simulates a browser page refresh - connections are severed but 0-RTT
     /// early data can be used on reconnection due to preserved session tickets.
     /// </summary>
-    public void Refresh()
+    /// <param name="switchProtocol">Optional protocol to switch to ("h1", "h2", "h3").
+    /// Overrides any switchProtocol set at construction time. Persists for future Refresh() calls.</param>
+    public void Refresh(string? switchProtocol = null)
     {
         ThrowIfDisposed();
-        Native.SessionRefresh(_handle);
+        if (switchProtocol != null)
+        {
+            IntPtr resultPtr = Native.SessionRefreshProtocol(_handle, switchProtocol);
+            if (resultPtr != IntPtr.Zero)
+            {
+                string? result = Native.PtrToStringAndFree(resultPtr);
+                if (!string.IsNullOrEmpty(result))
+                {
+                    var error = JsonSerializer.Deserialize(result, JsonContext.Default.ErrorResponse);
+                    if (error?.Error != null)
+                        throw new HttpCloakException(error.Error);
+                }
+            }
+        }
+        else
+        {
+            Native.SessionRefresh(_handle);
+        }
     }
 
     private void ThrowIfDisposed()
@@ -2345,6 +2367,10 @@ internal class SessionConfig
     [JsonPropertyName("disable_speculative_tls")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool DisableSpeculativeTls { get; set; }
+
+    [JsonPropertyName("switch_protocol")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? SwitchProtocol { get; set; }
 }
 
 internal class RequestConfig
