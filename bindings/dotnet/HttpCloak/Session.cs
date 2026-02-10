@@ -288,6 +288,30 @@ public sealed class Session : IDisposable
     }
 
     /// <summary>
+    /// Auto-detect Content-Type from body when not explicitly set.
+    /// If body looks like JSON (starts with { or [), sets application/json.
+    /// </summary>
+    private static void InferContentType(string? body, Dictionary<string, string> headers)
+    {
+        if (string.IsNullOrEmpty(body))
+            return;
+
+        // Check if Content-Type is already set (case-insensitive)
+        foreach (var key in headers.Keys)
+        {
+            if (key.Equals("Content-Type", StringComparison.OrdinalIgnoreCase))
+                return;
+        }
+
+        // Detect JSON body
+        var trimmed = body.AsSpan().TrimStart();
+        if (trimmed.Length > 0 && (trimmed[0] == '{' || trimmed[0] == '['))
+        {
+            headers["Content-Type"] = "application/json";
+        }
+    }
+
+    /// <summary>
     /// Perform a GET request.
     /// </summary>
     /// <param name="url">Request URL</param>
@@ -336,6 +360,7 @@ public sealed class Session : IDisposable
         url = AddParamsToUrl(url, parameters);
         headers = ApplyAuth(headers, auth);
         headers = ApplyCookies(headers, cookies);
+        InferContentType(body, headers);
 
         if (timeout != null)
             return Request("POST", url, body, headers, timeout, auth);
@@ -410,6 +435,7 @@ public sealed class Session : IDisposable
         url = AddParamsToUrl(url, parameters);
         headers = ApplyAuth(headers, auth);
         headers = ApplyCookies(headers, cookies);
+        InferContentType(body, headers);
 
         var request = new RequestConfig
         {
@@ -668,6 +694,7 @@ public sealed class Session : IDisposable
         url = AddParamsToUrl(url, parameters);
         headers = ApplyAuth(headers, auth);
         headers = ApplyCookies(headers, cookies);
+        InferContentType(body, headers);
 
         if (timeout != null)
             return RequestAsync("POST", url, body, headers, timeout, auth, parameters, cookies, cancellationToken);
@@ -728,6 +755,7 @@ public sealed class Session : IDisposable
         url = AddParamsToUrl(url, parameters);
         headers = ApplyAuth(headers, auth);
         headers = ApplyCookies(headers, cookies);
+        InferContentType(body, headers);
 
         var request = new RequestConfig
         {
@@ -1200,6 +1228,7 @@ public sealed class Session : IDisposable
         url = AddParamsToUrl(url, parameters);
         headers = ApplyAuth(headers, auth);
         headers = ApplyCookies(headers, cookies);
+        InferContentType(body, headers);
 
         var options = new StreamOptions { Headers = headers.Count > 0 ? headers : null, Timeout = timeout };
         string? optionsJson = JsonSerializer.Serialize(options, JsonContext.Relaxed.StreamOptions);
@@ -1230,6 +1259,7 @@ public sealed class Session : IDisposable
         url = AddParamsToUrl(url, parameters);
         headers = ApplyAuth(headers, auth);
         headers = ApplyCookies(headers, cookies);
+        InferContentType(body, headers);
 
         var request = new RequestConfig
         {
