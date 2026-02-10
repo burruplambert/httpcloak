@@ -54,13 +54,13 @@ build_for_platform() {
             -buildmode=c-shared \
             -ldflags="-s -w" \
             -o "$output" \
-            httpcloak.go
+            .
     else
         CGO_ENABLED=1 GOOS="$os" GOARCH="$arch" go build \
             -buildmode=c-shared \
             -ldflags="-s -w" \
             -o "$output" \
-            httpcloak.go
+            .
     fi
 
     # Move header file to dist directory
