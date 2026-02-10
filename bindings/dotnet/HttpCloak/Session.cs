@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Web;
@@ -128,6 +129,15 @@ public sealed class Session : IDisposable
     private bool _disposed;
 
     /// <summary>
+    /// Relaxed JSON serializer options that preserves raw characters (&amp;, +, &lt;, &gt;) in payloads
+    /// instead of escaping them as unicode (\u0026, \u002B, etc.).
+    /// </summary>
+    private static readonly JsonSerializerOptions _relaxedJsonOptions = new()
+    {
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+    };
+
+    /// <summary>
     /// Internal handle for use by LocalProxy.RegisterSession.
     /// </summary>
     internal long Handle => _handle;
@@ -214,7 +224,7 @@ public sealed class Session : IDisposable
             SwitchProtocol = switchProtocol
         };
 
-        string configJson = JsonSerializer.Serialize(config, JsonContext.Default.SessionConfig);
+        string configJson = JsonSerializer.Serialize(config, JsonContext.Relaxed.SessionConfig);
         _handle = Native.SessionNew(configJson);
 
         if (_handle == 0)
@@ -299,7 +309,7 @@ public sealed class Session : IDisposable
 
         // Wrap headers in RequestOptions as expected by clib
         string? optionsJson = headers.Count > 0
-            ? JsonSerializer.Serialize(new RequestOptions { Headers = headers }, JsonContext.Default.RequestOptions)
+            ? JsonSerializer.Serialize(new RequestOptions { Headers = headers }, JsonContext.Relaxed.RequestOptions)
             : null;
 
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
@@ -332,7 +342,7 @@ public sealed class Session : IDisposable
 
         // Wrap headers in RequestOptions as expected by clib
         string? optionsJson = headers.Count > 0
-            ? JsonSerializer.Serialize(new RequestOptions { Headers = headers }, JsonContext.Default.RequestOptions)
+            ? JsonSerializer.Serialize(new RequestOptions { Headers = headers }, JsonContext.Relaxed.RequestOptions)
             : null;
 
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
@@ -358,7 +368,7 @@ public sealed class Session : IDisposable
         if (!headers.ContainsKey("Content-Type"))
             headers["Content-Type"] = "application/json";
 
-        string body = JsonSerializer.Serialize(data);
+        string body = JsonSerializer.Serialize(data, _relaxedJsonOptions);
         return Post(url, body, headers, parameters, cookies, auth, timeout);
     }
 
@@ -410,7 +420,7 @@ public sealed class Session : IDisposable
             Timeout = timeout
         };
 
-        string requestJson = JsonSerializer.Serialize(request, JsonContext.Default.RequestConfig);
+        string requestJson = JsonSerializer.Serialize(request, JsonContext.Relaxed.RequestConfig);
 
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         IntPtr resultPtr = Native.Request(_handle, requestJson);
@@ -441,7 +451,7 @@ public sealed class Session : IDisposable
         if (!headers.ContainsKey("Content-Type"))
             headers["Content-Type"] = "application/json";
 
-        string body = JsonSerializer.Serialize(data);
+        string body = JsonSerializer.Serialize(data, _relaxedJsonOptions);
         return Put(url, body, headers, parameters, cookies, auth, timeout);
     }
 
@@ -479,7 +489,7 @@ public sealed class Session : IDisposable
         if (!headers.ContainsKey("Content-Type"))
             headers["Content-Type"] = "application/json";
 
-        string body = JsonSerializer.Serialize(data);
+        string body = JsonSerializer.Serialize(data, _relaxedJsonOptions);
         return Patch(url, body, headers, parameters, cookies, auth, timeout);
     }
 
@@ -585,7 +595,7 @@ public sealed class Session : IDisposable
             Timeout = timeout
         };
 
-        string requestJson = JsonSerializer.Serialize(request, JsonContext.Default.RequestConfig);
+        string requestJson = JsonSerializer.Serialize(request, JsonContext.Relaxed.RequestConfig);
 
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         IntPtr resultPtr = Native.Request(_handle, requestJson);
@@ -632,7 +642,7 @@ public sealed class Session : IDisposable
         // Wrap headers in RequestOptions structure (Go expects {"headers": {...}, "timeout": ...})
         var options = new RequestOptions { Headers = headers.Count > 0 ? headers : null };
         string? optionsJson = (options.Headers != null)
-            ? JsonSerializer.Serialize(options, JsonContext.Default.RequestOptions)
+            ? JsonSerializer.Serialize(options, JsonContext.Relaxed.RequestOptions)
             : null;
 
         var (callbackId, task) = AsyncCallbackManager.Instance.RegisterRequest(cancellationToken);
@@ -665,7 +675,7 @@ public sealed class Session : IDisposable
         // Wrap headers in RequestOptions structure (Go expects {"headers": {...}, "timeout": ...})
         var options = new RequestOptions { Headers = headers.Count > 0 ? headers : null };
         string? optionsJson = (options.Headers != null)
-            ? JsonSerializer.Serialize(options, JsonContext.Default.RequestOptions)
+            ? JsonSerializer.Serialize(options, JsonContext.Relaxed.RequestOptions)
             : null;
 
         var (callbackId, task) = AsyncCallbackManager.Instance.RegisterRequest(cancellationToken);
@@ -683,7 +693,7 @@ public sealed class Session : IDisposable
         if (!headers.ContainsKey("Content-Type"))
             headers["Content-Type"] = "application/json";
 
-        string body = JsonSerializer.Serialize(data);
+        string body = JsonSerializer.Serialize(data, _relaxedJsonOptions);
         return PostAsync(url, body, headers, parameters, cookies, auth, timeout, cancellationToken);
     }
 
@@ -728,7 +738,7 @@ public sealed class Session : IDisposable
             Timeout = timeout
         };
 
-        string requestJson = JsonSerializer.Serialize(request, JsonContext.Default.RequestConfig);
+        string requestJson = JsonSerializer.Serialize(request, JsonContext.Relaxed.RequestConfig);
 
         var (callbackId, task) = AsyncCallbackManager.Instance.RegisterRequest(cancellationToken);
         Native.RequestAsync(_handle, requestJson, callbackId);
@@ -751,7 +761,7 @@ public sealed class Session : IDisposable
         if (!headers.ContainsKey("Content-Type"))
             headers["Content-Type"] = "application/json";
 
-        string body = JsonSerializer.Serialize(data);
+        string body = JsonSerializer.Serialize(data, _relaxedJsonOptions);
         return PutAsync(url, body, headers, parameters, cookies, auth, timeout, cancellationToken);
     }
 
@@ -776,7 +786,7 @@ public sealed class Session : IDisposable
         if (!headers.ContainsKey("Content-Type"))
             headers["Content-Type"] = "application/json";
 
-        string body = JsonSerializer.Serialize(data);
+        string body = JsonSerializer.Serialize(data, _relaxedJsonOptions);
         return PatchAsync(url, body, headers, parameters, cookies, auth, timeout, cancellationToken);
     }
 
@@ -1163,7 +1173,7 @@ public sealed class Session : IDisposable
         headers = ApplyCookies(headers, cookies);
 
         var options = new StreamOptions { Headers = headers.Count > 0 ? headers : null, Timeout = timeout };
-        string? optionsJson = JsonSerializer.Serialize(options, JsonContext.Default.StreamOptions);
+        string? optionsJson = JsonSerializer.Serialize(options, JsonContext.Relaxed.StreamOptions);
 
         long streamHandle = Native.StreamGet(_handle, url, optionsJson);
         if (streamHandle < 0)
@@ -1192,7 +1202,7 @@ public sealed class Session : IDisposable
         headers = ApplyCookies(headers, cookies);
 
         var options = new StreamOptions { Headers = headers.Count > 0 ? headers : null, Timeout = timeout };
-        string? optionsJson = JsonSerializer.Serialize(options, JsonContext.Default.StreamOptions);
+        string? optionsJson = JsonSerializer.Serialize(options, JsonContext.Relaxed.StreamOptions);
 
         long streamHandle = Native.StreamPost(_handle, url, body, optionsJson);
         if (streamHandle < 0)
@@ -1230,7 +1240,7 @@ public sealed class Session : IDisposable
             Timeout = timeout
         };
 
-        string requestJson = JsonSerializer.Serialize(request, JsonContext.Default.RequestConfig);
+        string requestJson = JsonSerializer.Serialize(request, JsonContext.Relaxed.RequestConfig);
 
         long streamHandle = Native.StreamRequest(_handle, requestJson);
         if (streamHandle < 0)
@@ -1361,7 +1371,7 @@ public sealed class Session : IDisposable
 
         var options = new RequestOptions { Headers = headers.Count > 0 ? headers : null };
         string? optionsJson = headers.Count > 0
-            ? JsonSerializer.Serialize(options, JsonContext.Default.RequestOptions)
+            ? JsonSerializer.Serialize(options, JsonContext.Relaxed.RequestOptions)
             : null;
 
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
@@ -1393,7 +1403,7 @@ public sealed class Session : IDisposable
 
         var options = new RequestOptions { Headers = headers.Count > 0 ? headers : null };
         string? optionsJson = headers.Count > 0
-            ? JsonSerializer.Serialize(options, JsonContext.Default.RequestOptions)
+            ? JsonSerializer.Serialize(options, JsonContext.Relaxed.RequestOptions)
             : null;
 
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
@@ -1448,7 +1458,7 @@ public sealed class Session : IDisposable
             Timeout = timeout
         };
 
-        string requestJson = JsonSerializer.Serialize(request, JsonContext.Default.RequestConfig);
+        string requestJson = JsonSerializer.Serialize(request, JsonContext.Relaxed.RequestConfig);
 
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         long responseHandle;
@@ -2267,7 +2277,7 @@ public static class HttpCloakInfo
         string? serversJson = null;
         if (servers != null && servers.Length > 0)
         {
-            serversJson = JsonSerializer.Serialize(servers, JsonContext.Default.StringArray);
+            serversJson = JsonSerializer.Serialize(servers, JsonContext.Relaxed.StringArray);
         }
 
         IntPtr errorPtr = Native.SetEchDnsServers(serversJson);
@@ -2688,4 +2698,17 @@ public sealed class HttpCloakHandler : DelegatingHandler
 [JsonSerializable(typeof(StreamMetadata))]
 [JsonSerializable(typeof(PresetInfo))]
 [JsonSerializable(typeof(Dictionary<string, PresetInfo>))]
-internal partial class JsonContext : JsonSerializerContext { }
+internal partial class JsonContext : JsonSerializerContext
+{
+    /// <summary>
+    /// JsonContext with UnsafeRelaxedJsonEscaping to preserve raw characters like &amp;, +, &lt;, &gt; in request bodies.
+    /// Without this, C#'s default encoder escapes them as \u0026, \u002B, etc., which can cause payload issues.
+    /// </summary>
+    private static readonly Lazy<JsonContext> _relaxed = new(() =>
+        new JsonContext(new JsonSerializerOptions
+        {
+            Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+        }));
+
+    public static JsonContext Relaxed => _relaxed.Value;
+}
