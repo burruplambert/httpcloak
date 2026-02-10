@@ -804,7 +804,8 @@ func (t *HTTP1Transport) writeRequest(conn *http1Conn, req *http.Request) error 
 	fmt.Fprintf(conn.bw, "Host: %s\r\n", host)
 
 	// Determine if we need chunked encoding (unknown content length with body)
-	useChunked := req.Body != nil && req.ContentLength <= 0 && req.Header.Get("Content-Length") == ""
+	// http.NoBody is an explicit "no body" sentinel — don't use chunked for it
+	useChunked := req.Body != nil && req.Body != http.NoBody && req.ContentLength <= 0 && req.Header.Get("Content-Length") == ""
 
 	// Write headers in browser-like order
 	t.writeHeadersInOrder(conn.bw, req, useChunked)
@@ -984,6 +985,25 @@ func (t *HTTP1Transport) writeHeadersInOrder(w *bufio.Writer, req *http.Request,
 		for _, v := range values {
 			fmt.Fprintf(w, "%s: %s\r\n", key, v)
 		}
+	}
+
+	// Ensure Content-Length is written when body is present
+	// This handles the case where the preset's header order doesn't include content-length
+	if !written["Content-Length"] && !useChunked {
+		if values, ok := req.Header["Content-Length"]; ok {
+			for _, v := range values {
+				fmt.Fprintf(w, "Content-Length: %s\r\n", v)
+			}
+		} else if req.ContentLength > 0 {
+			fmt.Fprintf(w, "Content-Length: %d\r\n", req.ContentLength)
+		} else if req.ContentLength == 0 && req.Body != nil {
+			fmt.Fprintf(w, "Content-Length: 0\r\n")
+		}
+	}
+
+	// Ensure Transfer-Encoding is written for chunked
+	if !written["Transfer-Encoding"] && useChunked {
+		fmt.Fprintf(w, "Transfer-Encoding: chunked\r\n")
 	}
 
 	// Ensure Connection header
