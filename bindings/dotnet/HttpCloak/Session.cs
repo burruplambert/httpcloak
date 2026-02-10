@@ -1539,7 +1539,13 @@ public sealed class Session : IDisposable
                 _handle = 0;
             }
             _disposed = true;
+            GC.SuppressFinalize(this);
         }
+    }
+
+    ~Session()
+    {
+        Dispose();
     }
 }
 
