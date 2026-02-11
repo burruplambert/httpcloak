@@ -287,8 +287,12 @@ func (w *pooledBodyWrapper) Read(p []byte) (n int, err error) {
 }
 
 func (w *pooledBodyWrapper) Close() error {
+	// Close body first to drain remaining data, THEN return conn to pool.
+	// Reversing this order causes a race: conn goes back to pool while
+	// body.Close() is still draining from the same underlying bufio.Reader.
+	err := w.body.Close()
 	w.handleClose()
-	return w.body.Close()
+	return err
 }
 
 func (w *pooledBodyWrapper) handleClose() {
