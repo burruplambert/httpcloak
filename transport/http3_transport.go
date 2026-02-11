@@ -766,13 +766,6 @@ func (t *HTTP3Transport) dialQUICWithMASQUE(ctx context.Context, addr string, tl
 		return nil, fmt.Errorf("MASQUE tunnel establishment failed: %w", err)
 	}
 
-	// Create quic.Transport with MASQUE PacketConn
-	if t.quicTransport == nil {
-		t.quicTransport = &quic.Transport{
-			Conn: t.masqueConn,
-		}
-	}
-
 	// Resolve target DNS
 	ip, err := t.dnsCache.ResolveOne(ctx, connectHost)
 	if err != nil {

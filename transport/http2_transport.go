@@ -158,6 +158,11 @@ func (t *HTTP2Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return nil, err
 	}
 
+	// Mark conn as in-use so cleanup() doesn't close it mid-flight
+	conn.mu.Lock()
+	conn.lastUsedAt = time.Now()
+	conn.mu.Unlock()
+
 	// Make request
 	resp, err := conn.h2Conn.RoundTrip(req)
 	if err != nil {

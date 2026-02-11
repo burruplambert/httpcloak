@@ -1019,12 +1019,12 @@ func (t *HTTP1Transport) writeHeadersInOrder(w *bufio.Writer, req *http.Request,
 // shouldKeepAlive determines if connection should be reused
 func (t *HTTP1Transport) shouldKeepAlive(req *http.Request, resp *http.Response) bool {
 	// Check response Connection header
-	if resp.Header.Get("Connection") == "close" {
+	if strings.EqualFold(resp.Header.Get("Connection"), "close") {
 		return false
 	}
 
 	// Check request Connection header
-	if req.Header.Get("Connection") == "close" {
+	if strings.EqualFold(req.Header.Get("Connection"), "close") {
 		return false
 	}
 
