@@ -9,7 +9,6 @@ import (
 	"math/rand"
 	"net"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -41,9 +40,6 @@ const (
 )
 
 func init() {
-	// Suppress quic-go UDP buffer size warning
-	os.Setenv("QUIC_GO_DISABLE_RECEIVE_BUFFER_WARNING", "1")
-
 	// Set Chrome-like additional transport parameters
 	quic.SetAdditionalTransportParameters(buildChromeTransportParams())
 }
@@ -84,6 +80,14 @@ func generateGREASEVersion() uint32 {
 		uint32(nibble)<<4 | 0x0000000a
 }
 
+// proxyQUICConn bundles an udpbara connection with its per-connection quic.Transport.
+// Both must be closed together: quic.Transport first (sends CONNECTION_CLOSE),
+// then udpbara.Connection (closes sockets, deregisters from tunnel).
+type proxyQUICConn struct {
+	udpConn *udpbara.Connection
+	quicTr  *quic.Transport
+}
+
 // HTTP3Transport is an HTTP/3 transport with proper QUIC connection reuse
 // http3.Transport handles connection pooling internally - we just provide DNS resolution
 type HTTP3Transport struct {
@@ -118,11 +122,11 @@ type HTTP3Transport struct {
 	tlsConfig  *tls.Config
 
 	// Proxy support for SOCKS5 UDP relay via udpbara
-	proxyConfig    *ProxyConfig
-	udpbaraTunnel  *udpbara.Tunnel      // SOCKS5 UDP relay tunnel (shared across dials)
-	udpbaraConns   []*udpbara.Connection // Active connections (for cleanup)
-	udpbaraConnsMu sync.Mutex
-	quicTransport  *quic.Transport // Only used for direct connections
+	proxyConfig   *ProxyConfig
+	udpbaraTunnel *udpbara.Tunnel // SOCKS5 UDP relay tunnel (shared across dials)
+	proxyConns    []*proxyQUICConn
+	proxyConnsMu  sync.Mutex
+	quicTransport *quic.Transport // Only used for direct connections
 
 	// MASQUE proxy support
 	masqueConn *proxy.MASQUEConn
@@ -870,14 +874,15 @@ func (t *HTTP3Transport) dialQUICWithProxy(ctx context.Context, addr string, tls
 		return nil, fmt.Errorf("udpbara dial failed: %w", err)
 	}
 
-	// Track for cleanup on Close/Refresh
-	t.udpbaraConnsMu.Lock()
-	t.udpbaraConns = append(t.udpbaraConns, udpConn)
-	t.udpbaraConnsMu.Unlock()
-
 	// Create per-connection quic.Transport with real *net.UDPConn
 	// quic-go gets full OOB/ECN/GSO support via the real kernel socket
 	qt := &quic.Transport{Conn: udpConn.PacketConn()}
+
+	// Track both for cleanup on Close/Refresh
+	pc := &proxyQUICConn{udpConn: udpConn, quicTr: qt}
+	t.proxyConnsMu.Lock()
+	t.proxyConns = append(t.proxyConns, pc)
+	t.proxyConnsMu.Unlock()
 
 	// Clone TLS config — ServerName is the actual host (not connectHost)
 	tlsCfgCopy := t.tlsConfig.Clone()
@@ -896,8 +901,9 @@ func (t *HTTP3Transport) dialQUICWithProxy(ctx context.Context, addr string, tls
 	// Dial through the local relay → udpbara wraps in SOCKS5 → proxy forwards
 	conn, err := qt.DialEarly(ctx, udpConn.RelayAddr(), tlsCfgCopy, cfgCopy)
 	if err != nil {
+		closeWithTimeout(qt, 3*time.Second)
 		udpConn.Close()
-		t.removeUdpbaraConn(udpConn)
+		t.removeProxyConn(pc)
 		return nil, err
 	}
 
@@ -1234,26 +1240,28 @@ func (t *HTTP3Transport) GetRequestCount() int64 {
 	return t.requestCount
 }
 
-// removeUdpbaraConn removes a single udpbara connection from tracking
-func (t *HTTP3Transport) removeUdpbaraConn(c *udpbara.Connection) {
-	t.udpbaraConnsMu.Lock()
-	defer t.udpbaraConnsMu.Unlock()
-	for i, conn := range t.udpbaraConns {
-		if conn == c {
-			t.udpbaraConns = append(t.udpbaraConns[:i], t.udpbaraConns[i+1:]...)
+// removeProxyConn removes a single proxy QUIC connection from tracking
+func (t *HTTP3Transport) removeProxyConn(pc *proxyQUICConn) {
+	t.proxyConnsMu.Lock()
+	defer t.proxyConnsMu.Unlock()
+	for i, c := range t.proxyConns {
+		if c == pc {
+			t.proxyConns = append(t.proxyConns[:i], t.proxyConns[i+1:]...)
 			return
 		}
 	}
 }
 
-// closeAllUdpbaraConns closes all tracked udpbara connections
-func (t *HTTP3Transport) closeAllUdpbaraConns() {
-	t.udpbaraConnsMu.Lock()
-	conns := t.udpbaraConns
-	t.udpbaraConns = nil
-	t.udpbaraConnsMu.Unlock()
+// closeAllProxyConns closes all tracked proxy QUIC connections.
+// Closes quic.Transport first (sends CONNECTION_CLOSE), then udpbara (closes sockets).
+func (t *HTTP3Transport) closeAllProxyConns() {
+	t.proxyConnsMu.Lock()
+	conns := t.proxyConns
+	t.proxyConns = nil
+	t.proxyConnsMu.Unlock()
 	for _, c := range conns {
-		c.Close()
+		closeWithTimeout(c.quicTr, 3*time.Second)
+		c.udpConn.Close()
 	}
 }
 
@@ -1266,9 +1274,9 @@ func (t *HTTP3Transport) Close() error {
 		closeWithTimeout(t.quicTransport, 3*time.Second)
 	}
 
-	// Close udpbara tunnel and all connections
+	// Close udpbara tunnel and all proxy QUIC connections
 	if t.udpbaraTunnel != nil {
-		t.closeAllUdpbaraConns()
+		t.closeAllProxyConns()
 		t.udpbaraTunnel.Close()
 	}
 
@@ -1319,9 +1327,9 @@ func (t *HTTP3Transport) Refresh() error {
 		}
 	}
 
-	// Close old udpbara connections; tunnel stays alive for new dials
+	// Close old proxy QUIC connections; tunnel stays alive for new dials
 	if t.udpbaraTunnel != nil {
-		t.closeAllUdpbaraConns()
+		t.closeAllProxyConns()
 	}
 
 	// Generate GREASE values
