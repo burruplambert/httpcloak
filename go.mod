@@ -1,6 +1,6 @@
 module github.com/sardanioss/httpcloak
 
-go 1.24.1
+go 1.25.5
 
 retract (
 	v1.4.0 // Published prematurely, use v1.1.x instead
@@ -15,14 +15,15 @@ require (
 	github.com/sardanioss/http v1.1.0
 	github.com/sardanioss/net v1.2.1
 	github.com/sardanioss/quic-go v1.2.18
+	github.com/sardanioss/udpbara v1.0.0
 	github.com/sardanioss/utls v1.10.1
+	golang.org/x/net v0.48.0
 )
 
 require (
 	github.com/sardanioss/qpack v0.6.2 // indirect
 	golang.org/x/crypto v0.46.0 // indirect
 	golang.org/x/mod v0.30.0 // indirect
-	golang.org/x/net v0.48.0 // indirect
 	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/sys v0.39.0 // indirect
 	golang.org/x/text v0.32.0 // indirect
@@ -34,3 +35,5 @@ replace github.com/sardanioss/utls => ../utls
 replace github.com/sardanioss/net => ../sardanioss-net
 
 replace github.com/sardanioss/quic-go => ../quic-go
+
+replace github.com/sardanioss/udpbara => ../udpbara

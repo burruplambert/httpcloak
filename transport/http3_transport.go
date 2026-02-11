@@ -21,6 +21,7 @@ import (
 	"github.com/sardanioss/httpcloak/proxy"
 	"github.com/sardanioss/quic-go"
 	"github.com/sardanioss/quic-go/http3"
+	"github.com/sardanioss/udpbara"
 	tls "github.com/sardanioss/utls"
 	utls "github.com/sardanioss/utls"
 )
@@ -116,10 +117,12 @@ type HTTP3Transport struct {
 	quicConfig *quic.Config
 	tlsConfig  *tls.Config
 
-	// Proxy support for SOCKS5 UDP relay
-	proxyConfig   *ProxyConfig
-	socks5Conn    *proxy.SOCKS5UDPConn
-	quicTransport *quic.Transport
+	// Proxy support for SOCKS5 UDP relay via udpbara
+	proxyConfig    *ProxyConfig
+	udpbaraTunnel  *udpbara.Tunnel      // SOCKS5 UDP relay tunnel (shared across dials)
+	udpbaraConns   []*udpbara.Connection // Active connections (for cleanup)
+	udpbaraConnsMu sync.Mutex
+	quicTransport  *quic.Transport // Only used for direct connections
 
 	// MASQUE proxy support
 	masqueConn *proxy.MASQUEConn
@@ -505,30 +508,20 @@ func NewHTTP3TransportWithConfig(preset *fingerprint.Preset, dnsCache *dns.Cache
 		TransportParameterShuffleSeed: shuffleSeed,
 	}
 
-	// Set up SOCKS5 UDP relay if proxy is configured
-	// HTTP/3 requires SOCKS5 UDP ASSOCIATE which not all proxies support
+	// Set up SOCKS5 UDP relay via udpbara if proxy is configured
+	// udpbara creates local UDP socket pairs so quic-go gets real *net.UDPConn with OOB/ECN support
 	if proxyConfig != nil && proxyConfig.URL != "" {
-		socks5Conn, err := proxy.NewSOCKS5UDPConn(proxyConfig.URL)
+		tunnel, err := udpbara.NewTunnel(proxyConfig.URL)
 		if err != nil {
-			return nil, fmt.Errorf("failed to connect to SOCKS5 proxy: %w", err)
+			return nil, fmt.Errorf("failed to create SOCKS5 tunnel: %w", err)
 		}
-
-		// Establish UDP ASSOCIATE (with 15 second timeout)
-		// This is required for QUIC/HTTP3 but not all SOCKS5 proxies support it
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-
-		if err := socks5Conn.Establish(ctx); err != nil {
-			socks5Conn.Close()
-			return nil, fmt.Errorf("SOCKS5 proxy does not support UDP relay (required for HTTP/3): %w. Use HTTP/2 with this proxy or switch to a proxy that supports SOCKS5 UDP ASSOCIATE", err)
+		if err := tunnel.ConnectContext(ctx); err != nil {
+			return nil, fmt.Errorf("SOCKS5 proxy does not support UDP relay (required for HTTP/3): %w", err)
 		}
-
-		t.socks5Conn = socks5Conn
-
-		// Create quic.Transport with our SOCKS5 PacketConn
-		t.quicTransport = &quic.Transport{
-			Conn: socks5Conn,
-		}
+		t.udpbaraTunnel = tunnel
+		// Note: quicTransport is NOT created here — each dial creates its own per-connection
 	}
 
 	// Generate GREASE settings
@@ -554,28 +547,20 @@ func NewHTTP3TransportWithConfig(preset *fingerprint.Preset, dnsCache *dns.Cache
 	}
 
 	// Create HTTP/3 transport with appropriate dial function
-	if t.socks5Conn != nil {
-		// Use proxy-aware dial function
-		t.transport = &http3.Transport{
-			TLSClientConfig:        t.tlsConfig,
-			QUICConfig:             t.quicConfig,
-			Dial:                   t.dialQUICWithProxy,
-			EnableDatagrams:        true,
-			AdditionalSettings:     additionalSettings,
-			MaxResponseHeaderBytes: 262144,
-			SendGreaseFrames:       true,
-		}
+	var dialFunc func(ctx context.Context, addr string, tlsCfg *tls.Config, cfg *quic.Config) (*quic.Conn, error)
+	if t.udpbaraTunnel != nil {
+		dialFunc = t.dialQUICWithProxy
 	} else {
-		// Use standard dial function
-		t.transport = &http3.Transport{
-			TLSClientConfig:        t.tlsConfig,
-			QUICConfig:             t.quicConfig,
-			Dial:                   t.dialQUIC,
-			EnableDatagrams:        true,
-			AdditionalSettings:     additionalSettings,
-			MaxResponseHeaderBytes: 262144,
-			SendGreaseFrames:       true,
-		}
+		dialFunc = t.dialQUIC
+	}
+	t.transport = &http3.Transport{
+		TLSClientConfig:        t.tlsConfig,
+		QUICConfig:             t.quicConfig,
+		Dial:                   dialFunc,
+		EnableDatagrams:        true,
+		AdditionalSettings:     additionalSettings,
+		MaxResponseHeaderBytes: 262144,
+		SendGreaseFrames:       true,
 	}
 
 	return t, nil
@@ -859,101 +844,64 @@ func (t *HTTP3Transport) dialQUICWithMASQUE(ctx context.Context, addr string, tl
 	return quic.DialEarly(ctx, t.masqueConn, targetAddr, tlsCfgCopy, cfgCopy)
 }
 
-// dialQUICWithProxy dials a QUIC connection through SOCKS5 proxy
-// Uses Happy Eyeballs-style racing between IPv4 and IPv6 addresses
+// dialQUICWithProxy dials a QUIC connection through SOCKS5 proxy via udpbara.
+// DNS resolution is handled by the proxy (hostname preserved in SOCKS5 UDP header),
+// eliminating client-side DNS and Happy Eyeballs entirely.
 func (t *HTTP3Transport) dialQUICWithProxy(ctx context.Context, addr string, tlsCfg *tls.Config, cfg *quic.Config) (*quic.Conn, error) {
 	t.mu.Lock()
 	t.dialCount++
 	t.mu.Unlock()
 
-	// Parse host:port
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		return nil, fmt.Errorf("invalid address: %w", err)
 	}
 
-	// Get the connection host (may be different for domain fronting)
 	connectHost := t.getConnectHost(host)
+	target := net.JoinHostPort(connectHost, port)
 
-	// Run DNS resolution and ECH config fetch in parallel
-	// Both are independent network lookups that can be done concurrently
-	var ips []net.IP
-	var dnsErr error
-	var echConfigList []byte
+	// Fetch ECH config (still needed for end-to-end TLS privacy)
+	echConfigList := t.getECHConfig(ctx, host)
 
-	if t.disableECH {
-		// ECH disabled - just do DNS
-		ips, dnsErr = t.dnsCache.Resolve(ctx, connectHost)
-	} else {
-		// Run DNS and ECH in parallel
-		var wg sync.WaitGroup
-		wg.Add(2)
-
-		go func() {
-			defer wg.Done()
-			ips, dnsErr = t.dnsCache.Resolve(ctx, connectHost)
-		}()
-
-		go func() {
-			defer wg.Done()
-			echConfigList = t.getECHConfig(ctx, host)
-		}()
-
-		// Context-aware wait: unblock if context expires even if goroutines are still running
-		done := make(chan struct{})
-		go func() {
-			wg.Wait()
-			close(done)
-		}()
-		select {
-		case <-done:
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
-	}
-
-	if dnsErr != nil {
-		return nil, fmt.Errorf("DNS resolution failed for %s: %w", connectHost, dnsErr)
-	}
-	if len(ips) == 0 {
-		return nil, fmt.Errorf("no IP addresses found for %s", connectHost)
-	}
-
-	// Convert port to int
-	portInt, err := strconv.Atoi(port)
+	// Create udpbara connection through the tunnel
+	// This creates a local UDP socket pair — instant, no network I/O
+	udpConn, err := t.udpbaraTunnel.DialContext(ctx, target)
 	if err != nil {
-		return nil, fmt.Errorf("invalid port: %w", err)
+		return nil, fmt.Errorf("udpbara dial failed: %w", err)
 	}
 
-	// Separate IPv4 and IPv6 addresses
-	var ipv4Addrs, ipv6Addrs []*net.UDPAddr
-	for _, ip := range ips {
-		if ip.To4() != nil {
-			ipv4Addrs = append(ipv4Addrs, &net.UDPAddr{IP: ip.To4(), Port: portInt})
-		} else if ip.To16() != nil {
-			ipv6Addrs = append(ipv6Addrs, &net.UDPAddr{IP: ip, Port: portInt})
-		}
-	}
+	// Track for cleanup on Close/Refresh
+	t.udpbaraConnsMu.Lock()
+	t.udpbaraConns = append(t.udpbaraConns, udpConn)
+	t.udpbaraConnsMu.Unlock()
 
-	// Use our own TLS config instead of the one passed by http3.Transport
+	// Create per-connection quic.Transport with real *net.UDPConn
+	// quic-go gets full OOB/ECN/GSO support via the real kernel socket
+	qt := &quic.Transport{Conn: udpConn.PacketConn()}
+
+	// Clone TLS config — ServerName is the actual host (not connectHost)
 	tlsCfgCopy := t.tlsConfig.Clone()
 	tlsCfgCopy.ServerName = host
-	// Clone() doesn't preserve ClientSessionCache, restore it for session resumption
-	// Only if we have PSK spec to prevent TOCTOU race
 	if t.cachedClientHelloSpecPSK != nil {
 		tlsCfgCopy.ClientSessionCache = t.sessionCache
 	}
 
-	// Clone our QUIC config (with proper fingerprinting settings)
+	// Clone QUIC config with fingerprinting
 	cfgCopy := t.quicConfig.Clone()
-
-	// Switch to PSK ClientHelloSpec for resumed connections
-	// If there's a cached session, use PSK spec (includes early_data + pre_shared_key extensions)
 	cfgCopy.CachedClientHelloSpec = t.getSpecForHost(host)
+	if echConfigList != nil {
+		cfgCopy.ECHConfigList = echConfigList
+	}
 
-	// Race IPv6 and IPv4 connections (Happy Eyeballs style)
-	// Use pre-fetched ECH config directly to avoid redundant fetch
-	return t.raceQUICDialWithECH(ctx, host, ipv6Addrs, ipv4Addrs, tlsCfgCopy, cfgCopy, echConfigList)
+	// Dial through the local relay → udpbara wraps in SOCKS5 → proxy forwards
+	conn, err := qt.DialEarly(ctx, udpConn.RelayAddr(), tlsCfgCopy, cfgCopy)
+	if err != nil {
+		udpConn.Close()
+		t.removeUdpbaraConn(udpConn)
+		return nil, err
+	}
+
+	return conn, nil
 }
 
 // raceQUICDial implements Happy Eyeballs-style connection racing (legacy, fetches ECH internally)
@@ -1286,6 +1234,29 @@ func (t *HTTP3Transport) GetRequestCount() int64 {
 	return t.requestCount
 }
 
+// removeUdpbaraConn removes a single udpbara connection from tracking
+func (t *HTTP3Transport) removeUdpbaraConn(c *udpbara.Connection) {
+	t.udpbaraConnsMu.Lock()
+	defer t.udpbaraConnsMu.Unlock()
+	for i, conn := range t.udpbaraConns {
+		if conn == c {
+			t.udpbaraConns = append(t.udpbaraConns[:i], t.udpbaraConns[i+1:]...)
+			return
+		}
+	}
+}
+
+// closeAllUdpbaraConns closes all tracked udpbara connections
+func (t *HTTP3Transport) closeAllUdpbaraConns() {
+	t.udpbaraConnsMu.Lock()
+	conns := t.udpbaraConns
+	t.udpbaraConns = nil
+	t.udpbaraConnsMu.Unlock()
+	for _, c := range conns {
+		c.Close()
+	}
+}
+
 // Close shuts down the transport and all connections
 func (t *HTTP3Transport) Close() error {
 	// Use timeout for QUIC closes to prevent blocking on graceful drain
@@ -1295,9 +1266,10 @@ func (t *HTTP3Transport) Close() error {
 		closeWithTimeout(t.quicTransport, 3*time.Second)
 	}
 
-	// Close SOCKS5 UDP connection if using proxy
-	if t.socks5Conn != nil {
-		t.socks5Conn.Close()
+	// Close udpbara tunnel and all connections
+	if t.udpbaraTunnel != nil {
+		t.closeAllUdpbaraConns()
+		t.udpbaraTunnel.Close()
 	}
 
 	// Close MASQUE connection if using MASQUE proxy
@@ -1320,8 +1292,8 @@ func (t *HTTP3Transport) Refresh() error {
 		closeWithTimeout(t.transport, 3*time.Second)
 	}
 
-	// Close and recreate quicTransport if it exists (for direct connections)
-	if t.quicTransport != nil && t.socks5Conn == nil && t.masqueConn == nil {
+	// Close and recreate quicTransport if it exists (for direct connections only)
+	if t.quicTransport != nil && t.udpbaraTunnel == nil && t.masqueConn == nil {
 		closeWithTimeout(t.quicTransport, 3*time.Second)
 		// Create new UDP socket with localAddr binding if configured
 		var localUDPAddr *net.UDPAddr
@@ -1347,6 +1319,11 @@ func (t *HTTP3Transport) Refresh() error {
 		}
 	}
 
+	// Close old udpbara connections; tunnel stays alive for new dials
+	if t.udpbaraTunnel != nil {
+		t.closeAllUdpbaraConns()
+	}
+
 	// Generate GREASE values
 	greaseSettingID := uint64(0x1f*rand.Intn(256)+0x21) | 0x0f0f0f0f00000000
 	greaseSettingValue := uint64(rand.Intn(256))
@@ -1367,7 +1344,7 @@ func (t *HTTP3Transport) Refresh() error {
 	var dialFunc func(ctx context.Context, addr string, tlsCfg *tls.Config, cfg *quic.Config) (*quic.Conn, error)
 	if t.masqueConn != nil {
 		dialFunc = t.dialQUICWithMASQUE
-	} else if t.socks5Conn != nil {
+	} else if t.udpbaraTunnel != nil {
 		dialFunc = t.dialQUICWithProxy
 	} else {
 		dialFunc = t.dialQUIC
@@ -1437,7 +1414,7 @@ func (t *HTTP3Transport) recreateTransport() {
 	var dialFunc func(ctx context.Context, addr string, tlsCfg *tls.Config, cfg *quic.Config) (*quic.Conn, error)
 	if t.masqueConn != nil {
 		dialFunc = t.dialQUICWithMASQUE
-	} else if t.socks5Conn != nil {
+	} else if t.udpbaraTunnel != nil {
 		dialFunc = t.dialQUICWithProxy
 	} else {
 		dialFunc = t.dialQUIC
