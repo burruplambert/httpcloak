@@ -88,7 +88,7 @@ func NewSessionWithOptions(id string, config *protocol.SessionConfig, opts *Sess
 		id = generateID()
 	}
 
-	presetName := "chrome-131"
+	presetName := "chrome-latest"
 	if config != nil && config.Preset != "" {
 		presetName = config.Preset
 	}
@@ -765,7 +765,7 @@ func (s *Session) getPlatform() platformInfo {
 	}
 
 	// Get full version list based on preset
-	presetName := "chrome-131"
+	presetName := "chrome-latest"
 	if s.Config != nil && s.Config.Preset != "" {
 		presetName = s.Config.Preset
 	}

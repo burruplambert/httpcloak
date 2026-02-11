@@ -1065,9 +1065,20 @@ var presets = map[string]func() *Preset{
 	"ios-safari-18":      IOSSafari18,
 	"android-chrome-143": AndroidChrome143,
 	"android-chrome-144": AndroidChrome144,
+
+	// -latest aliases (always point to the newest version)
+	"chrome-latest":         Chrome144,
+	"chrome-latest-windows": Chrome144Windows,
+	"chrome-latest-linux":   Chrome144Linux,
+	"chrome-latest-macos":   Chrome144macOS,
+	"firefox-latest":        Firefox133,
+	"safari-latest":         Safari18,
+	"ios-chrome-latest":     IOSChrome144,
+	"ios-safari-latest":     IOSSafari18,
+	"android-chrome-latest": AndroidChrome144,
 }
 
-// Get returns a preset by name, or Chrome144 as default
+// Get returns a preset by name, or chrome-latest as default
 func Get(name string) *Preset {
 	if fn, ok := presets[name]; ok {
 		return fn()

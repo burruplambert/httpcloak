@@ -148,7 +148,7 @@ type ClientConfig struct {
 // DefaultConfig returns default client configuration
 func DefaultConfig() *ClientConfig {
 	return &ClientConfig{
-		Preset:          "chrome-143",
+		Preset:          "chrome-latest",
 		Timeout:         30 * time.Second,
 		FollowRedirects: true,
 		MaxRedirects:    10,
