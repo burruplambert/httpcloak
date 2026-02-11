@@ -291,8 +291,14 @@ func (w *pooledBodyWrapper) Close() error {
 	// Reversing this order causes a race: conn goes back to pool while
 	// body.Close() is still draining from the same underlying bufio.Reader.
 	err := w.body.Close()
+	if err != nil {
+		// Body drain failed (e.g., deadline hit on large response).
+		// Connection's bufio.Reader is mid-body — don't pool it.
+		w.once.Do(func() { w.conn.close() })
+		return err
+	}
 	w.handleClose()
-	return err
+	return nil
 }
 
 func (w *pooledBodyWrapper) handleClose() {
@@ -846,7 +852,9 @@ func (t *HTTP1Transport) writeRequest(conn *http1Conn, req *http.Request) error 
 				return err
 			}
 		}
-		conn.bw.Flush()
+		if err := conn.bw.Flush(); err != nil {
+			return err
+		}
 	}
 
 	return nil

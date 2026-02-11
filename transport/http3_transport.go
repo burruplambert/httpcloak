@@ -401,8 +401,13 @@ func NewHTTP3TransportWithProxy(preset *fingerprint.Preset, dnsCache *dns.Cache,
 
 // NewHTTP3TransportWithConfig creates a new HTTP/3 transport with SOCKS5 proxy and advanced config
 func NewHTTP3TransportWithConfig(preset *fingerprint.Preset, dnsCache *dns.Cache, proxyConfig *ProxyConfig, config *TransportConfig) (*HTTP3Transport, error) {
+	// Require a SOCKS5 proxy — this constructor is specifically for proxied H3.
+	// Use NewHTTP3TransportWithTransportConfig for direct (non-proxied) H3.
+	if proxyConfig == nil || proxyConfig.URL == "" {
+		return nil, fmt.Errorf("NewHTTP3TransportWithConfig requires a proxy; use NewHTTP3TransportWithTransportConfig for direct connections")
+	}
 	// Validate proxy scheme - only SOCKS5 works for UDP/QUIC
-	if proxyConfig != nil && proxyConfig.URL != "" {
+	if proxyConfig.URL != "" {
 		proxyURL, err := url.Parse(proxyConfig.URL)
 		if err != nil {
 			return nil, fmt.Errorf("invalid proxy URL: %w", err)
@@ -1304,6 +1309,10 @@ func (t *HTTP3Transport) Close() error {
 func (t *HTTP3Transport) Refresh() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
+	// Reset counters so IsConnectionReused/Stats are accurate after refresh
+	t.dialCount = 0
+	t.requestCount = 0
 
 	// Close the current transport (this closes all QUIC connections)
 	// Use timeout to prevent blocking if QUIC drain takes too long
