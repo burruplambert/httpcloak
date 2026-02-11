@@ -67,7 +67,8 @@ type persistentConn struct {
 	createdAt       time.Time
 	lastUsedAt      time.Time
 	useCount        int64
-	sessionResumed  bool // True if TLS session was resumed (faster handshake)
+	inFlight        int32 // number of active RoundTrip calls — prevents cleanup during long requests
+	sessionResumed  bool  // True if TLS session was resumed (faster handshake)
 	tlsVersion      uint16
 	cipherSuite     uint16
 	mu              sync.Mutex
@@ -161,11 +162,16 @@ func (t *HTTP2Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// Mark conn as in-use so cleanup() doesn't close it mid-flight
 	conn.mu.Lock()
 	conn.lastUsedAt = time.Now()
+	conn.inFlight++
 	conn.mu.Unlock()
 
 	// Make request
 	resp, err := conn.h2Conn.RoundTrip(req)
 	if err != nil {
+		conn.mu.Lock()
+		conn.inFlight--
+		conn.mu.Unlock()
+
 		// Connection might be dead, remove it and retry once
 		t.removeConn(key)
 
@@ -178,8 +184,16 @@ func (t *HTTP2Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		if err != nil {
 			return nil, err
 		}
+
+		conn.mu.Lock()
+		conn.inFlight++
+		conn.mu.Unlock()
+
 		resp, err = conn.h2Conn.RoundTrip(req)
 		if err != nil {
+			conn.mu.Lock()
+			conn.inFlight--
+			conn.mu.Unlock()
 			t.removeConn(key)
 			return nil, err
 		}
@@ -188,6 +202,7 @@ func (t *HTTP2Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// Update last used time
 	conn.mu.Lock()
 	conn.lastUsedAt = time.Now()
+	conn.inFlight--
 	conn.useCount++
 	conn.mu.Unlock()
 
@@ -256,8 +271,9 @@ func (t *HTTP2Transport) isConnUsable(conn *persistentConn) bool {
 		return false
 	}
 
-	// Check idle time
-	if time.Since(conn.lastUsedAt) > t.maxIdleTime {
+	// Check idle time — but not if requests are actively in-flight.
+	// Without this, long downloads (>maxIdleTime) get killed by cleanup.
+	if conn.inFlight == 0 && time.Since(conn.lastUsedAt) > t.maxIdleTime {
 		return false
 	}
 
