@@ -39,6 +39,15 @@ jobs:
         with:
           go-version: '1.23'
 
+      - name: Remove local replace directives for CI
+        shell: bash
+        run: |
+          cd bindings/clib
+          go mod edit -dropreplace=github.com/sardanioss/utls
+          go mod edit -dropreplace=github.com/sardanioss/net
+          go mod edit -dropreplace=github.com/sardanioss/quic-go
+          go mod edit -dropreplace=github.com/sardanioss/udpbara
+
       - name: Build native library (Unix)
         if: runner.os != 'Windows'
         run: |
@@ -73,6 +82,14 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.23'
+
+      - name: Remove local replace directives for CI
+        run: |
+          cd bindings/clib
+          go mod edit -dropreplace=github.com/sardanioss/utls
+          go mod edit -dropreplace=github.com/sardanioss/net
+          go mod edit -dropreplace=github.com/sardanioss/quic-go
+          go mod edit -dropreplace=github.com/sardanioss/udpbara
 
       - name: Build for darwin/amd64
         run: |
