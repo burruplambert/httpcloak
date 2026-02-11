@@ -1343,13 +1343,19 @@ func (t *HTTP3Transport) Refresh() error {
 		t.closeAllProxyConns()
 	}
 
-	// Generate GREASE values
-	greaseSettingID := uint64(0x1f*rand.Intn(256)+0x21) | 0x0f0f0f0f00000000
-	greaseSettingValue := uint64(rand.Intn(256))
+	// Generate GREASE values matching constructor (Chrome-like 10-11 digit IDs, non-zero values)
+	greaseSettingID := generateGREASESettingID()
+	greaseSettingValue := uint64(1 + rand.Uint32()%(1<<32-1))
+
+	// QPACK capacity: Safari/iOS uses 16383, Chrome uses 65536
+	qpackMaxTableCapacity := uint64(65536)
+	if t.preset != nil && t.preset.HTTP2Settings.NoRFC7540Priorities {
+		qpackMaxTableCapacity = 16383
+	}
 
 	// Build additional settings matching original creation
 	additionalSettings := map[uint64]uint64{
-		settingQPACKMaxTableCapacity: 65536,
+		settingQPACKMaxTableCapacity: qpackMaxTableCapacity,
 		settingQPACKBlockedStreams:   100,
 		greaseSettingID:              greaseSettingValue,
 	}
@@ -1413,13 +1419,19 @@ func (t *HTTP3Transport) recreateTransport() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	// Generate fresh GREASE values
-	greaseSettingID := uint64(0x1f*rand.Intn(256)+0x21) | 0x0f0f0f0f00000000
-	greaseSettingValue := uint64(rand.Intn(256))
+	// Generate fresh GREASE values matching constructor (Chrome-like 10-11 digit IDs, non-zero values)
+	greaseSettingID := generateGREASESettingID()
+	greaseSettingValue := uint64(1 + rand.Uint32()%(1<<32-1))
+
+	// QPACK capacity: Safari/iOS uses 16383, Chrome uses 65536
+	qpackMaxTableCapacity := uint64(65536)
+	if t.preset != nil && t.preset.HTTP2Settings.NoRFC7540Priorities {
+		qpackMaxTableCapacity = 16383
+	}
 
 	// Build additional settings
 	additionalSettings := map[uint64]uint64{
-		settingQPACKMaxTableCapacity: 65536,
+		settingQPACKMaxTableCapacity: qpackMaxTableCapacity,
 		settingQPACKBlockedStreams:   100,
 		greaseSettingID:              greaseSettingValue,
 	}
