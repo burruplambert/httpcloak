@@ -194,7 +194,9 @@ func (t *HTTP2Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return resp, nil
 }
 
-// getOrCreateConn gets an existing connection or creates a new one
+// getOrCreateConn gets an existing connection or creates a new one.
+// The TCP+TLS dial is performed outside the lock to avoid blocking all
+// hosts while one host is connecting (head-of-line blocking).
 func (t *HTTP2Transport) getOrCreateConn(ctx context.Context, host, port, key string) (*persistentConn, error) {
 	// Try to get existing connection
 	t.connsMu.RLock()
@@ -205,30 +207,40 @@ func (t *HTTP2Transport) getOrCreateConn(ctx context.Context, host, port, key st
 		return conn, nil
 	}
 
-	// Need to create new connection
+	// Need to create new connection — verify under write lock first
 	t.connsMu.Lock()
-	defer t.connsMu.Unlock()
 
 	// Double-check after acquiring write lock
 	if conn, exists = t.conns[key]; exists && t.isConnUsable(conn) {
+		t.connsMu.Unlock()
 		return conn, nil
 	}
 
-	// Close old connection if exists
+	// Close old unusable connection and remove from map
 	if exists {
 		go conn.close()
+		delete(t.conns, key)
 	}
+	t.connsMu.Unlock()
 
-	// Create new connection
+	// Create new connection OUTSIDE lock — TCP+TLS dial can take seconds.
+	// This allows concurrent dials for different hosts to proceed in parallel.
 	newConn, err := t.createConn(ctx, host, port)
 	if err != nil {
-		if exists {
-			delete(t.conns, key)
-		}
 		return nil, err
 	}
 
+	// Store the new connection
+	t.connsMu.Lock()
+	// Another goroutine may have created a conn while we were dialing
+	if existingConn, ok := t.conns[key]; ok && t.isConnUsable(existingConn) {
+		t.connsMu.Unlock()
+		go newConn.close()
+		return existingConn, nil
+	}
 	t.conns[key] = newConn
+	t.connsMu.Unlock()
+
 	return newConn, nil
 }
 
