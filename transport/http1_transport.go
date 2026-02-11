@@ -638,7 +638,7 @@ func (t *HTTP1Transport) dialThroughHTTPProxy(ctx context.Context, targetHost, t
 	connectReq += "Connection: keep-alive\r\n\r\n"
 
 	// Check if speculative TLS is disabled (explicitly or via blocklist)
-	if (t.config != nil && t.config.DisableSpeculativeTLS) || IsProxyNoSpeculative(proxyAddr) {
+	if (t.config != nil && t.config.DisableSpeculativeTLS) || IsProxyNoSpeculative(t.proxy.URL) {
 		// Traditional flow: send CONNECT, wait for 200 OK, then return conn for TLS
 		return t.dialHTTPProxyBlocking(conn, connectReq)
 	}
