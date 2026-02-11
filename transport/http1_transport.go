@@ -297,6 +297,10 @@ func (w *pooledBodyWrapper) Close() error {
 
 func (w *pooledBodyWrapper) handleClose() {
 	w.once.Do(func() {
+		// Clear deadline before returning conn to pool — the next request
+		// will set its own deadline. Without this, the stale deadline from
+		// the previous request would fire during the next request's I/O.
+		w.conn.conn.SetDeadline(time.Time{})
 		if w.keepAlive {
 			w.transport.putIdleConn(w.key, w.conn)
 		} else {
@@ -778,7 +782,10 @@ func (t *HTTP1Transport) doRequest(conn *http1Conn, req *http.Request) (*http.Re
 		deadline = ctxDeadline
 	}
 	conn.conn.SetDeadline(deadline)
-	defer conn.conn.SetDeadline(time.Time{})
+	// NOTE: We intentionally do NOT defer clearing the deadline here.
+	// The deadline must remain active while the response body is being read
+	// (body is returned to caller via pooledBodyWrapper). The deadline is
+	// cleared in handleClose() when the body is done and conn returns to pool.
 
 	// Write request
 	if err := t.writeRequest(conn, req); err != nil {
