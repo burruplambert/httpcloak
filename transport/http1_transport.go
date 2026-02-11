@@ -745,7 +745,25 @@ func (t *HTTP1Transport) dialHTTPProxyBlocking(ctx context.Context, conn net.Con
 		return nil, fmt.Errorf("proxy CONNECT failed: %s", resp.Status)
 	}
 
+	// If the bufio.Reader read ahead past the HTTP response (e.g., start of
+	// TLS ServerHello arrived in same TCP segment), wrap the conn so those
+	// buffered bytes are returned first. Without this, the TLS handshake
+	// would miss the beginning of the server's response.
+	if br.Buffered() > 0 {
+		return &bufferedConn{Conn: conn, r: io.MultiReader(br, conn)}, nil
+	}
 	return conn, nil
+}
+
+// bufferedConn wraps a net.Conn to first drain any bytes buffered by a
+// bufio.Reader before reading from the underlying connection.
+type bufferedConn struct {
+	net.Conn
+	r io.Reader
+}
+
+func (c *bufferedConn) Read(p []byte) (int, error) {
+	return c.r.Read(p)
 }
 
 // getProxyAuth returns base64-encoded proxy credentials

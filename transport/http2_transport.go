@@ -758,6 +758,12 @@ func (t *HTTP2Transport) dialHTTPProxyBlocking(ctx context.Context, conn net.Con
 	}
 
 	// Connection established - tunnel is now open
+	// If the bufio.Reader read ahead past the HTTP response (e.g., start of
+	// TLS ServerHello arrived in same TCP segment), wrap the conn so those
+	// buffered bytes are returned first.
+	if reader.Buffered() > 0 {
+		return &bufferedConn{Conn: conn, r: io.MultiReader(reader, conn)}, nil
+	}
 	return conn, nil
 }
 
