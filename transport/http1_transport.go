@@ -644,7 +644,7 @@ func (t *HTTP1Transport) dialThroughHTTPProxy(ctx context.Context, targetHost, t
 	// Check if speculative TLS is disabled (explicitly or via blocklist)
 	if (t.config != nil && t.config.DisableSpeculativeTLS) || IsProxyNoSpeculative(t.proxy.URL) {
 		// Traditional flow: send CONNECT, wait for 200 OK, then return conn for TLS
-		return t.dialHTTPProxyBlocking(conn, connectReq)
+		return t.dialHTTPProxyBlocking(ctx, conn, connectReq)
 	}
 
 	// Speculative TLS: return a SpeculativeConn that will send CONNECT + ClientHello together
@@ -703,20 +703,24 @@ func (t *HTTP1Transport) dialHTTPProxyBlockingFresh(ctx context.Context, targetH
 	}
 	connectReq += "Connection: keep-alive\r\n\r\n"
 
-	return t.dialHTTPProxyBlocking(conn, connectReq)
+	return t.dialHTTPProxyBlocking(ctx, conn, connectReq)
 }
 
 // dialHTTPProxyBlocking performs the traditional blocking CONNECT flow.
 // Used when speculative TLS is disabled or as a fallback.
-func (t *HTTP1Transport) dialHTTPProxyBlocking(conn net.Conn, connectReq string) (net.Conn, error) {
+func (t *HTTP1Transport) dialHTTPProxyBlocking(ctx context.Context, conn net.Conn, connectReq string) (net.Conn, error) {
 	// Send CONNECT request
 	if _, err := conn.Write([]byte(connectReq)); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("failed to send CONNECT request: %w", err)
 	}
 
-	// Set deadline for proxy response to prevent blocking forever
-	conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+	// Set deadline for proxy response — respect context deadline if sooner than 30s
+	deadline := time.Now().Add(30 * time.Second)
+	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
+		deadline = ctxDeadline
+	}
+	conn.SetReadDeadline(deadline)
 	br := bufio.NewReader(conn)
 	resp, err := http.ReadResponse(br, nil)
 	conn.SetReadDeadline(time.Time{}) // Clear deadline after response

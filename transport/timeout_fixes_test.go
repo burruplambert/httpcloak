@@ -325,7 +325,7 @@ func TestProxyCONNECTReadDeadline_H2(t *testing.T) {
 			connectTimeout: 30 * time.Second,
 		}
 
-		result, err := h2.dialHTTPProxyBlocking(conn, "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n")
+		result, err := h2.dialHTTPProxyBlocking(context.Background(), conn, "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -347,7 +347,7 @@ func TestProxyCONNECTReadDeadline_H2(t *testing.T) {
 			connectTimeout: 30 * time.Second,
 		}
 
-		_, err := h2.dialHTTPProxyBlocking(conn, "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n")
+		_, err := h2.dialHTTPProxyBlocking(context.Background(), conn, "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n")
 		// Should get an EOF error since our mock buffer is empty
 		if err == nil {
 			t.Fatal("expected error from empty buffer proxy")
@@ -379,7 +379,7 @@ func TestProxyCONNECTReadDeadline_H2(t *testing.T) {
 			connectTimeout: 30 * time.Second,
 		}
 
-		_, err := h2.dialHTTPProxyBlocking(conn, "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n")
+		_, err := h2.dialHTTPProxyBlocking(context.Background(), conn, "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n")
 		if err == nil {
 			t.Fatal("expected error for 403 response")
 		}
@@ -394,7 +394,7 @@ func TestProxyCONNECTReadDeadline_H2(t *testing.T) {
 			connectTimeout: 30 * time.Second,
 		}
 
-		result, err := h2.dialHTTPProxyBlocking(conn, "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n")
+		result, err := h2.dialHTTPProxyBlocking(context.Background(), conn, "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -413,7 +413,7 @@ func TestProxyCONNECTReadDeadline_H1(t *testing.T) {
 			connectTimeout: 30 * time.Second,
 		}
 
-		result, err := h1.dialHTTPProxyBlocking(conn, "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n")
+		result, err := h1.dialHTTPProxyBlocking(context.Background(), conn, "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -433,7 +433,7 @@ func TestProxyCONNECTReadDeadline_H1(t *testing.T) {
 			connectTimeout: 30 * time.Second,
 		}
 
-		_, err := h1.dialHTTPProxyBlocking(conn, "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n")
+		_, err := h1.dialHTTPProxyBlocking(context.Background(), conn, "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n")
 		if err == nil {
 			t.Fatal("expected error from empty buffer proxy")
 		}
@@ -837,7 +837,7 @@ func TestH2DialHTTPProxyBlockingDeadlineCleared(t *testing.T) {
 	}
 
 	h2 := &HTTP2Transport{connectTimeout: 30 * time.Second}
-	_, err := h2.dialHTTPProxyBlocking(conn, "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n")
+	_, err := h2.dialHTTPProxyBlocking(context.Background(), conn, "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1034,7 +1034,7 @@ func TestProxyCONNECTWithPipe(t *testing.T) {
 		}()
 
 		h2 := &HTTP2Transport{connectTimeout: 5 * time.Second}
-		result, err := h2.dialHTTPProxyBlocking(client, "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n")
+		result, err := h2.dialHTTPProxyBlocking(context.Background(), client, "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1059,7 +1059,7 @@ func TestProxyCONNECTWithPipe(t *testing.T) {
 		}()
 
 		h1 := &HTTP1Transport{connectTimeout: 5 * time.Second}
-		result, err := h1.dialHTTPProxyBlocking(client, "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n")
+		result, err := h1.dialHTTPProxyBlocking(context.Background(), client, "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1087,7 +1087,7 @@ func TestProxyCONNECTWithPipe(t *testing.T) {
 
 		h2 := &HTTP2Transport{connectTimeout: 5 * time.Second}
 
-		result, err := h2.dialHTTPProxyBlocking(client, "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n")
+		result, err := h2.dialHTTPProxyBlocking(context.Background(), client, "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
