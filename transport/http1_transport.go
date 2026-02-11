@@ -267,39 +267,38 @@ func (t *HTTP1Transport) RoundTripWithTLSConn(req *http.Request, tlsConn *utls.U
 	return resp, nil
 }
 
-// pooledBodyWrapper wraps response body to return connection to pool when done
+// pooledBodyWrapper wraps response body to return connection to pool when done.
+// Uses sync.Once to safely handle concurrent Read(EOF) and Close().
 type pooledBodyWrapper struct {
 	body      io.ReadCloser
 	conn      *http1Conn
 	key       string
 	transport *HTTP1Transport
 	keepAlive bool
-	closed    bool
+	once      sync.Once
 }
 
 func (w *pooledBodyWrapper) Read(p []byte) (n int, err error) {
 	n, err = w.body.Read(p)
-	if err == io.EOF && !w.closed {
-		// Body fully read, handle connection
+	if err == io.EOF {
 		w.handleClose()
 	}
 	return n, err
 }
 
 func (w *pooledBodyWrapper) Close() error {
-	if !w.closed {
-		w.handleClose()
-	}
+	w.handleClose()
 	return w.body.Close()
 }
 
 func (w *pooledBodyWrapper) handleClose() {
-	w.closed = true
-	if w.keepAlive {
-		w.transport.putIdleConn(w.key, w.conn)
-	} else {
-		w.conn.close()
-	}
+	w.once.Do(func() {
+		if w.keepAlive {
+			w.transport.putIdleConn(w.key, w.conn)
+		} else {
+			w.conn.close()
+		}
+	})
 }
 
 // streamBodyWrapper wraps response body to close connection when body is closed

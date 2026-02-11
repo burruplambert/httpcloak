@@ -136,6 +136,13 @@ func NewHTTP2TransportWithConfig(preset *fingerprint.Preset, dnsCache *dns.Cache
 
 // RoundTrip implements http.RoundTripper
 func (t *HTTP2Transport) RoundTrip(req *http.Request) (*http.Response, error) {
+	t.connsMu.RLock()
+	if t.closed {
+		t.connsMu.RUnlock()
+		return nil, fmt.Errorf("http2: transport closed")
+	}
+	t.connsMu.RUnlock()
+
 	host := req.URL.Hostname()
 	port := req.URL.Port()
 	if port == "" {
@@ -780,11 +787,15 @@ func (t *HTTP2Transport) removeConn(key string) {
 	}
 }
 
-// close closes the persistent connection
+// close closes the persistent connection.
+// Closes h2Conn first (graceful GOAWAY + stream teardown) then tlsConn.
 func (c *persistentConn) close() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if c.h2Conn != nil {
+		c.h2Conn.Close()
+	}
 	if c.tlsConn != nil {
 		c.tlsConn.Close()
 	}
@@ -1024,10 +1035,10 @@ func (t *HTTP2Transport) Connect(ctx context.Context, host, port string) error {
 	if oldConn, exists := t.conns[key]; exists {
 		// Close the old one if not usable
 		if !t.isConnUsable(oldConn) {
-			oldConn.tlsConn.Close()
+			go oldConn.close()
 		} else {
 			// Old one is still good, close the new one we just created
-			conn.tlsConn.Close()
+			go conn.close()
 			t.connsMu.Unlock()
 			return nil
 		}

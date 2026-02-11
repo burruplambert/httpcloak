@@ -83,9 +83,11 @@ func generateGREASEVersion() uint32 {
 // proxyQUICConn bundles an udpbara connection with its per-connection quic.Transport.
 // Both must be closed together: quic.Transport first (sends CONNECTION_CLOSE),
 // then udpbara.Connection (closes sockets, deregisters from tunnel).
+// Uses sync.Once to prevent double-close between auto-cleanup goroutine and closeAllProxyConns.
 type proxyQUICConn struct {
-	udpConn *udpbara.Connection
-	quicTr  *quic.Transport
+	udpConn   *udpbara.Connection
+	quicTr    *quic.Transport
+	closeOnce sync.Once
 }
 
 // HTTP3Transport is an HTTP/3 transport with proper QUIC connection reuse
@@ -522,6 +524,7 @@ func NewHTTP3TransportWithConfig(preset *fingerprint.Preset, dnsCache *dns.Cache
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if err := tunnel.ConnectContext(ctx); err != nil {
+			tunnel.Close()
 			return nil, fmt.Errorf("SOCKS5 proxy does not support UDP relay (required for HTTP/3): %w", err)
 		}
 		t.udpbaraTunnel = tunnel
@@ -901,8 +904,7 @@ func (t *HTTP3Transport) dialQUICWithProxy(ctx context.Context, addr string, tls
 	// Dial through the local relay → udpbara wraps in SOCKS5 → proxy forwards
 	conn, err := qt.DialEarly(ctx, udpConn.RelayAddr(), tlsCfgCopy, cfgCopy)
 	if err != nil {
-		closeWithTimeout(qt, 3*time.Second)
-		udpConn.Close()
+		closeProxyConn(pc)
 		t.removeProxyConn(pc)
 		return nil, err
 	}
@@ -912,8 +914,7 @@ func (t *HTTP3Transport) dialQUICWithProxy(ctx context.Context, addr string, tls
 	// goroutines running until session.Close(), burning CPU on Linux (ECN/GSO syscalls).
 	go func() {
 		<-conn.Context().Done()
-		closeWithTimeout(qt, 3*time.Second)
-		udpConn.Close()
+		closeProxyConn(pc)
 		t.removeProxyConn(pc)
 	}()
 
@@ -1262,6 +1263,14 @@ func (t *HTTP3Transport) removeProxyConn(pc *proxyQUICConn) {
 	}
 }
 
+// closeProxyConn closes a single proxyQUICConn exactly once.
+func closeProxyConn(pc *proxyQUICConn) {
+	pc.closeOnce.Do(func() {
+		closeWithTimeout(pc.quicTr, 3*time.Second)
+		pc.udpConn.Close()
+	})
+}
+
 // closeAllProxyConns closes all tracked proxy QUIC connections.
 // Closes quic.Transport first (sends CONNECTION_CLOSE), then udpbara (closes sockets).
 func (t *HTTP3Transport) closeAllProxyConns() {
@@ -1270,8 +1279,7 @@ func (t *HTTP3Transport) closeAllProxyConns() {
 	t.proxyConns = nil
 	t.proxyConnsMu.Unlock()
 	for _, c := range conns {
-		closeWithTimeout(c.quicTr, 3*time.Second)
-		c.udpConn.Close()
+		closeProxyConn(c)
 	}
 }
 
