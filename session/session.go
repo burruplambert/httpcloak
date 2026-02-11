@@ -147,6 +147,11 @@ func NewSessionWithOptions(id string, config *protocol.SessionConfig, opts *Sess
 	}
 	t = transport.NewTransportWithConfig(presetName, proxy, transportConfig)
 
+	// Disable TLS certificate verification if requested
+	if config.InsecureSkipVerify {
+		t.SetInsecureSkipVerify(true)
+	}
+
 	// Set protocol preference
 	if config.ForceHTTP1 {
 		t.SetProtocol(transport.ProtocolHTTP1)
