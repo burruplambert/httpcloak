@@ -363,12 +363,12 @@ func NewHTTP3TransportWithTransportConfig(preset *fingerprint.Preset, dnsCache *
 	}
 	udpConn, err := net.ListenUDP("udp", localUDPAddr)
 	if err != nil {
-		// Fallback to IPv6 if IPv4 fails
 		if t.localAddr != "" {
-			localUDPAddr = &net.UDPAddr{IP: net.ParseIP(t.localAddr)}
-		} else {
-			localUDPAddr = &net.UDPAddr{IP: net.IPv6zero, Port: 0}
+			// localAddr is set — retrying with the same IP on "udp6" won't help
+			return nil, fmt.Errorf("failed to create UDP socket for %s: %w", t.localAddr, err)
 		}
+		// Fallback to IPv6 if IPv4 fails (no localAddr — try IPv6zero)
+		localUDPAddr = &net.UDPAddr{IP: net.IPv6zero, Port: 0}
 		udpConn, err = net.ListenUDP("udp6", localUDPAddr)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create UDP socket (IPv4 and IPv6 both failed): %w", err)
@@ -1333,13 +1333,12 @@ func (t *HTTP3Transport) Refresh() error {
 		udpConn, err := net.ListenUDP("udp", localUDPAddr)
 		if err != nil {
 			if t.localAddr != "" {
-				localUDPAddr = &net.UDPAddr{IP: net.ParseIP(t.localAddr)}
-			} else {
-				localUDPAddr = &net.UDPAddr{IP: net.IPv6zero, Port: 0}
+				return fmt.Errorf("failed to create UDP socket for %s: %w", t.localAddr, err)
 			}
+			localUDPAddr = &net.UDPAddr{IP: net.IPv6zero, Port: 0}
 			udpConn, err = net.ListenUDP("udp6", localUDPAddr)
 			if err != nil {
-				return fmt.Errorf("failed to create UDP socket: %w", err)
+				return fmt.Errorf("failed to create UDP socket (IPv4 and IPv6 both failed): %w", err)
 			}
 		}
 		t.quicTransport = &quic.Transport{
@@ -1412,14 +1411,14 @@ func closeWithTimeout(c io.Closer, timeout time.Duration) {
 	}
 }
 
-// is0RTTRejectedError checks if the error is due to 0-RTT rejection
+// is0RTTRejectedError checks if the error is due to 0-RTT rejection.
+// Only matches actual 0-RTT rejection, not generic "conn unusable" errors
+// (which can also be caused by idle timeout, peer reset, etc.).
 func is0RTTRejectedError(err error) bool {
 	if err == nil {
 		return false
 	}
-	errStr := err.Error()
-	// Check for 0-RTT rejection or unusable connection (which wraps 0-RTT rejection)
-	return strings.Contains(errStr, "0-RTT rejected") || strings.Contains(errStr, "conn unusable")
+	return strings.Contains(err.Error(), "0-RTT rejected")
 }
 
 // recreateTransport recreates the HTTP/3 transport after 0-RTT rejection

@@ -339,8 +339,10 @@ func (t *HTTP2Transport) createConn(ctx context.Context, host, port string) (*pe
 			}
 		}
 
-		// Try each IP address in order (preferred first based on PreferIPv4 setting)
+		// Try each IP address with per-address timeout budget to avoid
+		// spending the full connectTimeout on each unreachable address.
 		var lastErr error
+		remaining := len(ips)
 		for _, ip := range ips {
 			network := "tcp4"
 			if ip.To4() == nil {
@@ -348,11 +350,19 @@ func (t *HTTP2Transport) createConn(ctx context.Context, host, port string) (*pe
 			}
 			addr := net.JoinHostPort(ip.String(), port)
 
-			rawConn, err = dialer.DialContext(ctx, network, addr)
+			// Budget: split remaining time evenly, capped at 10s per address
+			perAddr := t.connectTimeout / time.Duration(remaining)
+			if perAddr > 10*time.Second {
+				perAddr = 10 * time.Second
+			}
+			dialCtx, dialCancel := context.WithTimeout(ctx, perAddr)
+			rawConn, err = dialer.DialContext(dialCtx, network, addr)
+			dialCancel()
 			if err == nil {
 				break // Connection successful
 			}
 			lastErr = err
+			remaining--
 		}
 
 		if rawConn == nil {
