@@ -757,6 +757,7 @@ function getLib() {
       httpcloak_session_free: nativeLibHandle.func("httpcloak_session_free", "void", ["int64"]),
       httpcloak_session_refresh: nativeLibHandle.func("httpcloak_session_refresh", "void", ["int64"]),
       httpcloak_session_refresh_protocol: nativeLibHandle.func("httpcloak_session_refresh_protocol", "str", ["int64", "str"]),
+      httpcloak_session_warmup: nativeLibHandle.func("httpcloak_session_warmup", "str", ["int64", "str", "int64"]),
       httpcloak_get: nativeLibHandle.func("httpcloak_get", "str", ["int64", "str", "str"]),
       httpcloak_post: nativeLibHandle.func("httpcloak_post", "str", ["int64", "str", "str", "str"]),
       httpcloak_request: nativeLibHandle.func("httpcloak_request", "str", ["int64", "str"]),
@@ -1347,6 +1348,27 @@ class Session {
         }
       } else {
         this._lib.httpcloak_session_refresh(this._handle);
+      }
+    }
+  }
+
+  /**
+   * Simulate a real browser page load to warm TLS sessions, cookies, and cache.
+   * Fetches the HTML page and its subresources (CSS, JS, images) with
+   * realistic headers, priorities, and timing.
+   * @param {string} url - The page URL to warm up.
+   * @param {Object} [options] - Options.
+   * @param {number} [options.timeout] - Timeout in milliseconds (default: 60000).
+   */
+  warmup(url, options = {}) {
+    if (this._handle) {
+      const timeoutMs = options.timeout || 0;
+      const result = this._lib.httpcloak_session_warmup(this._handle, url, timeoutMs);
+      if (result) {
+        const data = JSON.parse(result);
+        if (data.error) {
+          throw new HTTPCloakError(data.error);
+        }
       }
     }
   }

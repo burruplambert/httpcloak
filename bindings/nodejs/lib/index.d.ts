@@ -272,6 +272,12 @@ export class Session {
   /** Close the session and release resources */
   close(): void;
 
+  /** Simulate a real browser page load to warm TLS sessions, cookies, and cache.
+   * Fetches the HTML page and its subresources (CSS, JS, images) with
+   * realistic headers, priorities, and timing.
+   */
+  warmup(url: string, options?: { timeout?: number }): void;
+
   /** Refresh the session by closing all connections while keeping TLS session tickets.
    * This simulates a browser page refresh - connections are severed but 0-RTT
    * early data can be used on reconnection due to preserved session tickets.

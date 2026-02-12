@@ -743,6 +743,13 @@ func (s *Session) SetSessionIdentifier(sessionId string) {
 	s.inner.SetSessionIdentifier(sessionId)
 }
 
+// Warmup simulates a real browser page load to warm TLS sessions, cookies,
+// and cache state. Fetches the HTML page and its subresources (CSS, JS, images)
+// with realistic headers, priorities, and timing.
+func (s *Session) Warmup(ctx context.Context, url string) error {
+	return s.inner.Warmup(ctx, url)
+}
+
 // Close closes the session and releases resources
 func (s *Session) Close() {
 	s.inner.Close()

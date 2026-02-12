@@ -932,6 +932,8 @@ def _setup_lib(lib):
     lib.httpcloak_session_refresh.restype = None
     lib.httpcloak_session_refresh_protocol.argtypes = [c_int64, c_char_p]
     lib.httpcloak_session_refresh_protocol.restype = c_void_p
+    lib.httpcloak_session_warmup.argtypes = [c_int64, c_char_p, c_int64]
+    lib.httpcloak_session_warmup.restype = c_void_p
     # Use c_void_p for string returns so we can free them properly
     lib.httpcloak_get.argtypes = [c_int64, c_char_p, c_char_p]
     lib.httpcloak_get.restype = c_void_p
@@ -1518,6 +1520,32 @@ class Session:
                             raise HTTPCloakError(data["error"])
             else:
                 self._lib.httpcloak_session_refresh(self._handle)
+
+    def warmup(self, url: str, timeout: Optional[int] = None):
+        """Simulate a real browser page load to warm TLS sessions, cookies, and cache.
+
+        Fetches the HTML page and its subresources (CSS, JS, images) with
+        realistic headers, priorities, and timing. After warmup, subsequent
+        requests look like follow-up navigation from a real user.
+
+        Args:
+            url: The page URL to warm up (e.g., "https://example.com").
+            timeout: Timeout in milliseconds. Defaults to 60000 (60s).
+
+        Raises:
+            HTTPCloakError: If the navigation request fails.
+        """
+        if hasattr(self, "_handle") and self._handle:
+            timeout_ms = timeout if timeout else 0
+            result_ptr = self._lib.httpcloak_session_warmup(
+                self._handle, url.encode("utf-8"), timeout_ms
+            )
+            if result_ptr is not None and result_ptr != 0:
+                result = _ptr_to_string(result_ptr)
+                if result:
+                    data = json.loads(result)
+                    if "error" in data:
+                        raise HTTPCloakError(data["error"])
 
     def _merge_headers(self, headers: Optional[Dict[str, str]]) -> Optional[Dict[str, str]]:
         """Merge session headers with request headers."""

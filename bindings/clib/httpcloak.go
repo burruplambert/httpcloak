@@ -1046,6 +1046,31 @@ func httpcloak_session_refresh_protocol(handle C.int64_t, protocol *C.char) *C.c
 	return nil
 }
 
+//export httpcloak_session_warmup
+func httpcloak_session_warmup(handle C.int64_t, url *C.char, timeoutMs C.int64_t) *C.char {
+	session := getSession(handle)
+	if session == nil {
+		return makeErrorJSON(ErrInvalidSession)
+	}
+
+	urlStr := C.GoString(url)
+
+	ctx := context.Background()
+	var cancel context.CancelFunc
+	if timeoutMs > 0 {
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(timeoutMs)*time.Millisecond)
+	} else {
+		ctx, cancel = context.WithTimeout(ctx, 60*time.Second)
+	}
+	defer cancel()
+
+	if err := session.Warmup(ctx, urlStr); err != nil {
+		return makeErrorJSON(err)
+	}
+
+	return nil
+}
+
 func getSession(handle C.int64_t) *httpcloak.Session {
 	sessionMu.RLock()
 	defer sessionMu.RUnlock()
@@ -1780,7 +1805,7 @@ func httpcloak_free_string(str *C.char) {
 
 //export httpcloak_version
 func httpcloak_version() *C.char {
-	return C.CString("1.6.0-beta.4")
+	return C.CString("1.6.0-beta.12")
 }
 
 //export httpcloak_available_presets

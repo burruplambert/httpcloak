@@ -130,6 +130,19 @@ func StyleContext(referrer, targetURL string) RequestContext {
 	}
 }
 
+// FontContext returns a RequestContext for font loads
+func FontContext(referrer, targetURL string) RequestContext {
+	site := calculateFetchSite(referrer, targetURL)
+	return RequestContext{
+		Mode:            FetchModeCORS,
+		Dest:            FetchDestFont,
+		Site:            site,
+		IsUserTriggered: false,
+		Referrer:        referrer,
+		TargetURL:       targetURL,
+	}
+}
+
 // calculateFetchSite determines the Sec-Fetch-Site value based on referrer and target
 func calculateFetchSite(referrer, targetURL string) FetchSite {
 	if referrer == "" {

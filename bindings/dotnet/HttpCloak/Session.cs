@@ -1534,6 +1534,29 @@ public sealed class Session : IDisposable
         => RequestFast("PATCH", url, body, headers, parameters, cookies, auth, timeout);
 
     /// <summary>
+    /// Simulate a real browser page load to warm TLS sessions, cookies, and cache.
+    /// Fetches the HTML page and its subresources (CSS, JS, images) with
+    /// realistic headers, priorities, and timing.
+    /// </summary>
+    /// <param name="url">The page URL to warm up.</param>
+    /// <param name="timeoutMs">Timeout in milliseconds (default: 60000).</param>
+    public void Warmup(string url, long timeoutMs = 0)
+    {
+        ThrowIfDisposed();
+        IntPtr resultPtr = Native.SessionWarmup(_handle, url, timeoutMs);
+        if (resultPtr != IntPtr.Zero)
+        {
+            string? result = Native.PtrToStringAndFree(resultPtr);
+            if (!string.IsNullOrEmpty(result))
+            {
+                var error = JsonSerializer.Deserialize(result, JsonContext.Default.ErrorResponse);
+                if (error?.Error != null)
+                    throw new HttpCloakException(error.Error);
+            }
+        }
+    }
+
+    /// <summary>
     /// Refresh the session by closing all connections while keeping TLS session tickets.
     /// This simulates a browser page refresh - connections are severed but 0-RTT
     /// early data can be used on reconnection due to preserved session tickets.
