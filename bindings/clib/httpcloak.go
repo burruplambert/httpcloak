@@ -1077,6 +1077,27 @@ func getSession(handle C.int64_t) *httpcloak.Session {
 	return sessions[int64(handle)]
 }
 
+//export httpcloak_session_fork
+func httpcloak_session_fork(handle C.int64_t) C.int64_t {
+	session := getSession(handle)
+	if session == nil {
+		return -1
+	}
+
+	forks := session.Fork(1)
+	if len(forks) == 0 {
+		return -1
+	}
+
+	sessionMu.Lock()
+	sessionCounter++
+	newHandle := sessionCounter
+	sessions[newHandle] = forks[0]
+	sessionMu.Unlock()
+
+	return C.int64_t(newHandle)
+}
+
 // ============================================================================
 // Synchronous Requests
 // ============================================================================
@@ -1805,7 +1826,7 @@ func httpcloak_free_string(str *C.char) {
 
 //export httpcloak_version
 func httpcloak_version() *C.char {
-	return C.CString("1.6.0-beta.12")
+	return C.CString("1.6.0-beta.13")
 }
 
 //export httpcloak_available_presets

@@ -758,6 +758,7 @@ function getLib() {
       httpcloak_session_refresh: nativeLibHandle.func("httpcloak_session_refresh", "void", ["int64"]),
       httpcloak_session_refresh_protocol: nativeLibHandle.func("httpcloak_session_refresh_protocol", "str", ["int64", "str"]),
       httpcloak_session_warmup: nativeLibHandle.func("httpcloak_session_warmup", "str", ["int64", "str", "int64"]),
+      httpcloak_session_fork: nativeLibHandle.func("httpcloak_session_fork", "int64", ["int64"]),
       httpcloak_get: nativeLibHandle.func("httpcloak_get", "str", ["int64", "str", "str"]),
       httpcloak_post: nativeLibHandle.func("httpcloak_post", "str", ["int64", "str", "str", "str"]),
       httpcloak_request: nativeLibHandle.func("httpcloak_request", "str", ["int64", "str"]),
@@ -1371,6 +1372,33 @@ class Session {
         }
       }
     }
+  }
+
+  /**
+   * Create n forked sessions sharing cookies and TLS session caches.
+   *
+   * Forked sessions simulate multiple browser tabs from the same browser:
+   * same cookies, same TLS resumption tickets, same fingerprint, but
+   * independent connections for parallel requests.
+   *
+   * @param {number} n - Number of sessions to create
+   * @returns {Session[]} Array of new Session objects
+   */
+  fork(n = 1) {
+    const forks = [];
+    for (let i = 0; i < n; i++) {
+      const handle = this._lib.httpcloak_session_fork(this._handle);
+      if (handle < 0 || handle === 0n) {
+        throw new HTTPCloakError("Failed to fork session");
+      }
+      const session = Object.create(Session.prototype);
+      session._lib = this._lib;
+      session._handle = handle;
+      session.headers = { ...this.headers };
+      session.auth = this.auth;
+      forks.push(session);
+    }
+    return forks;
   }
 
   /**

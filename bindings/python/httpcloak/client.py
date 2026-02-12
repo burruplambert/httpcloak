@@ -934,6 +934,8 @@ def _setup_lib(lib):
     lib.httpcloak_session_refresh_protocol.restype = c_void_p
     lib.httpcloak_session_warmup.argtypes = [c_int64, c_char_p, c_int64]
     lib.httpcloak_session_warmup.restype = c_void_p
+    lib.httpcloak_session_fork.argtypes = [c_int64]
+    lib.httpcloak_session_fork.restype = c_int64
     # Use c_void_p for string returns so we can free them properly
     lib.httpcloak_get.argtypes = [c_int64, c_char_p, c_char_p]
     lib.httpcloak_get.restype = c_void_p
@@ -1546,6 +1548,34 @@ class Session:
                     data = json.loads(result)
                     if "error" in data:
                         raise HTTPCloakError(data["error"])
+
+    def fork(self, n: int = 1) -> List["Session"]:
+        """Create n forked sessions sharing cookies and TLS session caches.
+
+        Forked sessions simulate multiple browser tabs from the same browser:
+        same cookies, same TLS resumption tickets, same fingerprint, but
+        independent connections for parallel requests.
+
+        Args:
+            n: Number of sessions to create.
+
+        Returns:
+            List of new Session objects.
+        """
+        lib = self._lib
+        forks = []
+        for _ in range(n):
+            handle = lib.httpcloak_session_fork(self._handle)
+            if handle < 0:
+                raise HTTPCloakError("Failed to fork session")
+            session = object.__new__(type(self))
+            session._lib = lib
+            session._handle = handle
+            session._default_timeout = self._default_timeout
+            session.headers = dict(self.headers) if self.headers else {}
+            session.auth = self.auth
+            forks.append(session)
+        return forks
 
     def _merge_headers(self, headers: Optional[Dict[str, str]]) -> Optional[Dict[str, str]]:
         """Merge session headers with request headers."""

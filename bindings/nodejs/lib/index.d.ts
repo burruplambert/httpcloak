@@ -278,6 +278,13 @@ export class Session {
    */
   warmup(url: string, options?: { timeout?: number }): void;
 
+  /** Create n forked sessions sharing cookies and TLS session caches.
+   * Forked sessions simulate multiple browser tabs from the same browser:
+   * same cookies, same TLS resumption tickets, same fingerprint, but
+   * independent connections for parallel requests.
+   */
+  fork(n?: number): Session[];
+
   /** Refresh the session by closing all connections while keeping TLS session tickets.
    * This simulates a browser page refresh - connections are severed but 0-RTT
    * early data can be used on reconnection due to preserved session tickets.

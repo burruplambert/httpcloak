@@ -1557,6 +1557,28 @@ public sealed class Session : IDisposable
     }
 
     /// <summary>
+    /// Create n forked sessions sharing cookies and TLS session caches.
+    /// Forked sessions simulate multiple browser tabs from the same browser:
+    /// same cookies, same TLS resumption tickets, same fingerprint, but
+    /// independent connections for parallel requests.
+    /// </summary>
+    /// <param name="n">Number of sessions to create.</param>
+    /// <returns>Array of new Session objects.</returns>
+    public Session[] Fork(int n = 1)
+    {
+        ThrowIfDisposed();
+        var forks = new Session[n];
+        for (int i = 0; i < n; i++)
+        {
+            long handle = Native.SessionFork(_handle);
+            if (handle < 0 || handle == 0)
+                throw new HttpCloakException("Failed to fork session");
+            forks[i] = new Session(handle);
+        }
+        return forks;
+    }
+
+    /// <summary>
     /// Refresh the session by closing all connections while keeping TLS session tickets.
     /// This simulates a browser page refresh - connections are severed but 0-RTT
     /// early data can be used on reconnection due to preserved session tickets.

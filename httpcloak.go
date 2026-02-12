@@ -750,6 +750,22 @@ func (s *Session) Warmup(ctx context.Context, url string) error {
 	return s.inner.Warmup(ctx, url)
 }
 
+// Fork creates n new sessions that share cookies and TLS session caches with
+// the parent, but have independent connections. This simulates multiple browser
+// tabs — same cookies, same TLS resumption tickets, same fingerprint, but
+// independent TCP/QUIC connections for parallel requests.
+func (s *Session) Fork(n int) []*Session {
+	innerForks := s.inner.Fork(n)
+	if innerForks == nil {
+		return nil
+	}
+	forks := make([]*Session, len(innerForks))
+	for i, inner := range innerForks {
+		forks[i] = &Session{inner: inner}
+	}
+	return forks
+}
+
 // Close closes the session and releases resources
 func (s *Session) Close() {
 	s.inner.Close()
