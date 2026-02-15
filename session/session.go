@@ -846,8 +846,13 @@ func extractHost(urlStr string) string {
 	if idx := indexOf(host, "/"); idx != -1 {
 		host = host[:idx]
 	}
-	// Remove port for matching
-	if idx := indexOf(host, ":"); idx != -1 {
+	// Remove port for matching (IPv6-aware)
+	if len(host) > 0 && host[0] == '[' {
+		// IPv6 bracketed: [::1]:443 → ::1
+		if idx := indexOf(host, "]"); idx != -1 {
+			host = host[1:idx]
+		}
+	} else if idx := indexOf(host, ":"); idx != -1 {
 		host = host[:idx]
 	}
 	return host
