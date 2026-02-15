@@ -92,10 +92,10 @@ func (c *Cookie) matchesPath(path string) bool {
 		path = "/"
 	}
 
-	// Path must be a prefix
+	// Path must be a prefix (RFC 6265 Section 5.1.4)
 	if strings.HasPrefix(path, c.Path) {
-		// Exact match or followed by /
-		if len(path) == len(c.Path) || path[len(c.Path)] == '/' {
+		// Exact match, followed by /, or cookie path already ends with /
+		if len(path) == len(c.Path) || path[len(c.Path)] == '/' || c.Path[len(c.Path)-1] == '/' {
 			return true
 		}
 	}
