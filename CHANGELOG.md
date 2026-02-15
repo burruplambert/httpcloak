@@ -24,6 +24,10 @@
 
 - **Parallel DNS + ECH resolution** — DNS and ECH config resolution parallelized in SOCKS5 proxy QUIC dial path.
 
+- **`disable_ech` toggle** — Disable ECH lookup per-session for faster first requests when ECH is not needed.
+
+- **`cache-control: max-age=0` after Refresh()** — Automatically adds cache-control header to requests after `Refresh()`, matching real browser F5 behavior.
+
 ### Bug Fixes
 
 #### Transport Reliability
@@ -41,6 +45,8 @@
 - Fix corrupted pool connections, swallowed flush errors, nil-proxy guards
 - Fix case-sensitive `Connection` header, H2 cleanup race, dead MASQUE code
 - Fix nil-return on UDP failure and stale H2 connection entry
+- Fix relative path redirect resolution using `net/url` for proper base URL joining
+- Fix H3 0-RTT rejection after `Refresh()` by re-adding missing preset configurations
 
 #### Proxy & QUIC
 - Fix `quic.Transport` goroutine leak in SOCKS5 H3 proxy path
@@ -52,9 +58,16 @@
 - Fix `verify: false` not disabling TLS certificate validation
 - Fix `connect_to` domain fronting connection pool key sharing
 - Fix POST payload encoding: use `UnsafeRelaxedJsonEscaping` for all JSON serialization
+- Fix per-request `X-HTTPCloak-TlsOnly` header support in LocalProxy
+- Fix bogus fallback values in clib getter functions returning incorrect defaults
+- Remove non-existent `chrome-131` preset from all binding defaults
+
+#### Bindings
+- Fix async headers not forwarded in Python `get_async()`/`post_async()` methods
 
 #### Resource Leaks
 - Fix resource leaks and race conditions across all HTTP transports (comprehensive audit)
+- Fix H3 transport `Close()` blocking indefinitely on QUIC graceful drain
 
 ### Internal
 - 8 timeout bugs fixed where context cancellation/deadline was ignored across all transports
