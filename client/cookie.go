@@ -25,9 +25,6 @@ func (c *Cookie) IsExpired() bool {
 	if c.MaxAge < 0 {
 		return true
 	}
-	if c.MaxAge > 0 {
-		return false // MaxAge takes precedence, handled by creation time
-	}
 	if c.Expires.IsZero() {
 		return false // Session cookie
 	}
@@ -185,6 +182,12 @@ func ParseSetCookie(header string, requestURL *url.URL) *Cookie {
 		case "samesite":
 			cookie.SameSite = value
 		}
+	}
+
+	// RFC 6265 Section 5.3: convert Max-Age to absolute Expires time
+	// Max-Age takes precedence over Expires when both are present
+	if cookie.MaxAge > 0 {
+		cookie.Expires = time.Now().Add(time.Duration(cookie.MaxAge) * time.Second)
 	}
 
 	return cookie
