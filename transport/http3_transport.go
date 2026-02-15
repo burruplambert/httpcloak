@@ -1199,18 +1199,27 @@ func (t *HTTP3Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 
 	// Make request - http3.Transport handles connection pooling
+	// Capture transport pointer under lock to avoid data race with recreateTransport/Refresh
+	t.mu.RLock()
+	transport := t.transport
+	t.mu.RUnlock()
+
 	// Retry up to 3 times on 0-RTT rejection (can happen multiple times after Refresh)
 	var resp *http.Response
 	var err error
 	for attempt := 0; attempt < 3; attempt++ {
-		resp, err = t.transport.RoundTrip(req)
+		resp, err = transport.RoundTrip(req)
 		if err == nil || !is0RTTRejectedError(err) {
 			break
 		}
 		// 0-RTT rejected - close unusable connection and recreate transport
 		// Use timeout to prevent blocking if QUIC drain takes too long
-		closeWithTimeout(t.transport, 3*time.Second)
+		closeWithTimeout(transport, 3*time.Second)
 		t.recreateTransport()
+		// Re-read transport pointer after recreate
+		t.mu.RLock()
+		transport = t.transport
+		t.mu.RUnlock()
 	}
 
 	// Check if a new connection was created during this request
@@ -1283,8 +1292,13 @@ func (t *HTTP3Transport) closeAllProxyConns() {
 
 // Close shuts down the transport and all connections
 func (t *HTTP3Transport) Close() error {
+	// Capture transport pointer under lock to avoid data race with recreateTransport/Refresh
+	t.mu.RLock()
+	transport := t.transport
+	t.mu.RUnlock()
+
 	// Use timeout for QUIC closes to prevent blocking on graceful drain
-	closeWithTimeout(t.transport, 3*time.Second)
+	closeWithTimeout(transport, 3*time.Second)
 
 	if t.quicTransport != nil {
 		closeWithTimeout(t.quicTransport, 3*time.Second)
