@@ -590,6 +590,16 @@ func (c *Client) doWithRetry(ctx context.Context, req *Request) (*Response, erro
 	var lastResp *Response
 	var cookieChallengeRetried bool
 
+	// Cache body before retry loop — io.Reader can only be read once
+	var cachedBody []byte
+	if req.Body != nil {
+		var err error
+		cachedBody, err = io.ReadAll(req.Body)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read request body: %w", err)
+		}
+	}
+
 	for attempt := 0; attempt <= c.config.MaxRetries; attempt++ {
 		if attempt > 0 {
 			// Calculate wait time with exponential backoff and jitter
@@ -603,6 +613,10 @@ func (c *Client) doWithRetry(ctx context.Context, req *Request) (*Response, erro
 
 		// Clone request for this attempt
 		reqCopy := *req
+		// Provide fresh body reader for each attempt
+		if cachedBody != nil {
+			reqCopy.Body = bytes.NewReader(cachedBody)
+		}
 
 		// After cookie challenge, switch to H3 for retry (Akamai pattern)
 		if cookieChallengeRetried && req.ForceProtocol == ProtocolAuto && (c.quicManager != nil || c.masqueTransport != nil) {
