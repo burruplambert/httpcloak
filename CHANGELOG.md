@@ -1,34 +1,38 @@
 # Changelog
 
-## 1.6.0-beta.13 (2026-02-15)
+All notable changes to this project will be documented in this file.
 
-### New Features
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [1.6.0-beta.13] - 2026-02-15
+
+### Added
 
 - **`session.Fork(n)`** — Create N sessions sharing cookies and TLS session caches but with independent connections. Simulates multiple browser tabs from the same browser for parallel scraping. Available in Go, Python, Node.js, and C#.
-
 - **`session.Warmup(url)`** — Simulate a real browser page load by fetching HTML and all subresources (CSS, JS, images, fonts) with realistic headers, priorities, and timing. Populates TLS session tickets, cookies, and cache headers before real work begins. Available in Go, Python, Node.js, and C#.
-
 - **Speculative TLS** — Sends CONNECT + TLS ClientHello together on proxy connections, saving one round-trip (~25% faster proxy handshakes). Enabled by default; can be disabled with `disable_speculative_tls` for incompatible proxies.
-
 - **`switch_protocol` on Refresh()** — Switch HTTP protocol version (h1/h2/h3) when calling `Refresh()`, persisting for future refreshes.
-
 - **`-latest` preset aliases** — `chrome-latest`, `firefox-latest`, `safari-latest` aliases that automatically resolve to the newest preset version.
-
 - **`available_presets()` returns dict** — Now returns a dict with protocol support info (`{name: {h1, h2, h3}}`) instead of a flat list.
-
 - **Auto Content-Type for JSON POST** — Automatically sets `Content-Type: application/json` when body is a JSON object/dict.
-
 - **C# CancellationToken support** — Native Go context cancellation for C# async methods.
-
 - **C# Session finalizer** — Prevents Go session leaks when `Dispose()` is missed.
-
-- **Parallel DNS + ECH resolution** — DNS and ECH config resolution parallelized in SOCKS5 proxy QUIC dial path.
-
 - **`disable_ech` toggle** — Disable ECH lookup per-session for faster first requests when ECH is not needed.
-
 - **`cache-control: max-age=0` after Refresh()** — Automatically adds cache-control header to requests after `Refresh()`, matching real browser F5 behavior.
+- **Local address binding** — Bind outgoing connections to a specific local IP address for IPv6 rotation. Available via `WithLocalAddress` in Go and `local_address` option in bindings.
+- **TLS key logging** — Per-session `key_log_file` option and `SSLKEYLOGFILE` environment variable support for Wireshark TLS inspection.
+- **Fast-path clib bindings** — Zero-copy APIs (`httpcloak_fast_*`) for high-throughput transfers via C FFI.
+- **New mobile presets** — Added `ios-chrome-144`, `android-chrome-144`, `ios-safari-18` presets.
 
-### Bug Fixes
+### Changed
+
+- Parallel DNS + ECH resolution in SOCKS5 proxy QUIC dial path and H3 transport dial
+- Pre-load x509 system root CAs at init to avoid ~40ms delay on first TLS handshake
+- Default preset updated from `chrome-131`/`chrome-143` to `chrome-latest`
+- Replace `SOCKS5UDPConn` with `udpbara` for H3 proxy transport
+
+### Fixed
 
 #### Transport Reliability
 - Fix H2 head-of-line blocking: release `connsMu` during TCP+TLS dial so other requests aren't blocked
@@ -39,6 +43,8 @@
 - Fix H1 deadline cleared while response body still being read
 - Fix H3 UDP fallback and narrow 0-RTT early data check
 - Fix H3 GREASE ID/value and QPACK capacity drift in `Refresh()`/`recreateTransport()`
+- Fix H3 local address IP family filtering (IPv6 local address connecting to IPv4-only host)
+- Fix H3 0-RTT rejection after `Refresh()` by re-adding missing preset configurations
 - Fix speculative TLS causing 30s body read delay on HTTP/2 connections
 - Fix speculative TLS blocklist key mismatch in H1 and H2
 - Fix `bufio.Reader` data loss in proxy CONNECT for H1 and H2
@@ -46,12 +52,10 @@
 - Fix case-sensitive `Connection` header, H2 cleanup race, dead MASQUE code
 - Fix nil-return on UDP failure and stale H2 connection entry
 - Fix relative path redirect resolution using `net/url` for proper base URL joining
-- Fix H3 0-RTT rejection after `Refresh()` by re-adding missing preset configurations
 
 #### Proxy & QUIC
 - Fix `quic.Transport` goroutine leak in SOCKS5 H3 proxy path
 - Auto-cleanup proxy QUIC resources when connection dies
-- Replace `SOCKS5UDPConn` with `udpbara` for H3 proxy transport
 - Fix proxy CONNECT deadline to respect context timeout in H1 and H2
 
 #### Session & Config
@@ -60,44 +64,25 @@
 - Fix POST payload encoding: use `UnsafeRelaxedJsonEscaping` for all JSON serialization
 - Fix per-request `X-HTTPCloak-TlsOnly` header support in LocalProxy
 - Fix bogus fallback values in clib getter functions returning incorrect defaults
-- Remove non-existent `chrome-131` preset from all binding defaults
+- Fix stale default presets (`chrome-131`/`chrome-143`) across all bindings
 
 #### Bindings
 - Fix async headers not forwarded in Python `get_async()`/`post_async()` methods
+- Fix clib build missing `httpcloak_fast.go` source file
+- Remove non-existent `chrome-131` preset from all binding defaults
 
 #### Resource Leaks
 - Fix resource leaks and race conditions across all HTTP transports (comprehensive audit)
 - Fix H3 transport `Close()` blocking indefinitely on QUIC graceful drain
-
-### Internal
 - 8 timeout bugs fixed where context cancellation/deadline was ignored across all transports
 - `wg.Wait()` in goroutines now uses channel+select on `ctx.Done()`
 - `time.Sleep()` in goroutines replaced with `select { case <-time.After(): case <-ctx.Done(): }`
 - `http.ReadResponse()` on proxy connections now sets `conn.SetReadDeadline()`
 - QUIC transport `Close()` wrapped in `closeWithTimeout()` in both `Refresh()` and `Close()` paths
 
----
+## [1.5.10] - 2025-12-18
 
-## 1.5.10 (2025-12-18)
+Baseline release. This changelog begins tracking changes from this version forward.
 
-### Features at v1.5.10
-- HTTP/1.1, HTTP/2, HTTP/3 with accurate TLS fingerprints (uTLS)
-- ECH (Encrypted Client Hello) support
-- 0-RTT session resumption with TLS session ticket persistence
-- H3/H2 connection racing for automatic protocol fallback
-- SOCKS5, HTTP, and MASQUE proxy support (including H3 over SOCKS5)
-- Domain-scoped cookie jar with full Set-Cookie parsing
-- Session persistence (save/load/marshal/unmarshal)
-- Streaming downloads and uploads
-- Fast-path zero-copy APIs for high-throughput transfers
-- LocalProxy for transparent `HttpClient`/`fetch` integration
-- Distributed TLS session cache backend (Redis, etc.)
-- Runtime proxy switching
-- Header order customization
-- Domain fronting via `connect_to`
-- Local address binding (IPv6 rotation)
-- TLS key logging (Wireshark)
-- `Refresh()` for browser page refresh simulation
-- Async session cache support
-- Chrome, Firefox, Safari, iOS, and Android presets
-- Python, Node.js, C#, and Go bindings
+[1.6.0-beta.13]: https://github.com/sardanioss/httpcloak/compare/v1.5.10...v1.6.0-beta.13
+[1.5.10]: https://github.com/sardanioss/httpcloak/releases/tag/v1.5.10
