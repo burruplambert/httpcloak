@@ -1021,6 +1021,9 @@ func (c *Client) doOnce(ctx context.Context, req *Request, redirectHistory []*Re
 		if shouldRetry {
 			// Reset request body for retry
 			resetRequestBody(httpReq, bodyBytes)
+			if len(bodyBytes) > 0 {
+				req.Body = bytes.NewReader(bodyBytes)
+			}
 			// Apply auth again with challenge info
 			if err := auth.Apply(httpReq); err != nil {
 				return nil, fmt.Errorf("failed to apply authentication after challenge: %w", err)
