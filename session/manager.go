@@ -133,7 +133,10 @@ func (m *Manager) cleanupExpiredSessions() {
 
 	now := time.Now()
 	for id, session := range m.sessions {
-		if now.Sub(session.LastUsed) > m.sessionTimeout {
+		session.mu.RLock()
+		idle := now.Sub(session.LastUsed) > m.sessionTimeout
+		session.mu.RUnlock()
+		if idle {
 			session.Close()
 			delete(m.sessions, id)
 		}
