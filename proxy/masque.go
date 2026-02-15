@@ -479,9 +479,6 @@ func (c *MASQUEConn) Close() error {
 		}
 	}
 
-	// Close the datagram channel
-	close(c.datagramCh)
-
 	if len(errs) > 0 {
 		return errs[0]
 	}
