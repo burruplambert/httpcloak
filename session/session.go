@@ -270,18 +270,23 @@ func (s *Session) requestWithRedirects(ctx context.Context, req *transport.Reque
 	requestPath := extractPath(req.URL)
 	requestSecure := isSecureURL(req.URL)
 
+	// Save original per-request Cookie header before retry loop to prevent accumulation
+	var origCookie string
+	if c := req.Headers["Cookie"]; len(c) > 0 {
+		origCookie = c[0]
+	}
+
 	for attempt := 0; attempt <= maxRetries; attempt++ {
-		// Add session cookies to request headers BEFORE each attempt
-		// Use domain/path matching to only send relevant cookies
+		// Build Cookie header fresh each attempt from original + session cookies
 		sessionCookies := s.cookies.BuildCookieHeader(requestHost, requestPath, requestSecure)
 		if sessionCookies != "" {
-			// Merge with existing cookies (per-request cookies take precedence for same name)
-			existingCookies := req.Headers["Cookie"]
-			if len(existingCookies) > 0 && existingCookies[0] != "" {
-				req.Headers["Cookie"] = []string{existingCookies[0] + "; " + sessionCookies}
+			if origCookie != "" {
+				req.Headers["Cookie"] = []string{origCookie + "; " + sessionCookies}
 			} else {
 				req.Headers["Cookie"] = []string{sessionCookies}
 			}
+		} else if origCookie != "" {
+			req.Headers["Cookie"] = []string{origCookie}
 		}
 
 		// Apply high-entropy client hints if the host requested them via Accept-CH
