@@ -2,7 +2,6 @@ using System.Collections.Concurrent;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using System.Web;
 
 namespace HttpCloak;
 
@@ -193,7 +192,7 @@ public sealed class Session : IDisposable
         int quicIdleTimeout = 0,
         string? localAddress = null,
         string? keyLogFile = null,
-        bool disableSpeculativeTls = false,
+        bool enableSpeculativeTls = false,
         string? switchProtocol = null)
     {
         Auth = auth;
@@ -220,7 +219,7 @@ public sealed class Session : IDisposable
             QuicIdleTimeout = quicIdleTimeout,
             LocalAddress = localAddress,
             KeyLogFile = keyLogFile,
-            DisableSpeculativeTls = disableSpeculativeTls,
+            EnableSpeculativeTls = enableSpeculativeTls,
             SwitchProtocol = switchProtocol
         };
 
@@ -250,21 +249,25 @@ public sealed class Session : IDisposable
     }
 
     /// <summary>
-    /// Add query parameters to URL.
+    /// Add query parameters to URL, preserving insertion order and using standard percent-encoding.
     /// </summary>
     private static string AddParamsToUrl(string url, Dictionary<string, string>? parameters)
     {
         if (parameters == null || parameters.Count == 0)
             return url;
 
-        var uriBuilder = new UriBuilder(url);
-        var query = System.Web.HttpUtility.ParseQueryString(uriBuilder.Query);
+        var sb = new System.Text.StringBuilder(url);
+        sb.Append(url.Contains('?') ? '&' : '?');
+        bool first = true;
         foreach (var param in parameters)
         {
-            query[param.Key] = param.Value;
+            if (!first) sb.Append('&');
+            sb.Append(Uri.EscapeDataString(param.Key));
+            sb.Append('=');
+            sb.Append(Uri.EscapeDataString(param.Value));
+            first = false;
         }
-        uriBuilder.Query = query.ToString();
-        return uriBuilder.ToString();
+        return sb.ToString();
     }
 
     /// <summary>
@@ -2463,9 +2466,9 @@ internal class SessionConfig
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? KeyLogFile { get; set; }
 
-    [JsonPropertyName("disable_speculative_tls")]
+    [JsonPropertyName("enable_speculative_tls")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
-    public bool DisableSpeculativeTls { get; set; }
+    public bool EnableSpeculativeTls { get; set; }
 
     [JsonPropertyName("switch_protocol")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

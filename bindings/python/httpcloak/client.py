@@ -30,7 +30,7 @@ from io import IOBase
 from pathlib import Path
 from threading import Lock
 from typing import Any, BinaryIO, Dict, List, Optional, Tuple, Union
-from urllib.parse import urlencode, urlparse, urlunparse, parse_qs
+from urllib.parse import urlencode, quote
 
 
 # File type for files parameter
@@ -1240,14 +1240,14 @@ def _parse_fast_response(lib, response_handle: int, elapsed: float = 0.0) -> Fas
 
 
 def _add_params_to_url(url: str, params: Optional[Dict[str, Any]]) -> str:
-    """Add query parameters to URL."""
+    """Add query parameters to URL, preserving insertion order and encoding."""
     if not params:
         return url
-    parsed = urlparse(url)
-    existing_params = parse_qs(parsed.query)
-    existing_params.update({k: [str(v)] for k, v in params.items()})
-    new_query = urlencode(existing_params, doseq=True)
-    return urlunparse(parsed._replace(query=new_query))
+    sep = '&' if '?' in url else '?'
+    parts = []
+    for k, v in params.items():
+        parts.append(f"{quote(str(k), safe='')}={quote(str(v), safe='')}")
+    return url + sep + '&'.join(parts)
 
 
 def _apply_auth(
@@ -1383,9 +1383,9 @@ class Session:
         quic_idle_timeout: QUIC connection idle timeout in seconds (default: 30). Set higher for long-lived H3 connections.
         local_address: Local IP address to bind outgoing connections to (e.g., "192.168.1.100" or "::1")
         key_log_file: Path to write TLS key log (NSS format) for Wireshark decryption
-        disable_speculative_tls: Disable speculative TLS optimization for proxy connections (default: False).
-            When False, CONNECT and TLS ClientHello are sent together saving one round-trip.
-            Set to True if you experience issues with certain proxies.
+        enable_speculative_tls: Enable speculative TLS optimization for proxy connections (default: False).
+            When True, CONNECT and TLS ClientHello are sent together saving one round-trip.
+            May cause issues with certain proxies or debugging tools.
 
     Example:
         with httpcloak.Session(preset="chrome-143") as session:
@@ -1437,7 +1437,7 @@ class Session:
         quic_idle_timeout: int = 0,
         local_address: Optional[str] = None,
         key_log_file: Optional[str] = None,
-        disable_speculative_tls: bool = False,
+        enable_speculative_tls: bool = False,
         switch_protocol: Optional[str] = None,
     ):
         self._lib = _get_lib()
@@ -1480,8 +1480,8 @@ class Session:
             config["local_address"] = local_address
         if key_log_file:
             config["key_log_file"] = key_log_file
-        if disable_speculative_tls:
-            config["disable_speculative_tls"] = True
+        if enable_speculative_tls:
+            config["enable_speculative_tls"] = True
         if switch_protocol:
             config["switch_protocol"] = switch_protocol
 

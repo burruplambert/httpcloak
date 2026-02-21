@@ -1006,11 +1006,11 @@ function addParamsToUrl(url, params) {
     return url;
   }
 
-  const urlObj = new URL(url);
-  for (const [key, value] of Object.entries(params)) {
-    urlObj.searchParams.append(key, String(value));
-  }
-  return urlObj.toString();
+  const sep = url.includes('?') ? '&' : '?';
+  const parts = Object.entries(params).map(
+    ([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`
+  );
+  return url + sep + parts.join('&');
 }
 
 /**
@@ -1252,7 +1252,7 @@ class Session {
       quicIdleTimeout = 0,
       localAddress = null,
       keyLogFile = null,
-      disableSpeculativeTls = false,
+      enableSpeculativeTls = false,
       switchProtocol = null,
     } = options;
 
@@ -1314,8 +1314,8 @@ class Session {
     if (keyLogFile) {
       config.key_log_file = keyLogFile;
     }
-    if (disableSpeculativeTls) {
-      config.disable_speculative_tls = true;
+    if (enableSpeculativeTls) {
+      config.enable_speculative_tls = true;
     }
     if (switchProtocol) {
       config.switch_protocol = switchProtocol;

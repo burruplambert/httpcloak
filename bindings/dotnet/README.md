@@ -389,7 +389,7 @@ foreach (var preset in presets)
     Console.WriteLine(preset);
 }
 // chrome-144, chrome-143, chrome-141, chrome-133,
-// firefox-133, safari-18, ios-chrome-144, ...
+// firefox-133, safari-18, chrome-144-ios, ...
 ```
 
 ## Error Handling
