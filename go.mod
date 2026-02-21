@@ -15,7 +15,7 @@ require (
 	github.com/sardanioss/http v1.2.0
 	github.com/sardanioss/net v1.2.1
 	github.com/sardanioss/quic-go v1.2.18
-	github.com/sardanioss/udpbara v1.0.0
+	github.com/sardanioss/udpbara v1.1.0
 	github.com/sardanioss/utls v1.10.1
 	golang.org/x/net v0.48.0
 )
@@ -35,5 +35,3 @@ replace github.com/sardanioss/utls => ../utls
 replace github.com/sardanioss/net => ../sardanioss-net
 
 replace github.com/sardanioss/quic-go => ../quic-go
-
-replace github.com/sardanioss/udpbara => ../udpbara
