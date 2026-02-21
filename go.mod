@@ -1,6 +1,6 @@
 module github.com/sardanioss/httpcloak
 
-go 1.25.5
+go 1.26.0
 
 retract (
 	v1.4.0 // Published prematurely, use v1.1.x instead
@@ -37,3 +37,5 @@ replace github.com/sardanioss/net => ../sardanioss-net
 replace github.com/sardanioss/quic-go => ../quic-go
 
 replace github.com/sardanioss/udpbara => ../udpbara
+
+replace github.com/sardanioss/http => ../sardanioss-http
