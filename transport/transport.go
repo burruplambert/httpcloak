@@ -742,6 +742,11 @@ func (t *Transport) Do(ctx context.Context, req *Request) (*Response, error) {
 				if err == nil {
 					return resp, nil
 				}
+				// Reuse TLS conn if proxy negotiated h1.1 instead of h2 (e.g. Charles, mitmproxy)
+				var alpnErr *ALPNMismatchError
+				if errors.As(err, &alpnErr) {
+					return t.doHTTP1WithTLSConn(ctx, req, alpnErr)
+				}
 				return t.doHTTP1(ctx, req)
 			}
 
@@ -756,12 +761,22 @@ func (t *Transport) Do(ctx context.Context, req *Request) (*Response, error) {
 				if err == nil {
 					return resp, nil
 				}
+				// Reuse TLS conn if proxy negotiated h1.1 instead of h2
+				var alpnErr *ALPNMismatchError
+				if errors.As(err, &alpnErr) {
+					return t.doHTTP1WithTLSConn(ctx, req, alpnErr)
+				}
 				return t.doHTTP1(ctx, req)
 			}
 			// HTTP proxy - only supports H2/H1
 			resp, err := t.doHTTP2(ctx, req)
 			if err == nil {
 				return resp, nil
+			}
+			// Reuse TLS conn if proxy negotiated h1.1 instead of h2 (e.g. Charles, mitmproxy)
+			var alpnErr *ALPNMismatchError
+			if errors.As(err, &alpnErr) {
+				return t.doHTTP1WithTLSConn(ctx, req, alpnErr)
 			}
 			return t.doHTTP1(ctx, req)
 
