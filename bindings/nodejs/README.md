@@ -372,7 +372,7 @@ const { availablePresets } = require("httpcloak");
 
 console.log(availablePresets());
 // ['chrome-144', 'chrome-143', 'chrome-141', 'chrome-133',
-//  'firefox-133', 'safari-18', 'ios-chrome-144', ...]
+//  'firefox-133', 'safari-18', 'chrome-144-ios', ...]
 ```
 
 ## Response Object

@@ -23,7 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Local address binding** — Bind outgoing connections to a specific local IP address for IPv6 rotation. Available via `WithLocalAddress` in Go and `local_address` option in bindings.
 - **TLS key logging** — Per-session `key_log_file` option and `SSLKEYLOGFILE` environment variable support for Wireshark TLS inspection.
 - **Fast-path clib bindings** — Zero-copy APIs (`httpcloak_fast_*`) for high-throughput transfers via C FFI.
-- **New mobile presets** — Added `ios-chrome-144`, `android-chrome-144`, `ios-safari-18` presets.
+- **New mobile presets** — Added `chrome-144-ios`, `chrome-144-android`, `safari-18-ios` presets.
 
 ### Changed
 

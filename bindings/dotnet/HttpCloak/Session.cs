@@ -2303,12 +2303,20 @@ public static class Presets
     public const string Chrome133 = "chrome-133";
     public const string Firefox133 = "firefox-133";
     public const string Safari18 = "safari-18";
-    public const string IosChrome143 = "ios-chrome-143";
-    public const string IosChrome144 = "ios-chrome-144";
-    public const string IosSafari17 = "ios-safari-17";
-    public const string IosSafari18 = "ios-safari-18";
-    public const string AndroidChrome143 = "android-chrome-143";
-    public const string AndroidChrome144 = "android-chrome-144";
+    public const string Chrome143Ios = "chrome-143-ios";
+    public const string Chrome144Ios = "chrome-144-ios";
+    public const string Safari17Ios = "safari-17-ios";
+    public const string Safari18Ios = "safari-18-ios";
+    public const string Chrome143Android = "chrome-143-android";
+    public const string Chrome144Android = "chrome-144-android";
+
+    // Backwards compatibility aliases (old naming convention)
+    public const string IosChrome143 = Chrome143Ios;
+    public const string IosChrome144 = Chrome144Ios;
+    public const string IosSafari17 = Safari17Ios;
+    public const string IosSafari18 = Safari18Ios;
+    public const string AndroidChrome143 = Chrome143Android;
+    public const string AndroidChrome144 = Chrome144Android;
 }
 
 /// <summary>

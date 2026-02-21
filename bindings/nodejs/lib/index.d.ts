@@ -816,12 +816,19 @@ export const Preset: {
   CHROME_131_WINDOWS: string;
   CHROME_131_LINUX: string;
   CHROME_131_MACOS: string;
+  CHROME_143_IOS: string;
+  CHROME_144_IOS: string;
+  CHROME_143_ANDROID: string;
+  CHROME_144_ANDROID: string;
+  FIREFOX_133: string;
+  SAFARI_18: string;
+  SAFARI_17_IOS: string;
+  SAFARI_18_IOS: string;
+  // Backwards compatibility aliases
   IOS_CHROME_143: string;
   IOS_CHROME_144: string;
   ANDROID_CHROME_143: string;
   ANDROID_CHROME_144: string;
-  FIREFOX_133: string;
-  SAFARI_18: string;
   IOS_SAFARI_17: string;
   IOS_SAFARI_18: string;
   all(): string[];

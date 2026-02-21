@@ -753,7 +753,7 @@ func Safari18() *Preset {
 // WebKit doesn't support Client Hints, so no sec-ch-ua headers
 func IOSChrome143() *Preset {
 	return &Preset{
-		Name:              "ios-chrome-143",
+		Name:              "chrome-143-ios",
 		ClientHelloID:     tls.HelloIOS_18,      // iOS Chrome uses Safari's TLS (WebKit requirement)
 		QUICClientHelloID: tls.HelloIOS_18_QUIC, // iOS Chrome uses Safari's QUIC for H3
 		UserAgent:         "Mozilla/5.0 (iPhone; CPU iPhone OS 17_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/143.0.6917.0 Mobile/15E148 Safari/604.1",
@@ -801,7 +801,7 @@ func IOSChrome143() *Preset {
 // WebKit doesn't support Client Hints, so no sec-ch-ua headers
 func IOSChrome144() *Preset {
 	return &Preset{
-		Name:              "ios-chrome-144",
+		Name:              "chrome-144-ios",
 		ClientHelloID:     tls.HelloIOS_18,      // iOS Chrome uses Safari's TLS (WebKit requirement)
 		QUICClientHelloID: tls.HelloIOS_18_QUIC, // iOS Chrome uses Safari's QUIC for H3
 		UserAgent:         "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/144.0.6917.0 Mobile/15E148 Safari/604.1",
@@ -847,7 +847,7 @@ func IOSChrome144() *Preset {
 // IOSSafari17 returns Safari 17 on iOS fingerprint preset
 func IOSSafari17() *Preset {
 	return &Preset{
-		Name:          "ios-safari-17",
+		Name:          "safari-17-ios",
 		ClientHelloID: tls.HelloIOS_14,
 		UserAgent:     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.7 Mobile/15E148 Safari/604.1",
 		Headers: map[string]string{
@@ -890,7 +890,7 @@ func IOSSafari17() *Preset {
 // IOSSafari18 returns Safari 18 on iOS fingerprint preset
 func IOSSafari18() *Preset {
 	return &Preset{
-		Name:              "ios-safari-18",
+		Name:              "safari-18-ios",
 		ClientHelloID:     tls.HelloIOS_18,
 		QUICClientHelloID: tls.HelloIOS_18_QUIC, // iOS Safari QUIC for H3
 		UserAgent:         "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1",
@@ -937,7 +937,7 @@ func IOSSafari18() *Preset {
 // Note: Chrome on Android uses Chrome's TLS fingerprint (not WebKit restricted like iOS)
 func AndroidChrome143() *Preset {
 	return &Preset{
-		Name:                 "android-chrome-143",
+		Name:                 "chrome-143-android",
 		ClientHelloID:        tls.HelloChrome_143_Linux,     // Android Chrome uses Chrome's TLS
 		PSKClientHelloID:     tls.HelloChrome_143_Linux_PSK, // PSK for session resumption
 		QUICClientHelloID:    tls.HelloChrome_143_QUIC,      // QUIC for HTTP/3
@@ -995,7 +995,7 @@ func AndroidChrome143() *Preset {
 // AndroidChrome144 returns Chrome 144 on Android fingerprint preset
 func AndroidChrome144() *Preset {
 	return &Preset{
-		Name:                 "android-chrome-144",
+		Name:                 "chrome-144-android",
 		ClientHelloID:        tls.HelloChrome_144_Linux,
 		PSKClientHelloID:     tls.HelloChrome_144_Linux_PSK,
 		QUICClientHelloID:    tls.HelloChrome_144_QUIC,
@@ -1059,12 +1059,12 @@ var presets = map[string]func() *Preset{
 	"chrome-144-macos":   Chrome144macOS,
 	"firefox-133":        Firefox133,
 	"safari-18":          Safari18,
-	"ios-chrome-143":     IOSChrome143,
-	"ios-chrome-144":     IOSChrome144,
-	"ios-safari-17":      IOSSafari17,
-	"ios-safari-18":      IOSSafari18,
-	"android-chrome-143": AndroidChrome143,
-	"android-chrome-144": AndroidChrome144,
+	"chrome-143-ios":     IOSChrome143,
+	"chrome-144-ios":     IOSChrome144,
+	"safari-17-ios":      IOSSafari17,
+	"safari-18-ios":      IOSSafari18,
+	"chrome-143-android": AndroidChrome143,
+	"chrome-144-android": AndroidChrome144,
 
 	// -latest aliases (always point to the newest version)
 	"chrome-latest":         Chrome144,
@@ -1073,6 +1073,17 @@ var presets = map[string]func() *Preset{
 	"chrome-latest-macos":   Chrome144macOS,
 	"firefox-latest":        Firefox133,
 	"safari-latest":         Safari18,
+	"chrome-latest-ios":     IOSChrome144,
+	"safari-latest-ios":     IOSSafari18,
+	"chrome-latest-android": AndroidChrome144,
+
+	// Backwards compatibility aliases (old naming convention)
+	"ios-chrome-143":        IOSChrome143,
+	"ios-chrome-144":        IOSChrome144,
+	"ios-safari-17":         IOSSafari17,
+	"ios-safari-18":         IOSSafari18,
+	"android-chrome-143":    AndroidChrome143,
+	"android-chrome-144":    AndroidChrome144,
 	"ios-chrome-latest":     IOSChrome144,
 	"ios-safari-latest":     IOSSafari18,
 	"android-chrome-latest": AndroidChrome144,

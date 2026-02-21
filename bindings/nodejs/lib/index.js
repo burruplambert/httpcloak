@@ -44,18 +44,26 @@ const Preset = {
   CHROME_133: "chrome-133",
 
   // Mobile Chrome
-  IOS_CHROME_143: "ios-chrome-143",
-  IOS_CHROME_144: "ios-chrome-144",
-  ANDROID_CHROME_143: "android-chrome-143",
-  ANDROID_CHROME_144: "android-chrome-144",
+  CHROME_143_IOS: "chrome-143-ios",
+  CHROME_144_IOS: "chrome-144-ios",
+  CHROME_143_ANDROID: "chrome-143-android",
+  CHROME_144_ANDROID: "chrome-144-android",
 
   // Firefox
   FIREFOX_133: "firefox-133",
 
   // Safari (desktop and mobile)
   SAFARI_18: "safari-18",
-  IOS_SAFARI_17: "ios-safari-17",
-  IOS_SAFARI_18: "ios-safari-18",
+  SAFARI_17_IOS: "safari-17-ios",
+  SAFARI_18_IOS: "safari-18-ios",
+
+  // Backwards compatibility aliases (old naming convention)
+  IOS_CHROME_143: "chrome-143-ios",
+  IOS_CHROME_144: "chrome-144-ios",
+  ANDROID_CHROME_143: "chrome-143-android",
+  ANDROID_CHROME_144: "chrome-144-android",
+  IOS_SAFARI_17: "safari-17-ios",
+  IOS_SAFARI_18: "safari-18-ios",
 
   /**
    * Get all available preset names
@@ -66,9 +74,9 @@ const Preset = {
       this.CHROME_144, this.CHROME_144_WINDOWS, this.CHROME_144_LINUX, this.CHROME_144_MACOS,
       this.CHROME_143, this.CHROME_143_WINDOWS, this.CHROME_143_LINUX, this.CHROME_143_MACOS,
       this.CHROME_141, this.CHROME_133,
-      this.IOS_CHROME_143, this.IOS_CHROME_144, this.ANDROID_CHROME_143, this.ANDROID_CHROME_144,
+      this.CHROME_143_IOS, this.CHROME_144_IOS, this.CHROME_143_ANDROID, this.CHROME_144_ANDROID,
       this.FIREFOX_133,
-      this.SAFARI_18, this.IOS_SAFARI_17, this.IOS_SAFARI_18,
+      this.SAFARI_18, this.SAFARI_17_IOS, this.SAFARI_18_IOS,
     ];
   },
 };

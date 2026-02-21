@@ -135,9 +135,9 @@ class Preset:
         Desktop Chrome: CHROME_144, CHROME_144_WINDOWS, CHROME_144_LINUX, CHROME_144_MACOS
                         CHROME_143, CHROME_143_WINDOWS, CHROME_143_LINUX, CHROME_143_MACOS
                         CHROME_141, CHROME_133
-        Mobile Chrome: IOS_CHROME_143, IOS_CHROME_144, ANDROID_CHROME_143, ANDROID_CHROME_144
+        Mobile Chrome: CHROME_143_IOS, CHROME_144_IOS, CHROME_143_ANDROID, CHROME_144_ANDROID
         Firefox: FIREFOX_133
-        Safari: SAFARI_18, IOS_SAFARI_17, IOS_SAFARI_18
+        Safari: SAFARI_18, SAFARI_17_IOS, SAFARI_18_IOS
     """
     # Chrome 144 (latest)
     CHROME_144 = "chrome-144"
@@ -158,18 +158,26 @@ class Preset:
     CHROME_133 = "chrome-133"
 
     # Mobile Chrome
-    IOS_CHROME_143 = "ios-chrome-143"
-    IOS_CHROME_144 = "ios-chrome-144"
-    ANDROID_CHROME_143 = "android-chrome-143"
-    ANDROID_CHROME_144 = "android-chrome-144"
+    CHROME_143_IOS = "chrome-143-ios"
+    CHROME_144_IOS = "chrome-144-ios"
+    CHROME_143_ANDROID = "chrome-143-android"
+    CHROME_144_ANDROID = "chrome-144-android"
 
     # Firefox
     FIREFOX_133 = "firefox-133"
 
     # Safari (desktop and mobile)
     SAFARI_18 = "safari-18"
-    IOS_SAFARI_17 = "ios-safari-17"
-    IOS_SAFARI_18 = "ios-safari-18"
+    SAFARI_17_IOS = "safari-17-ios"
+    SAFARI_18_IOS = "safari-18-ios"
+
+    # Backwards compatibility aliases (old naming convention)
+    IOS_CHROME_143 = CHROME_143_IOS
+    IOS_CHROME_144 = CHROME_144_IOS
+    ANDROID_CHROME_143 = CHROME_143_ANDROID
+    ANDROID_CHROME_144 = CHROME_144_ANDROID
+    IOS_SAFARI_17 = SAFARI_17_IOS
+    IOS_SAFARI_18 = SAFARI_18_IOS
 
     @classmethod
     def all(cls) -> List[str]:
@@ -178,9 +186,9 @@ class Preset:
             cls.CHROME_144, cls.CHROME_144_WINDOWS, cls.CHROME_144_LINUX, cls.CHROME_144_MACOS,
             cls.CHROME_143, cls.CHROME_143_WINDOWS, cls.CHROME_143_LINUX, cls.CHROME_143_MACOS,
             cls.CHROME_141, cls.CHROME_133,
-            cls.IOS_CHROME_143, cls.IOS_CHROME_144, cls.ANDROID_CHROME_143, cls.ANDROID_CHROME_144,
+            cls.CHROME_143_IOS, cls.CHROME_144_IOS, cls.CHROME_143_ANDROID, cls.CHROME_144_ANDROID,
             cls.FIREFOX_133,
-            cls.SAFARI_18, cls.IOS_SAFARI_17, cls.IOS_SAFARI_18,
+            cls.SAFARI_18, cls.SAFARI_17_IOS, cls.SAFARI_18_IOS,
         ]
 
 

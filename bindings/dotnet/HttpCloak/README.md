@@ -61,8 +61,8 @@ using var session = new Session(
 - `Presets.Chrome143MacOS` - Chrome 143 on macOS
 - `Presets.Firefox133` - Firefox 133
 - `Presets.Safari18` - Safari 18
-- `Presets.IosChrome143` - Chrome on iOS
-- `Presets.AndroidChrome143` - Chrome on Android
+- `Presets.Chrome143Ios` - Chrome on iOS
+- `Presets.Chrome143Android` - Chrome on Android
 
 ## Cookie Management
 

@@ -934,11 +934,11 @@ response.Protocol
 | `chrome-143-linux` | Linux | ✅ | ✅ |
 | `firefox-133` | Auto | ❌ | ❌ |
 | `safari-18` | macOS | ❌ | ✅ |
-| `ios-safari-18` | iOS | ❌ | ✅ |
-| `android-chrome-144` | Android | ✅ | ✅ |
-| `android-chrome-143` | Android | ✅ | ✅ |
-| `ios-chrome-144` | iOS | ✅ | ✅ |
-| `ios-chrome-143` | iOS | ✅ | ✅ |
+| `safari-18-ios` | iOS | ❌ | ✅ |
+| `chrome-144-android` | Android | ✅ | ✅ |
+| `chrome-143-android` | Android | ✅ | ✅ |
+| `chrome-144-ios` | iOS | ✅ | ✅ |
+| `chrome-143-ios` | iOS | ✅ | ✅ |
 
 **PQ** = Post-Quantum (X25519MLKEM768) · **H3** = HTTP/3
 
