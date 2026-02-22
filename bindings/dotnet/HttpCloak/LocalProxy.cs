@@ -33,7 +33,7 @@ public sealed class LocalProxy : IDisposable
     /// Creates and starts a local HTTP proxy with the specified configuration.
     /// </summary>
     /// <param name="port">Port to listen on (0 = auto-select)</param>
-    /// <param name="preset">Browser fingerprint preset (default: chrome-144)</param>
+    /// <param name="preset">Browser fingerprint preset (default: chrome-145)</param>
     /// <param name="timeout">Request timeout in seconds (default: 30)</param>
     /// <param name="maxConnections">Maximum concurrent connections (default: 1000)</param>
     /// <param name="tcpProxy">Upstream TCP proxy URL (optional)</param>

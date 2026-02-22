@@ -104,7 +104,7 @@ type LocalProxyConfig struct {
 	// Port to listen on (0 = auto-select)
 	Port int
 
-	// Browser fingerprint preset (default: chrome-143)
+	// Browser fingerprint preset (default: chrome-145)
 	Preset string
 
 	// Request timeout

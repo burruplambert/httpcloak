@@ -29,16 +29,16 @@ firefox-133
 safari-18
 
 // iOS (WebKit-based)
-ios-safari-18
-ios-safari-17
-ios-chrome-145
-ios-chrome-144
-ios-chrome-143
+safari-18-ios
+safari-17-ios
+chrome-145-ios
+chrome-144-ios
+chrome-143-ios
 
 // Android
-android-chrome-145
-android-chrome-144
-android-chrome-143
+chrome-145-android
+chrome-144-android
+chrome-143-android
 ```
 
 ## Default Preset

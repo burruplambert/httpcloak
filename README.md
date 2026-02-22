@@ -281,10 +281,10 @@ session = httpcloak.Session(proxy="masque://proxy:443")
 
 Known MASQUE providers (auto-detected): Bright Data, Oxylabs, Smartproxy, SOAX.
 
-**Speculative TLS** (enabled by default): CONNECT + TLS ClientHello are sent together, saving one proxy round-trip (~25% faster). Disable if you experience issues with certain proxies:
+**Speculative TLS** (opt-in): CONNECT + TLS ClientHello are sent together, saving one proxy round-trip (~25% faster). Enable for compatible proxies:
 
 ```python
-session = httpcloak.Session(proxy="socks5://...", disable_speculative_tls=True)
+session = httpcloak.Session(proxy="socks5://...", enable_speculative_tls=True)
 ```
 
 ### 🎭 Domain Fronting
@@ -938,13 +938,18 @@ response.Protocol
 | `chrome-143-windows` | Windows | ✅ | ✅ |
 | `chrome-143-macos` | macOS | ✅ | ✅ |
 | `chrome-143-linux` | Linux | ✅ | ✅ |
+| `chrome-141` | Auto | ✅ | ❌ |
+| `chrome-133` | Auto | ✅ | ❌ |
 | `firefox-133` | Auto | ❌ | ❌ |
 | `safari-18` | macOS | ❌ | ✅ |
 | `safari-18-ios` | iOS | ❌ | ✅ |
-| `chrome-144-android` | Android | ✅ | ✅ |
-| `chrome-143-android` | Android | ✅ | ✅ |
+| `safari-17-ios` | iOS | ❌ | ❌ |
+| `chrome-145-ios` | iOS | ✅ | ✅ |
 | `chrome-144-ios` | iOS | ✅ | ✅ |
 | `chrome-143-ios` | iOS | ✅ | ✅ |
+| `chrome-145-android` | Android | ✅ | ✅ |
+| `chrome-144-android` | Android | ✅ | ✅ |
+| `chrome-143-android` | Android | ✅ | ✅ |
 
 **PQ** = Post-Quantum (X25519MLKEM768) · **H3** = HTTP/3
 
