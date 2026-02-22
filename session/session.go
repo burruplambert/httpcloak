@@ -785,10 +785,12 @@ func (s *Session) getPlatform() platformInfo {
 	} else if contains(presetName, "chrome-141") {
 		info.FullVersionList = `"Google Chrome";v="141.0.7254.112", "Chromium";v="141.0.7254.112", "Not_A Brand";v="24.0.0.0"`
 	} else if contains(presetName, "chrome-143") {
-		info.FullVersionList = `"Google Chrome";v="143.0.7312.86", "Chromium";v="143.0.7312.86", "Not_A Brand";v="24.0.0.0"`
+		info.FullVersionList = `"Google Chrome";v="143.0.7312.86", "Chromium";v="143.0.7312.86", "Not A(Brand";v="24.0.0.0"`
+	} else if contains(presetName, "chrome-144") {
+		info.FullVersionList = `"Not(A:Brand";v="8.0.0.0", "Chromium";v="144.0.7559.132", "Google Chrome";v="144.0.7559.132"`
 	} else {
-		// Default Chrome version
-		info.FullVersionList = `"Google Chrome";v="131.0.6778.86", "Chromium";v="131.0.6778.86", "Not_A Brand";v="24.0.0.0"`
+		// Default: Chrome 145
+		info.FullVersionList = `"Not:A-Brand";v="99.0.0.0", "Google Chrome";v="145.0.7632.75", "Chromium";v="145.0.7632.75"`
 	}
 
 	// Adjust platform-specific values
@@ -1558,7 +1560,7 @@ func (s *Session) Marshal() ([]byte, error) {
 	config := s.Config
 	if config == nil {
 		config = &protocol.SessionConfig{
-			Preset: "chrome-131",
+			Preset: "chrome-145",
 		}
 	}
 
@@ -1651,7 +1653,7 @@ func UnmarshalSession(data []byte) (*Session, error) {
 	config := state.Config
 	if config == nil {
 		config = &protocol.SessionConfig{
-			Preset: "chrome-131",
+			Preset: "chrome-145",
 		}
 	}
 
@@ -1686,7 +1688,7 @@ func unmarshalSessionV4(data []byte) (*Session, error) {
 	config := state.Config
 	if config == nil {
 		config = &protocol.SessionConfig{
-			Preset: "chrome-131",
+			Preset: "chrome-145",
 		}
 	}
 

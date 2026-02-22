@@ -14,7 +14,7 @@ response, err := httpcloak.Get("https://example.com")
 
 // With session
 session := httpcloak.NewSession(httpcloak.SessionConfig{
-    Preset: "chrome-144",
+    Preset: "chrome-145",
 })
 defer session.Close()
 
@@ -31,7 +31,7 @@ func NewSession(id string, config *protocol.SessionConfig) *Session
 
 // With config
 session := httpcloak.NewSession(httpcloak.SessionConfig{
-    Preset:          "chrome-144",     // Browser fingerprint
+    Preset:          "chrome-145",     // Browser fingerprint
     Proxy:           "socks5://...",   // Proxy URL
     TCPProxy:        "http://...",     // TCP-only proxy
     UDPProxy:        "socks5://...",   // UDP-only proxy
@@ -212,12 +212,12 @@ func (t *Transport) Stats() map[string]interface{}
 func Get(name string) *Preset
 func Available() []string
 
-// Available presets (18 total)
+// Available presets (24 total)
 available := fingerprint.Available()
-// ["chrome-144", "chrome-144-windows", "chrome-144-linux", "chrome-144-macos",
-//  "chrome-143", "chrome-143-windows", ..., "firefox-133", "safari-18",
-//  "safari-18-ios", "safari-17-ios", "chrome-144-ios", "chrome-143-ios",
-//  "chrome-144-android", "chrome-143-android"]
+// ["chrome-145", "chrome-145-windows", "chrome-145-linux", "chrome-145-macos",
+//  "chrome-144", "chrome-144-windows", ..., "chrome-143", ..., "firefox-133", "safari-18",
+//  "safari-18-ios", "safari-17-ios", "chrome-145-ios", "chrome-144-ios", "chrome-143-ios",
+//  "chrome-145-android", "chrome-144-android", "chrome-143-android"]
 ```
 
 ### Session Manager
@@ -247,11 +247,11 @@ The `client` package provides a high-level HTTP client API with comprehensive co
 import "github.com/sardanioss/httpcloak/client"
 
 // Create client with default settings
-c := client.NewClient("chrome-144")
+c := client.NewClient("chrome-145")
 defer c.Close()
 
 // Create client with options
-c := client.NewClient("chrome-144",
+c := client.NewClient("chrome-145",
     client.WithTimeout(60*time.Second),
     client.WithProxy("socks5://proxy:1080"),
     client.WithTLSOnly(),
@@ -290,16 +290,16 @@ c := client.NewClient("chrome-144",
 
 ```go
 // Force HTTP/1.1 - useful for servers that don't support H2
-c := client.NewClient("chrome-144", client.WithForceHTTP1())
+c := client.NewClient("chrome-145", client.WithForceHTTP1())
 
 // Force HTTP/2 - no H3 or H1 fallback
-c := client.NewClient("chrome-144", client.WithForceHTTP2())
+c := client.NewClient("chrome-145", client.WithForceHTTP2())
 
 // Force HTTP/3 - QUIC only (requires SOCKS5 or MASQUE proxy if using proxy)
-c := client.NewClient("chrome-144", client.WithForceHTTP3())
+c := client.NewClient("chrome-145", client.WithForceHTTP3())
 
 // Disable H3 but allow H2 with H1 fallback
-c := client.NewClient("chrome-144", client.WithDisableHTTP3())
+c := client.NewClient("chrome-145", client.WithDisableHTTP3())
 ```
 
 #### Local Address Binding (IPv6 Rotation)
@@ -307,10 +307,10 @@ c := client.NewClient("chrome-144", client.WithDisableHTTP3())
 ```go
 // Bind outgoing connections to a specific local IP address
 // Useful for IPv6 rotation when you have a large IPv6 prefix
-c := client.NewClient("chrome-144", client.WithLocalAddress("2001:db8::1"))
+c := client.NewClient("chrome-145", client.WithLocalAddress("2001:db8::1"))
 
 // IPv4 also supported
-c := client.NewClient("chrome-144", client.WithLocalAddress("192.168.1.100"))
+c := client.NewClient("chrome-145", client.WithLocalAddress("192.168.1.100"))
 
 // Works with all protocols: HTTP/1.1, HTTP/2, and HTTP/3
 // If local address is IPv6, only IPv6 targets are dialed (and vice versa)
@@ -321,7 +321,7 @@ c := client.NewClient("chrome-144", client.WithLocalAddress("192.168.1.100"))
 
 ```go
 // Write TLS keys to file for Wireshark decryption
-c := client.NewClient("chrome-144", client.WithKeyLogFile("/tmp/keys.log"))
+c := client.NewClient("chrome-145", client.WithKeyLogFile("/tmp/keys.log"))
 
 // Or use SSLKEYLOGFILE environment variable (global)
 // export SSLKEYLOGFILE=/tmp/keys.log
@@ -335,7 +335,7 @@ c := client.NewClient("chrome-144", client.WithKeyLogFile("/tmp/keys.log"))
 
 ```go
 // TLS-only mode: use TLS fingerprint but you control all HTTP headers
-c := client.NewClient("chrome-144", client.WithTLSOnly())
+c := client.NewClient("chrome-145", client.WithTLSOnly())
 
 // Make request with your own headers
 resp, err := c.Do(ctx, &client.Request{
@@ -521,7 +521,7 @@ func (r *RedisCache) Put(ctx context.Context, key string, session *transport.TLS
 // ... implement Delete, GetECHConfig, PutECHConfig similarly
 
 // Usage
-session := httpcloak.NewSession("chrome-144",
+session := httpcloak.NewSession("chrome-145",
     httpcloak.WithSessionCache(redisCache, func(op, key string, err error) {
         log.Printf("Cache error: %s on %s: %v", op, key, err)
     }),
@@ -532,7 +532,7 @@ session := httpcloak.NewSession("chrome-144",
 
 ```go
 proxy, err := httpcloak.StartLocalProxy(0,
-    httpcloak.WithProxyPreset("chrome-144"),
+    httpcloak.WithProxyPreset("chrome-145"),
     httpcloak.WithProxySessionCache(redisCache, errorCallback),
 )
 ```
@@ -557,7 +557,7 @@ func StartLocalProxy(port int, opts ...LocalProxyOption) (*LocalProxy, error)
 
 // Example
 proxy, err := httpcloak.StartLocalProxy(0,  // 0 = auto-select port
-    httpcloak.WithProxyPreset("chrome-144"),
+    httpcloak.WithProxyPreset("chrome-145"),
     httpcloak.WithProxyTimeout(30 * time.Second),
     httpcloak.WithProxyMaxConnections(1000),
 )
@@ -609,7 +609,7 @@ func (p *LocalProxy) GetSession(sessionID string) *Session
 func (p *LocalProxy) ListSessions() []string
 
 // Example usage:
-session1 := httpcloak.NewSession("chrome-144", httpcloak.WithSessionProxy("socks5://proxy1:1080"))
+session1 := httpcloak.NewSession("chrome-145", httpcloak.WithSessionProxy("socks5://proxy1:1080"))
 session2 := httpcloak.NewSession("firefox-133", httpcloak.WithSessionProxy("socks5://proxy2:1080"))
 
 proxy.RegisterSession("session-1", session1)
@@ -664,7 +664,7 @@ pip install httpcloak
 ```python
 from httpcloak import Session
 
-session = Session(preset="chrome-144")
+session = Session(preset="chrome-145")
 response = session.get("https://example.com")
 
 print(response.status_code)  # 200
@@ -677,7 +677,7 @@ print(response.text)         # HTML content
 ```python
 # Create session
 session = Session(
-    preset="chrome-144",      # Browser fingerprint
+    preset="chrome-145",      # Browser fingerprint
     proxy=None,               # Proxy URL
     timeout=30,               # Timeout in seconds
     tls_only=False,           # TLS-only mode (skip preset HTTP headers)
@@ -741,7 +741,7 @@ configure_session_cache(
 )
 
 # Now all sessions will use Redis for TLS session storage
-session = Session(preset="chrome-144")
+session = Session(preset="chrome-145")
 session.get("https://example.com")  # Session cached!
 
 # Clear cache backend
@@ -785,7 +785,7 @@ import asyncio
 from httpcloak import AsyncSession
 
 async def main():
-    async with AsyncSession(preset="chrome-144") as session:
+    async with AsyncSession(preset="chrome-145") as session:
         response = await session.get("https://example.com")
         print(response.text)
 
@@ -798,7 +798,7 @@ asyncio.run(main())
 from httpcloak import available_presets
 
 print(available_presets())
-# ['chrome-144', 'chrome-144-windows', ..., 'safari-18', 'ios-safari-18', ...]
+# ['chrome-145', 'chrome-145-windows', ..., 'safari-18', 'ios-safari-18', ...]
 ```
 
 ---
@@ -816,7 +816,7 @@ npm install httpcloak
 ```javascript
 const { Session } = require("httpcloak");
 
-const session = new Session({ preset: "chrome-144" });
+const session = new Session({ preset: "chrome-145" });
 
 const response = await session.get("https://example.com");
 console.log(response.statusCode);  // 200
@@ -831,7 +831,7 @@ session.close();
 ```javascript
 // Create session
 const session = new Session({
-    preset: "chrome-144",    // Browser fingerprint
+    preset: "chrome-145",    // Browser fingerprint
     proxy: null,             // Proxy URL
     timeout: 30,             // Timeout in seconds
     tlsOnly: false,          // TLS-only mode (skip preset HTTP headers)
@@ -902,7 +902,7 @@ configureSessionCache({
 });
 
 // Now all sessions will use Redis for TLS session storage
-const session = new Session({ preset: 'chrome-144' });
+const session = new Session({ preset: 'chrome-145' });
 await session.get('https://example.com');  // Session cached!
 
 // Clear cache backend
@@ -972,7 +972,7 @@ char* httpcloak_session_set_header_order(int64_t handle, char* order_json);
 
 // Local Proxy
 int64_t httpcloak_local_proxy_start(char* config_json);
-// config_json: {"port": 0, "preset": "chrome-144", "timeout": 30, "maxConnections": 1000}
+// config_json: {"port": 0, "preset": "chrome-145", "timeout": 30, "maxConnections": 1000}
 // Returns: handle (>0 success, <=0 error)
 
 void httpcloak_local_proxy_stop(int64_t handle);
@@ -1018,7 +1018,7 @@ char* available_presets();
 ```csharp
 using HttpCloak;
 
-var session = new Session(preset: "chrome-144");
+var session = new Session(preset: "chrome-145");
 var response = session.Get("https://example.com");
 
 Console.WriteLine(response.StatusCode);
@@ -1033,7 +1033,7 @@ session.Dispose();
 ```csharp
 // Constructor with all options
 var session = new Session(
-    preset: "chrome-144",      // Browser fingerprint
+    preset: "chrome-145",      // Browser fingerprint
     proxy: null,               // Proxy URL
     timeout: 30,               // Timeout in seconds
     tlsOnly: false,            // TLS-only mode (skip preset HTTP headers)
@@ -1079,7 +1079,7 @@ using HttpCloak;
 // Create and start a local proxy
 using var proxy = new LocalProxy(
     port: 0,              // 0 = auto-select available port
-    preset: "chrome-144", // Browser fingerprint
+    preset: "chrome-145", // Browser fingerprint
     timeout: 30,          // Request timeout in seconds
     maxConnections: 1000  // Max concurrent connections
     // tcpProxy: "socks5://user:pass@proxy.example.com:1080"  // Optional upstream proxy
@@ -1112,7 +1112,7 @@ Console.WriteLine($"Active connections: {stats.ActiveConnections}");
 // Constructor
 public LocalProxy(
     int port = 0,              // Port (0 = auto-select)
-    string preset = "chrome-144",
+    string preset = "chrome-145",
     int timeout = 30,          // Seconds
     int maxConnections = 1000,
     string? tcpProxy = null,   // Upstream TCP proxy
@@ -1136,7 +1136,7 @@ void RegisterSession(string sessionId, Session session)  // Register session wit
 bool UnregisterSession(string sessionId)                 // Unregister session, returns true if found
 
 // Example: Session Registry usage
-var session1 = new Session(preset: "chrome-144");
+var session1 = new Session(preset: "chrome-145");
 var session2 = new Session(preset: "firefox-134");
 
 proxy.RegisterSession("user-1", session1);
@@ -1166,14 +1166,14 @@ public class LocalProxyStats
 using HttpCloak;
 
 // Basic usage
-using var handler = new HttpCloakHandler(preset: "chrome-144");
+using var handler = new HttpCloakHandler(preset: "chrome-145");
 using var client = new HttpClient(handler);
 
 var response = await client.GetAsync("https://example.com");
 
 // With configuration
 using var handler = new HttpCloakHandler(
-    preset: "chrome-144",           // Browser fingerprint
+    preset: "chrome-145",           // Browser fingerprint
     proxy: "socks5://proxy:1080",   // Upstream proxy
     tcpProxy: null,                 // TCP-only proxy (H1/H2)
     udpProxy: null,                 // UDP-only proxy (H3)
@@ -1185,7 +1185,7 @@ using var handler = new HttpCloakHandler(
 handler.Proxy.GetStats();
 
 // Create from existing LocalProxy (shared)
-using var proxy = new LocalProxy(preset: "chrome-144");
+using var proxy = new LocalProxy(preset: "chrome-145");
 using var handler1 = new HttpCloakHandler(proxy);  // Doesn't own proxy
 using var handler2 = new HttpCloakHandler(proxy);  // Both share same proxy
 

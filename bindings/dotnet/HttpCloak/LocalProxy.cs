@@ -11,7 +11,7 @@ namespace HttpCloak;
 /// <example>
 /// <code>
 /// // Start local proxy
-/// using var proxy = new LocalProxy(preset: "chrome-143");
+/// using var proxy = new LocalProxy(preset: "chrome-145");
 ///
 /// // Configure HttpClient to use the proxy
 /// var handler = new HttpClientHandler
@@ -41,7 +41,7 @@ public sealed class LocalProxy : IDisposable
     /// <param name="tlsOnly">TLS-only mode: skip preset HTTP headers, only apply TLS fingerprint (default: false)</param>
     public LocalProxy(
         int port = 0,
-        string preset = "chrome-144",
+        string preset = "chrome-145",
         int timeout = 30,
         int maxConnections = 1000,
         string? tcpProxy = null,
@@ -169,8 +169,8 @@ public sealed class LocalProxy : IDisposable
     /// <exception cref="HttpCloakException">If sessionId already exists</exception>
     /// <example>
     /// <code>
-    /// var proxy = new LocalProxy(preset: "chrome-143");
-    /// var session1 = new Session(preset: "chrome-143");
+    /// var proxy = new LocalProxy(preset: "chrome-145");
+    /// var session1 = new Session(preset: "chrome-145");
     /// var session2 = new Session(preset: "firefox-133");
     ///
     /// proxy.RegisterSession("user-1", session1);
@@ -250,7 +250,7 @@ internal class LocalProxyConfig
     public int Port { get; set; }
 
     [JsonPropertyName("preset")]
-    public string Preset { get; set; } = "chrome-144";
+    public string Preset { get; set; } = "chrome-145";
 
     [JsonPropertyName("timeout")]
     public int Timeout { get; set; } = 30;

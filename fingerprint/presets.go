@@ -136,7 +136,7 @@ func Chrome133() *Preset {
 	}
 }
 
-// Chrome141 returns the Chrome 141 fingerprint preset (latest)
+// Chrome141 returns the Chrome 141 fingerprint preset
 func Chrome141() *Preset {
 	p := GetPlatformInfo()
 	return &Preset{

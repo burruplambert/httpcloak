@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0-beta.14] - 2026-02-22
+
+### Added
+
+- **Chrome 145 presets** — Added `chrome-145`, `chrome-145-windows`, `chrome-145-linux`, `chrome-145-macos`, `chrome-145-ios`, `chrome-145-android` browser presets with updated TLS fingerprints and HTTP/2/H3 settings.
+
+### Changed
+
+- Default preset updated from `chrome-144` to `chrome-145`
+- Total available presets increased from 18 to 24
+
 ## [1.6.0-beta.13] - 2026-02-15
 
 ### Added
@@ -84,5 +95,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Baseline release. This changelog begins tracking changes from this version forward.
 
+[1.6.0-beta.14]: https://github.com/sardanioss/httpcloak/compare/v1.6.0-beta.13...v1.6.0-beta.14
 [1.6.0-beta.13]: https://github.com/sardanioss/httpcloak/compare/v1.5.10...v1.6.0-beta.13
 [1.5.10]: https://github.com/sardanioss/httpcloak/releases/tag/v1.5.10

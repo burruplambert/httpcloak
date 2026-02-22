@@ -25,7 +25,7 @@ func main() {
 	fmt.Println("httpcloak - High-Performance Downloads")
 	fmt.Println(strings.Repeat("=", 70))
 
-	session := httpcloak.NewSession("chrome-131")
+	session := httpcloak.NewSession("chrome-145")
 	defer session.Close()
 
 	// =========================================================================

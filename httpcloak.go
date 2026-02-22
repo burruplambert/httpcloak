@@ -5,7 +5,7 @@
 //
 // Basic usage:
 //
-//	client := httpcloak.New("chrome-131")
+//	client := httpcloak.New("chrome-145")
 //	defer client.Close()
 //
 //	resp, err := client.Get(ctx, "https://example.com")
@@ -16,7 +16,7 @@
 //
 // With options:
 //
-//	client := httpcloak.New("chrome-131",
+//	client := httpcloak.New("chrome-145",
 //	    httpcloak.WithTimeout(30*time.Second),
 //	    httpcloak.WithProxy("http://user:pass@proxy:8080"),
 //	)
