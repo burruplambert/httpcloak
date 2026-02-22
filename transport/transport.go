@@ -1671,6 +1671,11 @@ func (t *Transport) GetHTTP3Transport() *HTTP3Transport {
 	return t.h3Transport
 }
 
+// GetConfig returns the transport's configuration.
+func (t *Transport) GetConfig() *TransportConfig {
+	return t.config
+}
+
 // SetSessionIdentifier sets a session identifier on all TLS session caches.
 // This is used to isolate TLS sessions when the same host is accessed through
 // different proxies or with different session configurations.
