@@ -10,11 +10,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Chrome 145 presets** — Added `chrome-145`, `chrome-145-windows`, `chrome-145-linux`, `chrome-145-macos`, `chrome-145-ios`, `chrome-145-android` browser presets with updated TLS fingerprints and HTTP/2/H3 settings.
+- **Custom JA3 fingerprinting** — Override the preset's TLS fingerprint with a custom JA3 string. Supports all 25+ known TLS extensions, GREASE filtering, and automatic defaults for unspecified fields. Available via `WithCustomFingerprint` in Go and `ja3` option in all bindings (Python, Node.js, .NET, clib).
+- **Custom Akamai HTTP/2 fingerprinting** — Override the preset's HTTP/2 SETTINGS, WINDOW_UPDATE, PRIORITY, and pseudo-header order with an Akamai fingerprint string. Available via `WithCustomFingerprint` in Go and `akamai` option in all bindings.
+- **Extra fingerprint options** — Fine-tune TLS extensions beyond what JA3 captures: `tls_signature_algorithms`, `tls_alpn`, `tls_cert_compression`, `tls_permute_extensions`. Available via `extra_fp` dict in bindings or `CustomFingerprint` struct fields in Go.
+- **JA3 parser** (`fingerprint/ja3.go`) — Converts JA3 strings to uTLS `ClientHelloSpec` with extension ID to `TLSExtension` mapping for 25+ known extensions, GREASE handling, and Chrome-like defaults for signature algorithms, ALPN, and cert compression.
+- **Akamai parser** (`fingerprint/akamai.go`) — Converts Akamai HTTP/2 fingerprint strings to `HTTP2Settings` + pseudo-header order.
+- **JA3/Akamai unit tests** — 29 unit tests covering Chrome/Firefox/Safari fingerprints, malformed input, GREASE filtering, extension type verification, defaults merging, and edge cases.
+- **E2E fingerprint tests** — 4 E2E tests against `tls.peet.ws` verifying JA3 match, Akamai match, preset sanity, and cross-session reproducibility.
 
 ### Changed
 
 - Default preset updated from `chrome-144` to `chrome-145`
 - Total available presets increased from 18 to 24
+- TLS-only mode is automatically enabled when a custom JA3 fingerprint is set (preset HTTP headers are skipped)
+- Extension 50 (`signature_algorithms_cert`) now uses a broader Chrome-like list including `PKCS1WithSHA1` for legacy certificate chain verification
+- Extension 51 (`key_share`) now generates a key share only for the first preferred curve, matching real browser behavior (previously generated for all curves, which was a detectable fingerprint signal)
+
+### Fixed
+
+- Fix `DoStream` missing `configErr` check — invalid Akamai fingerprint errors were silently ignored for streaming requests
+- Fix H1 speculative TLS fallback unconditionally setting session cache — could cause handshake failures with custom JA3 specs that lack PSK extension
+- Fix `ParseJA3` mutating caller's `*JA3Extras` struct when filling in defaults — now makes a shallow copy
+- Fix `SetProxy()` and `SetPreset()` silently dropping custom fingerprint config — recreated transports with nil config, losing `CustomJA3`, `CustomH2Settings`, speculative TLS, key log writer, and other settings
+- Fix `Fork()` dropping custom fingerprint settings — forked sessions now copy the parent's transport config (including custom JA3, H2 settings, pseudo-header order)
+- Fix clib `extra_fp` silently ignored when neither `ja3` nor `akamai` is set — `tls_permute_extensions` and other extra options now work standalone
 
 ## [1.6.0-beta.13] - 2026-02-15
 
