@@ -257,9 +257,9 @@ public sealed class Session : IDisposable
     /// <summary>
     /// Add query parameters to URL, preserving insertion order and using standard percent-encoding.
     /// </summary>
-    private static string AddParamsToUrl(string url, Dictionary<string, string>? parameters)
+    private static string AddParamsToUrl(string url, IEnumerable<KeyValuePair<string, string>>? parameters)
     {
-        if (parameters == null || parameters.Count == 0)
+        if (parameters == null || !parameters.Any())
             return url;
 
         var sb = new System.Text.StringBuilder(url);
@@ -329,7 +329,7 @@ public sealed class Session : IDisposable
     /// <param name="cookies">Cookies to send with this request</param>
     /// <param name="auth">Basic auth (username, password). If null, uses session Auth.</param>
     /// <param name="timeout">Request timeout in seconds</param>
-    public Response Get(string url, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
+    public Response Get(string url, Dictionary<string, string>? headers = null, IEnumerable<KeyValuePair<string, string>>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
     {
         ThrowIfDisposed();
 
@@ -362,7 +362,7 @@ public sealed class Session : IDisposable
     /// <param name="cookies">Cookies to send with this request</param>
     /// <param name="auth">Basic auth (username, password). If null, uses session Auth.</param>
     /// <param name="timeout">Request timeout in seconds</param>
-    public Response Post(string url, string? body = null, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
+    public Response Post(string url, string? body = null, Dictionary<string, string>? headers = null, IEnumerable<KeyValuePair<string, string>>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
     {
         ThrowIfDisposed();
 
@@ -396,7 +396,7 @@ public sealed class Session : IDisposable
     /// <param name="cookies">Cookies to send with this request</param>
     /// <param name="auth">Basic auth (username, password). If null, uses session Auth.</param>
     /// <param name="timeout">Request timeout in seconds</param>
-    public Response PostJson<T>(string url, T data, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
+    public Response PostJson<T>(string url, T data, Dictionary<string, string>? headers = null, IEnumerable<KeyValuePair<string, string>>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
     {
         headers ??= new Dictionary<string, string>();
         if (!headers.ContainsKey("Content-Type"))
@@ -416,7 +416,7 @@ public sealed class Session : IDisposable
     /// <param name="cookies">Cookies to send with this request</param>
     /// <param name="auth">Basic auth (username, password). If null, uses session Auth.</param>
     /// <param name="timeout">Request timeout in seconds</param>
-    public Response PostForm(string url, Dictionary<string, string> formData, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
+    public Response PostForm(string url, Dictionary<string, string> formData, Dictionary<string, string>? headers = null, IEnumerable<KeyValuePair<string, string>>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
     {
         headers ??= new Dictionary<string, string>();
         if (!headers.ContainsKey("Content-Type"))
@@ -437,7 +437,7 @@ public sealed class Session : IDisposable
     /// <param name="auth">Basic auth (username, password). If null, uses session Auth.</param>
     /// <param name="parameters">Query parameters</param>
     /// <param name="cookies">Cookies to send with this request</param>
-    public Response Request(string method, string url, string? body = null, Dictionary<string, string>? headers = null, int? timeout = null, (string, string)? auth = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null)
+    public Response Request(string method, string url, string? body = null, Dictionary<string, string>? headers = null, int? timeout = null, (string, string)? auth = null, IEnumerable<KeyValuePair<string, string>>? parameters = null, Dictionary<string, string>? cookies = null)
     {
         ThrowIfDisposed();
 
@@ -474,13 +474,13 @@ public sealed class Session : IDisposable
     /// <param name="cookies">Cookies to send with this request</param>
     /// <param name="auth">Basic auth (username, password). If null, uses session Auth.</param>
     /// <param name="timeout">Request timeout in seconds</param>
-    public Response Put(string url, string? body = null, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
+    public Response Put(string url, string? body = null, Dictionary<string, string>? headers = null, IEnumerable<KeyValuePair<string, string>>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
         => Request("PUT", url, body, headers, timeout, auth, parameters, cookies);
 
     /// <summary>
     /// Perform a PUT request with JSON body.
     /// </summary>
-    public Response PutJson<T>(string url, T data, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
+    public Response PutJson<T>(string url, T data, Dictionary<string, string>? headers = null, IEnumerable<KeyValuePair<string, string>>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
     {
         headers ??= new Dictionary<string, string>();
         if (!headers.ContainsKey("Content-Type"))
@@ -499,7 +499,7 @@ public sealed class Session : IDisposable
     /// <param name="cookies">Cookies to send with this request</param>
     /// <param name="auth">Basic auth (username, password). If null, uses session Auth.</param>
     /// <param name="timeout">Request timeout in seconds</param>
-    public Response Delete(string url, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
+    public Response Delete(string url, Dictionary<string, string>? headers = null, IEnumerable<KeyValuePair<string, string>>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
         => Request("DELETE", url, null, headers, timeout, auth, parameters, cookies);
 
     /// <summary>
@@ -512,13 +512,13 @@ public sealed class Session : IDisposable
     /// <param name="cookies">Cookies to send with this request</param>
     /// <param name="auth">Basic auth (username, password). If null, uses session Auth.</param>
     /// <param name="timeout">Request timeout in seconds</param>
-    public Response Patch(string url, string? body = null, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
+    public Response Patch(string url, string? body = null, Dictionary<string, string>? headers = null, IEnumerable<KeyValuePair<string, string>>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
         => Request("PATCH", url, body, headers, timeout, auth, parameters, cookies);
 
     /// <summary>
     /// Perform a PATCH request with JSON body.
     /// </summary>
-    public Response PatchJson<T>(string url, T data, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
+    public Response PatchJson<T>(string url, T data, Dictionary<string, string>? headers = null, IEnumerable<KeyValuePair<string, string>>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
     {
         headers ??= new Dictionary<string, string>();
         if (!headers.ContainsKey("Content-Type"))
@@ -537,7 +537,7 @@ public sealed class Session : IDisposable
     /// <param name="cookies">Cookies to send with this request</param>
     /// <param name="auth">Basic auth (username, password). If null, uses session Auth.</param>
     /// <param name="timeout">Request timeout in seconds</param>
-    public Response Head(string url, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
+    public Response Head(string url, Dictionary<string, string>? headers = null, IEnumerable<KeyValuePair<string, string>>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
         => Request("HEAD", url, null, headers, timeout, auth, parameters, cookies);
 
     /// <summary>
@@ -549,7 +549,7 @@ public sealed class Session : IDisposable
     /// <param name="cookies">Cookies to send with this request</param>
     /// <param name="auth">Basic auth (username, password). If null, uses session Auth.</param>
     /// <param name="timeout">Request timeout in seconds</param>
-    public Response Options(string url, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
+    public Response Options(string url, Dictionary<string, string>? headers = null, IEnumerable<KeyValuePair<string, string>>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
         => Request("OPTIONS", url, null, headers, timeout, auth, parameters, cookies);
 
     // =========================================================================
@@ -566,19 +566,19 @@ public sealed class Session : IDisposable
     /// <param name="cookies">Cookies to send with this request</param>
     /// <param name="auth">Basic auth (username, password). If null, uses session Auth.</param>
     /// <param name="timeout">Request timeout in seconds</param>
-    public Response Post(string url, byte[] body, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
+    public Response Post(string url, byte[] body, Dictionary<string, string>? headers = null, IEnumerable<KeyValuePair<string, string>>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
         => RequestBinary("POST", url, body, headers, timeout, auth, parameters, cookies);
 
     /// <summary>
     /// Perform a PUT request with binary body.
     /// </summary>
-    public Response Put(string url, byte[] body, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
+    public Response Put(string url, byte[] body, Dictionary<string, string>? headers = null, IEnumerable<KeyValuePair<string, string>>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
         => RequestBinary("PUT", url, body, headers, timeout, auth, parameters, cookies);
 
     /// <summary>
     /// Perform a PATCH request with binary body.
     /// </summary>
-    public Response Patch(string url, byte[] body, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
+    public Response Patch(string url, byte[] body, Dictionary<string, string>? headers = null, IEnumerable<KeyValuePair<string, string>>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
         => RequestBinary("PATCH", url, body, headers, timeout, auth, parameters, cookies);
 
     /// <summary>
@@ -592,27 +592,27 @@ public sealed class Session : IDisposable
     /// <param name="cookies">Cookies to send with this request</param>
     /// <param name="auth">Basic auth (username, password). If null, uses session Auth.</param>
     /// <param name="timeout">Request timeout in seconds</param>
-    public Response Post(string url, Stream bodyStream, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
+    public Response Post(string url, Stream bodyStream, Dictionary<string, string>? headers = null, IEnumerable<KeyValuePair<string, string>>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
         => RequestStream("POST", url, bodyStream, headers, timeout, auth, parameters, cookies);
 
     /// <summary>
     /// Perform a PUT request with Stream body.
     /// Note: The entire stream is read into memory before sending.
     /// </summary>
-    public Response Put(string url, Stream bodyStream, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
+    public Response Put(string url, Stream bodyStream, Dictionary<string, string>? headers = null, IEnumerable<KeyValuePair<string, string>>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
         => RequestStream("PUT", url, bodyStream, headers, timeout, auth, parameters, cookies);
 
     /// <summary>
     /// Perform a PATCH request with Stream body.
     /// Note: The entire stream is read into memory before sending.
     /// </summary>
-    public Response Patch(string url, Stream bodyStream, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
+    public Response Patch(string url, Stream bodyStream, Dictionary<string, string>? headers = null, IEnumerable<KeyValuePair<string, string>>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
         => RequestStream("PATCH", url, bodyStream, headers, timeout, auth, parameters, cookies);
 
     /// <summary>
     /// Perform a custom HTTP request with binary body.
     /// </summary>
-    public Response RequestBinary(string method, string url, byte[] body, Dictionary<string, string>? headers = null, int? timeout = null, (string, string)? auth = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null)
+    public Response RequestBinary(string method, string url, byte[] body, Dictionary<string, string>? headers = null, int? timeout = null, (string, string)? auth = null, IEnumerable<KeyValuePair<string, string>>? parameters = null, Dictionary<string, string>? cookies = null)
     {
         ThrowIfDisposed();
 
@@ -643,7 +643,7 @@ public sealed class Session : IDisposable
     /// Perform a custom HTTP request with Stream body.
     /// Note: The entire stream is read into memory before sending.
     /// </summary>
-    public Response RequestStream(string method, string url, Stream bodyStream, Dictionary<string, string>? headers = null, int? timeout = null, (string, string)? auth = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null)
+    public Response RequestStream(string method, string url, Stream bodyStream, Dictionary<string, string>? headers = null, int? timeout = null, (string, string)? auth = null, IEnumerable<KeyValuePair<string, string>>? parameters = null, Dictionary<string, string>? cookies = null)
     {
         using var ms = new MemoryStream();
         bodyStream.CopyTo(ms);
@@ -663,7 +663,7 @@ public sealed class Session : IDisposable
     /// <param name="cookies">Cookies to send with this request</param>
     /// <param name="auth">Basic auth (username, password). If null, uses session Auth.</param>
     /// <param name="timeout">Request timeout in seconds</param>
-    public Task<Response> GetAsync(string url, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null, CancellationToken cancellationToken = default)
+    public Task<Response> GetAsync(string url, Dictionary<string, string>? headers = null, IEnumerable<KeyValuePair<string, string>>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null, CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
 
@@ -672,7 +672,7 @@ public sealed class Session : IDisposable
         headers = ApplyCookies(headers, cookies);
 
         if (timeout != null)
-            return RequestAsync("GET", url, null, headers, timeout, auth, parameters, cookies, cancellationToken);
+            return RequestAsync("GET", url, null, headers, timeout, null, null, null, cancellationToken);
 
         // Wrap headers in RequestOptions structure (Go expects {"headers": {...}, "timeout": ...})
         var options = new RequestOptions { Headers = headers.Count > 0 ? headers : null };
@@ -696,7 +696,7 @@ public sealed class Session : IDisposable
     /// <param name="cookies">Cookies to send with this request</param>
     /// <param name="auth">Basic auth (username, password). If null, uses session Auth.</param>
     /// <param name="timeout">Request timeout in seconds</param>
-    public Task<Response> PostAsync(string url, string? body = null, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null, CancellationToken cancellationToken = default)
+    public Task<Response> PostAsync(string url, string? body = null, Dictionary<string, string>? headers = null, IEnumerable<KeyValuePair<string, string>>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null, CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
 
@@ -706,7 +706,7 @@ public sealed class Session : IDisposable
         InferContentType(body, headers);
 
         if (timeout != null)
-            return RequestAsync("POST", url, body, headers, timeout, auth, parameters, cookies, cancellationToken);
+            return RequestAsync("POST", url, body, headers, timeout, null, null, null, cancellationToken);
 
         // Wrap headers in RequestOptions structure (Go expects {"headers": {...}, "timeout": ...})
         var options = new RequestOptions { Headers = headers.Count > 0 ? headers : null };
@@ -723,7 +723,7 @@ public sealed class Session : IDisposable
     /// <summary>
     /// Perform an async POST request with JSON body using native Go goroutines.
     /// </summary>
-    public Task<Response> PostJsonAsync<T>(string url, T data, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null, CancellationToken cancellationToken = default)
+    public Task<Response> PostJsonAsync<T>(string url, T data, Dictionary<string, string>? headers = null, IEnumerable<KeyValuePair<string, string>>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null, CancellationToken cancellationToken = default)
     {
         headers ??= new Dictionary<string, string>();
         if (!headers.ContainsKey("Content-Type"))
@@ -736,7 +736,7 @@ public sealed class Session : IDisposable
     /// <summary>
     /// Perform an async POST request with form data using native Go goroutines.
     /// </summary>
-    public Task<Response> PostFormAsync(string url, Dictionary<string, string> formData, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null, CancellationToken cancellationToken = default)
+    public Task<Response> PostFormAsync(string url, Dictionary<string, string> formData, Dictionary<string, string>? headers = null, IEnumerable<KeyValuePair<string, string>>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null, CancellationToken cancellationToken = default)
     {
         headers ??= new Dictionary<string, string>();
         if (!headers.ContainsKey("Content-Type"))
@@ -757,7 +757,7 @@ public sealed class Session : IDisposable
     /// <param name="auth">Basic auth (username, password). If null, uses session Auth.</param>
     /// <param name="parameters">Query parameters</param>
     /// <param name="cookies">Cookies to send with this request</param>
-    public Task<Response> RequestAsync(string method, string url, string? body = null, Dictionary<string, string>? headers = null, int? timeout = null, (string, string)? auth = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, CancellationToken cancellationToken = default)
+    public Task<Response> RequestAsync(string method, string url, string? body = null, Dictionary<string, string>? headers = null, int? timeout = null, (string, string)? auth = null, IEnumerable<KeyValuePair<string, string>>? parameters = null, Dictionary<string, string>? cookies = null, CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
 
@@ -786,13 +786,13 @@ public sealed class Session : IDisposable
     /// <summary>
     /// Perform an async PUT request using native Go goroutines.
     /// </summary>
-    public Task<Response> PutAsync(string url, string? body = null, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null, CancellationToken cancellationToken = default)
+    public Task<Response> PutAsync(string url, string? body = null, Dictionary<string, string>? headers = null, IEnumerable<KeyValuePair<string, string>>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null, CancellationToken cancellationToken = default)
         => RequestAsync("PUT", url, body, headers, timeout, auth, parameters, cookies, cancellationToken);
 
     /// <summary>
     /// Perform an async PUT request with JSON body using native Go goroutines.
     /// </summary>
-    public Task<Response> PutJsonAsync<T>(string url, T data, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null, CancellationToken cancellationToken = default)
+    public Task<Response> PutJsonAsync<T>(string url, T data, Dictionary<string, string>? headers = null, IEnumerable<KeyValuePair<string, string>>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null, CancellationToken cancellationToken = default)
     {
         headers ??= new Dictionary<string, string>();
         if (!headers.ContainsKey("Content-Type"))
@@ -805,19 +805,19 @@ public sealed class Session : IDisposable
     /// <summary>
     /// Perform an async DELETE request using native Go goroutines.
     /// </summary>
-    public Task<Response> DeleteAsync(string url, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null, CancellationToken cancellationToken = default)
+    public Task<Response> DeleteAsync(string url, Dictionary<string, string>? headers = null, IEnumerable<KeyValuePair<string, string>>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null, CancellationToken cancellationToken = default)
         => RequestAsync("DELETE", url, null, headers, timeout, auth, parameters, cookies, cancellationToken);
 
     /// <summary>
     /// Perform an async PATCH request using native Go goroutines.
     /// </summary>
-    public Task<Response> PatchAsync(string url, string? body = null, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null, CancellationToken cancellationToken = default)
+    public Task<Response> PatchAsync(string url, string? body = null, Dictionary<string, string>? headers = null, IEnumerable<KeyValuePair<string, string>>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null, CancellationToken cancellationToken = default)
         => RequestAsync("PATCH", url, body, headers, timeout, auth, parameters, cookies, cancellationToken);
 
     /// <summary>
     /// Perform an async PATCH request with JSON body using native Go goroutines.
     /// </summary>
-    public Task<Response> PatchJsonAsync<T>(string url, T data, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null, CancellationToken cancellationToken = default)
+    public Task<Response> PatchJsonAsync<T>(string url, T data, Dictionary<string, string>? headers = null, IEnumerable<KeyValuePair<string, string>>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null, CancellationToken cancellationToken = default)
     {
         headers ??= new Dictionary<string, string>();
         if (!headers.ContainsKey("Content-Type"))
@@ -830,13 +830,13 @@ public sealed class Session : IDisposable
     /// <summary>
     /// Perform an async HEAD request using native Go goroutines.
     /// </summary>
-    public Task<Response> HeadAsync(string url, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null, CancellationToken cancellationToken = default)
+    public Task<Response> HeadAsync(string url, Dictionary<string, string>? headers = null, IEnumerable<KeyValuePair<string, string>>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null, CancellationToken cancellationToken = default)
         => RequestAsync("HEAD", url, null, headers, timeout, auth, parameters, cookies, cancellationToken);
 
     /// <summary>
     /// Perform an async OPTIONS request using native Go goroutines.
     /// </summary>
-    public Task<Response> OptionsAsync(string url, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null, CancellationToken cancellationToken = default)
+    public Task<Response> OptionsAsync(string url, Dictionary<string, string>? headers = null, IEnumerable<KeyValuePair<string, string>>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null, CancellationToken cancellationToken = default)
         => RequestAsync("OPTIONS", url, null, headers, timeout, auth, parameters, cookies, cancellationToken);
 
     // =========================================================================
@@ -1201,7 +1201,7 @@ public sealed class Session : IDisposable
     /// }
     /// </code>
     /// </example>
-    public StreamResponse GetStream(string url, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
+    public StreamResponse GetStream(string url, Dictionary<string, string>? headers = null, IEnumerable<KeyValuePair<string, string>>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
     {
         ThrowIfDisposed();
 
@@ -1230,7 +1230,7 @@ public sealed class Session : IDisposable
     /// <param name="auth">Basic auth (username, password). If null, uses session Auth.</param>
     /// <param name="timeout">Request timeout in milliseconds</param>
     /// <returns>StreamResponse for chunked reading</returns>
-    public StreamResponse PostStream(string url, string? body = null, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
+    public StreamResponse PostStream(string url, string? body = null, Dictionary<string, string>? headers = null, IEnumerable<KeyValuePair<string, string>>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
     {
         ThrowIfDisposed();
 
@@ -1261,7 +1261,7 @@ public sealed class Session : IDisposable
     /// <param name="auth">Basic auth (username, password). If null, uses session Auth.</param>
     /// <param name="timeout">Request timeout in seconds</param>
     /// <returns>StreamResponse for chunked reading</returns>
-    public StreamResponse RequestStream(string method, string url, string? body = null, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
+    public StreamResponse RequestStream(string method, string url, string? body = null, Dictionary<string, string>? headers = null, IEnumerable<KeyValuePair<string, string>>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
     {
         ThrowIfDisposed();
 
@@ -1400,7 +1400,7 @@ public sealed class Session : IDisposable
     /// <param name="parameters">Query parameters</param>
     /// <param name="cookies">Cookies to send with this request</param>
     /// <param name="auth">Basic auth (username, password). If null, uses session Auth.</param>
-    public FastResponse GetFast(string url, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null)
+    public FastResponse GetFast(string url, Dictionary<string, string>? headers = null, IEnumerable<KeyValuePair<string, string>>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null)
     {
         ThrowIfDisposed();
 
@@ -1432,7 +1432,7 @@ public sealed class Session : IDisposable
     /// <param name="parameters">Query parameters</param>
     /// <param name="cookies">Cookies to send with this request</param>
     /// <param name="auth">Basic auth (username, password). If null, uses session Auth.</param>
-    public FastResponse PostFast(string url, byte[]? body = null, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null)
+    public FastResponse PostFast(string url, byte[]? body = null, Dictionary<string, string>? headers = null, IEnumerable<KeyValuePair<string, string>>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null)
     {
         ThrowIfDisposed();
 
@@ -1481,7 +1481,7 @@ public sealed class Session : IDisposable
     /// <param name="cookies">Cookies to send with this request</param>
     /// <param name="auth">Basic auth (username, password). If null, uses session Auth.</param>
     /// <param name="timeout">Request timeout in seconds</param>
-    public FastResponse RequestFast(string method, string url, byte[]? body = null, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
+    public FastResponse RequestFast(string method, string url, byte[]? body = null, Dictionary<string, string>? headers = null, IEnumerable<KeyValuePair<string, string>>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
     {
         ThrowIfDisposed();
 
@@ -1527,19 +1527,19 @@ public sealed class Session : IDisposable
     /// <summary>
     /// Perform a high-performance PUT request with direct byte array response.
     /// </summary>
-    public FastResponse PutFast(string url, byte[]? body = null, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
+    public FastResponse PutFast(string url, byte[]? body = null, Dictionary<string, string>? headers = null, IEnumerable<KeyValuePair<string, string>>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
         => RequestFast("PUT", url, body, headers, parameters, cookies, auth, timeout);
 
     /// <summary>
     /// Perform a high-performance DELETE request with direct byte array response.
     /// </summary>
-    public FastResponse DeleteFast(string url, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
+    public FastResponse DeleteFast(string url, Dictionary<string, string>? headers = null, IEnumerable<KeyValuePair<string, string>>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
         => RequestFast("DELETE", url, null, headers, parameters, cookies, auth, timeout);
 
     /// <summary>
     /// Perform a high-performance PATCH request with direct byte array response.
     /// </summary>
-    public FastResponse PatchFast(string url, byte[]? body = null, Dictionary<string, string>? headers = null, Dictionary<string, string>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
+    public FastResponse PatchFast(string url, byte[]? body = null, Dictionary<string, string>? headers = null, IEnumerable<KeyValuePair<string, string>>? parameters = null, Dictionary<string, string>? cookies = null, (string, string)? auth = null, int? timeout = null)
         => RequestFast("PATCH", url, body, headers, parameters, cookies, auth, timeout);
 
     /// <summary>

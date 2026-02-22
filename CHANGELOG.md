@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.1-beta.2] - 2026-02-23
+
+### Fixed
+
+- Fix query parameters duplicated in URL for .NET async methods (`GetAsync`, `PostAsync`) — params were applied in the method then passed again to `RequestAsync` which applied them a second time (only affected async path with explicit timeout)
+- Fix `SetProxy()` and `SetPreset()` losing `insecureSkipVerify` setting — recreated child transports started with default `false`, ignoring the parent's `verify: false` setting
+- Fix query parameter order not preserved in .NET binding — changed `parameters` type from `Dictionary<string, string>` to `IEnumerable<KeyValuePair<string, string>>` across all request methods (source-compatible, users can now pass ordered collections like `List<KeyValuePair<>>` for order-sensitive APIs)
+
 ## [1.6.1-beta.1] - 2026-02-22
 
 ### Added
@@ -122,6 +130,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Baseline release. This changelog begins tracking changes from this version forward.
 
+[1.6.1-beta.2]: https://github.com/sardanioss/httpcloak/compare/v1.6.1-beta.1...v1.6.1-beta.2
 [1.6.1-beta.1]: https://github.com/sardanioss/httpcloak/compare/v1.6.0...v1.6.1-beta.1
 [1.6.0]: https://github.com/sardanioss/httpcloak/compare/v1.6.0-beta.13...v1.6.0
 [1.6.0-beta.13]: https://github.com/sardanioss/httpcloak/compare/v1.5.10...v1.6.0-beta.13

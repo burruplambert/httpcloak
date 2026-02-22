@@ -488,6 +488,15 @@ func (t *Transport) SetProxy(proxy *ProxyConfig) {
 	} else {
 		t.h3Transport, _ = NewHTTP3Transport(t.preset, t.dnsCache)
 	}
+
+	// Re-apply insecureSkipVerify to recreated transports
+	if t.insecureSkipVerify {
+		t.h1Transport.SetInsecureSkipVerify(true)
+		t.h2Transport.SetInsecureSkipVerify(true)
+		if t.h3Transport != nil {
+			t.h3Transport.SetInsecureSkipVerify(true)
+		}
+	}
 }
 
 // SetPreset changes the fingerprint preset
@@ -537,6 +546,15 @@ func (t *Transport) SetPreset(presetName string) {
 		}
 	} else {
 		t.h3Transport, _ = NewHTTP3Transport(t.preset, t.dnsCache)
+	}
+
+	// Re-apply insecureSkipVerify to recreated transports
+	if t.insecureSkipVerify {
+		t.h1Transport.SetInsecureSkipVerify(true)
+		t.h2Transport.SetInsecureSkipVerify(true)
+		if t.h3Transport != nil {
+			t.h3Transport.SetInsecureSkipVerify(true)
+		}
 	}
 }
 
