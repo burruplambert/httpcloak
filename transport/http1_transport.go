@@ -1082,6 +1082,7 @@ func (t *HTTP1Transport) writeHeadersInOrder(w *bufio.Writer, req *http.Request,
 		for _, v := range values {
 			fmt.Fprintf(w, "%s: %s\r\n", key, v)
 		}
+		written[key] = true
 	}
 
 	// Ensure Content-Length is written when body is present
