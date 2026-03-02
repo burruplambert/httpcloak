@@ -1199,7 +1199,7 @@ func (t *Transport) doHTTP1(ctx context.Context, req *Request) (*Response, error
 
 	// Set preset headers (with ordering for fingerprinting)
 	// Pass "h1" protocol so Chrome presets don't send Priority header on HTTP/1.1
-	applyPresetHeaders(httpReq, t.preset, t.getHeaderOrder(), t.getCustomPseudoOrder(), effectiveTLSOnly, "h1")
+	applyPresetHeaders(httpReq, t.preset, t.getHeaderOrder(), t.getCustomPseudoOrder(), effectiveTLSOnly, "h1", req.Headers)
 
 	// Override with custom headers (multi-value support)
 	// Use Set for first value to replace preset headers, Add for additional values
@@ -1313,7 +1313,7 @@ func (t *Transport) doHTTP1WithTLSConn(ctx context.Context, req *Request, alpnEr
 	}
 
 	// Set preset headers - pass "h1" protocol so Chrome presets don't send Priority header
-	applyPresetHeaders(httpReq, t.preset, t.getHeaderOrder(), t.getCustomPseudoOrder(), effectiveTLSOnly, "h1")
+	applyPresetHeaders(httpReq, t.preset, t.getHeaderOrder(), t.getCustomPseudoOrder(), effectiveTLSOnly, "h1", req.Headers)
 
 	// Override with custom headers (multi-value support)
 	// Use Set for first value to replace preset headers, Add for additional values
@@ -1434,7 +1434,7 @@ func (t *Transport) doHTTP2(ctx context.Context, req *Request) (*Response, error
 	}
 
 	// Set preset headers (with ordering for fingerprinting)
-	applyPresetHeaders(httpReq, t.preset, t.getHeaderOrder(), t.getCustomPseudoOrder(), effectiveTLSOnly, "h2")
+	applyPresetHeaders(httpReq, t.preset, t.getHeaderOrder(), t.getCustomPseudoOrder(), effectiveTLSOnly, "h2", req.Headers)
 
 	// Override with custom headers (multi-value support)
 	// Use Set for first value to replace preset headers, Add for additional values
@@ -1570,7 +1570,7 @@ func (t *Transport) doHTTP3(ctx context.Context, req *Request) (*Response, error
 	}
 
 	// Set preset headers (with ordering for fingerprinting)
-	applyPresetHeaders(httpReq, t.preset, t.getHeaderOrder(), t.getCustomPseudoOrder(), effectiveTLSOnly, "h3")
+	applyPresetHeaders(httpReq, t.preset, t.getHeaderOrder(), t.getCustomPseudoOrder(), effectiveTLSOnly, "h3", req.Headers)
 
 	// Override with custom headers (multi-value support)
 	// Use Set for first value to replace preset headers, Add for additional values
@@ -1753,7 +1753,8 @@ func (t *Transport) SetSessionIdentifier(sessionId string) {
 // customPseudoOrder overrides the preset's pseudo-header order if provided.
 // If tlsOnly is true, skips applying preset headers but still sets header order for fingerprinting.
 // The protocol parameter ("h1", "h2", "h3") is used for protocol-specific header handling.
-func applyPresetHeaders(httpReq *http.Request, preset *fingerprint.Preset, customHeaderOrder []string, customPseudoOrder []string, tlsOnly bool, protocol string) {
+// userHeaders are the user-provided request headers, used for auto-detecting CORS mode.
+func applyPresetHeaders(httpReq *http.Request, preset *fingerprint.Preset, customHeaderOrder []string, customPseudoOrder []string, tlsOnly bool, protocol string, userHeaders map[string][]string) {
 	// In TLS-only mode, skip applying preset headers but still set header order
 	if !tlsOnly {
 		if len(preset.HeaderOrder) > 0 {
@@ -1769,6 +1770,28 @@ func applyPresetHeaders(httpReq *http.Request, preset *fingerprint.Preset, custo
 		}
 		httpReq.Header.Set("User-Agent", preset.UserAgent)
 
+		// Auto-detect CORS mode from user's Accept header.
+		// If the user sends an API-style Accept (application/json, */*, etc.),
+		// adjust sec-fetch headers to CORS mode instead of Navigate.
+		// This prevents sending browser navigation headers to API endpoints,
+		// which WAFs like Incapsula flag as bot behavior.
+		if isAPIRequest(userHeaders) {
+			httpReq.Header.Set("Sec-Fetch-Mode", "cors")
+			httpReq.Header.Set("Sec-Fetch-Dest", "empty")
+			httpReq.Header.Set("Sec-Fetch-Site", "cross-site")
+			httpReq.Header.Del("Sec-Fetch-User")
+			httpReq.Header.Del("sec-fetch-user")
+			httpReq.Header.Del("Upgrade-Insecure-Requests")
+			httpReq.Header.Del("upgrade-insecure-requests")
+			// CORS uses u=1,i priority (lower urgency than navigation's u=0,i)
+			if httpReq.Header.Get("Priority") != "" {
+				httpReq.Header.Set("Priority", "u=1, i")
+			}
+			if httpReq.Header.Get("priority") != "" {
+				httpReq.Header.Set("priority", "u=1, i")
+			}
+		}
+
 		// Chrome does NOT send Priority header on HTTP/1.1, only on HTTP/2 and HTTP/3.
 		// Some anti-bots (Cloudflare, Datadome, Akamai) check for this and flag requests
 		// that send Priority on H1 as bots.
@@ -1783,12 +1806,10 @@ func applyPresetHeaders(httpReq *http.Request, preset *fingerprint.Preset, custo
 	}
 
 	// Set header order for HTTP/2 and HTTP/3 fingerprinting
-	// Custom order takes precedence, then preset's order, then fallback to hardcoded default
+	// Chrome uses the same header order for both H2 and H3 (same request_->extra_headers vector)
 	if len(customHeaderOrder) > 0 {
-		// Use custom header order
 		httpReq.Header[http.HeaderOrderKey] = customHeaderOrder
 	} else if len(preset.HeaderOrder) > 0 {
-		// Use preset's header order
 		order := make([]string, len(preset.HeaderOrder))
 		for i, hp := range preset.HeaderOrder {
 			order[i] = hp.Key
@@ -1815,6 +1836,26 @@ func applyPresetHeaders(httpReq *http.Request, preset *fingerprint.Preset, custo
 		// Chrome uses m,a,s,p
 		httpReq.Header[http.PHeaderOrderKey] = []string{":method", ":authority", ":scheme", ":path"}
 	}
+}
+
+// isAPIRequest detects if user headers indicate an API call (not browser navigation).
+// Checks Accept header for API content types like application/json, */*, etc.
+func isAPIRequest(userHeaders map[string][]string) bool {
+	if userHeaders == nil {
+		return false
+	}
+	// Case-insensitive lookup for Accept header
+	for k, v := range userHeaders {
+		if strings.EqualFold(k, "Accept") && len(v) > 0 {
+			lower := strings.ToLower(v[0])
+			return strings.Contains(lower, "application/json") ||
+				strings.Contains(lower, "application/xml") ||
+				strings.Contains(lower, "text/plain") ||
+				strings.Contains(lower, "application/octet-stream") ||
+				lower == "*/*"
+		}
+	}
+	return false
 }
 
 // isChromePreset returns true if the preset name indicates a Chrome fingerprint.
