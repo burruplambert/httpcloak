@@ -1554,12 +1554,12 @@ func applyModeHeaders(httpReq *http.Request, preset *fingerprint.Preset, req *Re
 	}
 
 	// Set header order for HTTP/2 and HTTP/3 fingerprinting
-	// Custom order takes precedence, then preset's order, then fallback to hardcoded default
+	// Custom order takes precedence, then preset's protocol-specific order, then fallback
 	if len(customHeaderOrder) > 0 {
 		// Use custom header order
 		httpReq.Header[http.HeaderOrderKey] = customHeaderOrder
 	} else if len(preset.HeaderOrder) > 0 {
-		// Use preset's header order
+		// Use preset's header order (H2/default)
 		order := make([]string, len(preset.HeaderOrder))
 		for i, hp := range preset.HeaderOrder {
 			order[i] = hp.Key

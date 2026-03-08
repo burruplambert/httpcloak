@@ -60,7 +60,7 @@ type Preset struct {
 	QUICPSKClientHelloID tls.ClientHelloID // For QUIC/HTTP/3 with PSK (session resumption)
 	UserAgent         string
 	Headers           map[string]string // For backward compatibility
-	HeaderOrder       []HeaderPair      // Ordered headers for HTTP/2 and HTTP/3
+	HeaderOrder       []HeaderPair      // Ordered headers for HTTP/2
 	HTTP2Settings     HTTP2Settings
 	TCPFingerprint    TCPFingerprint
 	SupportHTTP3      bool
