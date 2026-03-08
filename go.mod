@@ -14,14 +14,14 @@ require (
 	github.com/miekg/dns v1.1.69
 	github.com/sardanioss/http v1.2.0
 	github.com/sardanioss/net v1.2.2
-	github.com/sardanioss/quic-go v1.2.20
+	github.com/sardanioss/quic-go v1.2.21
 	github.com/sardanioss/udpbara v1.1.0
 	github.com/sardanioss/utls v1.10.2
 	golang.org/x/net v0.48.0
 )
 
 require (
-	github.com/sardanioss/qpack v0.6.2 // indirect
+	github.com/sardanioss/qpack v0.6.3 // indirect
 	golang.org/x/crypto v0.46.0 // indirect
 	golang.org/x/mod v0.30.0 // indirect
 	golang.org/x/sync v0.19.0 // indirect
