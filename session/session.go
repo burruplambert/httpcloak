@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -1393,16 +1394,29 @@ func (s *Session) PostStream(ctx context.Context, url string, body []byte, heade
 
 // resolveURL resolves a possibly relative URL against a base URL (RFC 3986)
 func resolveURL(base, ref string) string {
-	if len(ref) > 7 && (ref[:7] == "http://" || ref[:8] == "https://") {
+	if strings.HasPrefix(ref, "http://") || strings.HasPrefix(ref, "https://") {
 		return ref
 	}
 	baseURL, err := url.Parse(base)
 	if err != nil {
-		return base + "/" + ref
+		return ref
 	}
 	refURL, err := url.Parse(ref)
 	if err != nil {
-		return base + "/" + ref
+		return ref
+	}
+	// Fix percent-encoded query separators in Location headers.
+	// Some servers send Location: /path%3Ffoo=bar where %3F is meant as
+	// the query separator ?. Go's url.Parse decodes %3F to ? in Path but
+	// keeps RawQuery empty, causing RequestURI() to re-encode ? as %3F.
+	// Browsers treat ? as a query separator regardless of encoding, so
+	// split the path on ? when RawQuery is empty to match browser behavior.
+	if refURL.RawQuery == "" {
+		if idx := strings.IndexByte(refURL.Path, '?'); idx >= 0 {
+			refURL.RawQuery = refURL.Path[idx+1:]
+			refURL.Path = refURL.Path[:idx]
+			refURL.RawPath = ""
+		}
 	}
 	return baseURL.ResolveReference(refURL).String()
 }
