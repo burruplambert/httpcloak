@@ -841,9 +841,12 @@ func (s *Session) Get(ctx context.Context, url string) (*Response, error) {
 type CookieInfo = session.CookieState
 
 // GetCookies returns all cookies stored in the session with full metadata.
-// Deprecated: Use GetCookiesDetailed for the same result. This method will
-// be kept as-is, but bindings (Node.js, Python, .NET) have changed their
-// GetCookies to return a flat map with a deprecation warning.
+//
+// Note: In bindings (Node.js, Python, .NET), GetCookies currently returns a
+// flat name-value map for backward compatibility, with a deprecation warning.
+// In a future release, all bindings will change to return the same []CookieInfo
+// format as this Go method. GetCookiesDetailed already returns this format in
+// all bindings.
 func (s *Session) GetCookies() []CookieInfo {
 	return s.inner.GetCookies()
 }
