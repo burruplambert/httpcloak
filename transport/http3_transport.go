@@ -38,7 +38,8 @@ const (
 const (
 	tpVersionInformation = 0x11   // RFC 9368 version negotiation
 	tpGoogleVersion      = 0x4752 // Google's custom version param (18258)
-	tpInitialRTT         = 0x3127 // initial_rtt (12583) - Chrome's cached SRTT
+	tpInitialRTT              = 0x3127 // initial_rtt (12583) - Chrome's cached SRTT
+	tpGoogleConnectionOptions = 0x3128 // Google's connection options param (12584)
 )
 
 // RTT measurement state — measure once per process, re-measure after ResetInitialRTT().
@@ -75,6 +76,9 @@ func BuildChromeTransportParams() map[uint64][]byte {
 	googleVersion := make([]byte, 4)
 	binary.BigEndian.PutUint32(googleVersion, 0x00000001) // QUICv1
 	params[tpGoogleVersion] = googleVersion
+
+	// google_connection_options (0x3128 / 12584) - Chrome sends "B2ON"
+	params[tpGoogleConnectionOptions] = []byte("B2ON")
 
 	// initial_rtt (0x3127) - Chrome sends cached SRTT in microseconds
 	// Default 100ms (100000μs); MeasureAndSetInitialRTT overrides with real RTT
