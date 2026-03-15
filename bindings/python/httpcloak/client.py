@@ -1460,6 +1460,7 @@ class Session:
         tcp_mss: Optional[int] = None,
         tcp_window_size: Optional[int] = None,
         tcp_window_scale: Optional[int] = None,
+        tcp_df: Optional[bool] = None,
     ):
         self._lib = _get_lib()
         self._default_timeout = timeout
@@ -1519,6 +1520,8 @@ class Session:
             config["tcp_window_size"] = tcp_window_size
         if tcp_window_scale is not None:
             config["tcp_window_scale"] = tcp_window_scale
+        if tcp_df is not None:
+            config["tcp_df"] = tcp_df
 
         config_json = json.dumps(config).encode("utf-8")
         self._handle = self._lib.httpcloak_session_new(config_json)

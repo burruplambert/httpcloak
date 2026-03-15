@@ -170,6 +170,11 @@ public sealed class Session : IDisposable
     /// <param name="tlsOnly">TLS-only mode: use TLS fingerprint but skip preset HTTP headers (default: false)</param>
     /// <param name="quicIdleTimeout">QUIC idle timeout in seconds (default: 30). Set higher for long-lived HTTP/3 connections.</param>
     /// <param name="switchProtocol">Protocol to switch to after Refresh(): "h1", "h2", "h3" (default: null, no switch)</param>
+    /// <param name="tcpTtl">TCP/IP TTL override: 128=Windows, 64=Linux/macOS (default: null, no spoofing)</param>
+    /// <param name="tcpMss">TCP Maximum Segment Size override: typically 1460 (default: null)</param>
+    /// <param name="tcpWindowSize">TCP Window Size override: 64240=Windows, 65535=Linux/macOS (default: null)</param>
+    /// <param name="tcpWindowScale">TCP Window Scale override: 8=Windows, 7=Linux, 6=macOS (default: null)</param>
+    /// <param name="tcpDf">IP Don't Fragment bit override (default: null)</param>
     public Session(
         string preset = "chrome-145",
         string? proxy = null,
@@ -196,7 +201,12 @@ public sealed class Session : IDisposable
         string? switchProtocol = null,
         string? ja3 = null,
         string? akamai = null,
-        Dictionary<string, object>? extraFp = null)
+        Dictionary<string, object>? extraFp = null,
+        int? tcpTtl = null,
+        int? tcpMss = null,
+        int? tcpWindowSize = null,
+        int? tcpWindowScale = null,
+        bool? tcpDf = null)
     {
         Auth = auth;
 
@@ -226,7 +236,12 @@ public sealed class Session : IDisposable
             SwitchProtocol = switchProtocol,
             Ja3 = ja3,
             Akamai = akamai,
-            ExtraFp = extraFp
+            ExtraFp = extraFp,
+            TcpTtl = tcpTtl,
+            TcpMss = tcpMss,
+            TcpWindowSize = tcpWindowSize,
+            TcpWindowScale = tcpWindowScale,
+            TcpDf = tcpDf
         };
 
         string configJson = JsonSerializer.Serialize(config, JsonContext.Relaxed.SessionConfig);
@@ -2499,6 +2514,26 @@ internal class SessionConfig
     [JsonPropertyName("extra_fp")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Dictionary<string, object>? ExtraFp { get; set; }
+
+    [JsonPropertyName("tcp_ttl")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? TcpTtl { get; set; }
+
+    [JsonPropertyName("tcp_mss")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? TcpMss { get; set; }
+
+    [JsonPropertyName("tcp_window_size")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? TcpWindowSize { get; set; }
+
+    [JsonPropertyName("tcp_window_scale")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? TcpWindowScale { get; set; }
+
+    [JsonPropertyName("tcp_df")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? TcpDf { get; set; }
 }
 
 internal class RequestConfig

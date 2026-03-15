@@ -1279,6 +1279,7 @@ class Session {
       tcpMss = null,
       tcpWindowSize = null,
       tcpWindowScale = null,
+      tcpDf = null,
     } = options;
 
     this._lib = getLib();
@@ -1365,6 +1366,9 @@ class Session {
     }
     if (tcpWindowScale != null) {
       config.tcp_window_scale = tcpWindowScale;
+    }
+    if (tcpDf != null) {
+      config.tcp_df = tcpDf;
     }
 
     this._handle = this._lib.httpcloak_session_new(JSON.stringify(config));
