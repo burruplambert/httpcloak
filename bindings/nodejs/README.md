@@ -452,9 +452,7 @@ const headResponse = await session.head("https://example.com");
 const optionsResponse = await session.options("https://example.com");
 
 // Custom request
-const customResponse = await session.request({
-  method: "PUT",
-  url: "https://api.example.com/resource",
+const customResponse = await session.request("PUT", "https://api.example.com/resource", {
   headers: { "X-Custom": "value" },
   body: { data: "value" },
   timeout: 60,
