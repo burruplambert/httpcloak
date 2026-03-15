@@ -442,6 +442,43 @@ public sealed class Session : IDisposable
     }
 
     /// <summary>
+    /// Perform a POST request with multipart/form-data body.
+    /// </summary>
+    /// <param name="url">Request URL</param>
+    /// <param name="fields">Form fields (name → value)</param>
+    /// <param name="files">File uploads (field name → MultipartFile)</param>
+    /// <param name="headers">Custom headers</param>
+    /// <param name="parameters">Query parameters</param>
+    /// <param name="cookies">Cookies to send with this request</param>
+    /// <param name="auth">Basic auth (username, password). If null, uses session Auth.</param>
+    /// <param name="timeout">Request timeout in seconds</param>
+    public Response PostMultipart(string url, Dictionary<string, string>? fields = null, Dictionary<string, MultipartFile>? files = null, Dictionary<string, string>? headers = null, IEnumerable<KeyValuePair<string, string>>? parameters = null, Dictionary<string, string>? cookies = null, (string Username, string Password)? auth = null, int? timeout = null)
+    {
+        var boundary = "----HttpCloakBoundary" + Guid.NewGuid().ToString("N");
+        var ms = new MemoryStream();
+        var encoding = new System.Text.UTF8Encoding(false);
+        void WriteStr(string s) { var b = encoding.GetBytes(s); ms.Write(b, 0, b.Length); }
+
+        if (fields != null)
+            foreach (var kvp in fields)
+                WriteStr($"--{boundary}\r\nContent-Disposition: form-data; name=\"{kvp.Key}\"\r\n\r\n{kvp.Value}\r\n");
+
+        if (files != null)
+            foreach (var kvp in files)
+            {
+                WriteStr($"--{boundary}\r\nContent-Disposition: form-data; name=\"{kvp.Key}\"; filename=\"{kvp.Value.Filename}\"\r\nContent-Type: {kvp.Value.ContentType}\r\n\r\n");
+                ms.Write(kvp.Value.Content, 0, kvp.Value.Content.Length);
+                WriteStr("\r\n");
+            }
+
+        WriteStr($"--{boundary}--\r\n");
+
+        headers ??= new Dictionary<string, string>();
+        headers["Content-Type"] = $"multipart/form-data; boundary={boundary}";
+        return Post(url, ms.ToArray(), headers, parameters, cookies, auth, timeout);
+    }
+
+    /// <summary>
     /// Perform a custom HTTP request.
     /// </summary>
     /// <param name="method">HTTP method</param>
@@ -2416,6 +2453,29 @@ public static class HttpCloakInfo
             return Array.Empty<string>();
 
         return JsonSerializer.Deserialize(json, JsonContext.Default.StringArray) ?? Array.Empty<string>();
+    }
+
+}
+
+/// <summary>
+/// Represents a file for multipart/form-data uploads.
+/// </summary>
+public class MultipartFile
+{
+    /// <summary>File content as bytes.</summary>
+    public byte[] Content { get; set; } = Array.Empty<byte>();
+
+    /// <summary>Filename to use in Content-Disposition.</summary>
+    public string Filename { get; set; } = "file";
+
+    /// <summary>MIME content type (default: application/octet-stream).</summary>
+    public string ContentType { get; set; } = "application/octet-stream";
+
+    public MultipartFile(byte[] content, string filename = "file", string contentType = "application/octet-stream")
+    {
+        Content = content;
+        Filename = filename;
+        ContentType = contentType;
     }
 }
 

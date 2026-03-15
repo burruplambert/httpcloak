@@ -2044,6 +2044,7 @@ class Session:
         url: str,
         data: Union[str, bytes, Dict, None] = None,
         json_data: Optional[Dict] = None,
+        files: Optional[FilesType] = None,
         params: Optional[Dict[str, Any]] = None,
         headers: Optional[Dict[str, str]] = None,
         cookies: Optional[Dict[str, str]] = None,
@@ -2056,6 +2057,7 @@ class Session:
             url: Request URL
             data: Request body (string, bytes, or dict for form data)
             json_data: JSON body (will be serialized)
+            files: Files to upload as multipart/form-data
             params: URL query parameters
             headers: Request headers
             cookies: Cookies to send with this request
@@ -2065,7 +2067,12 @@ class Session:
         merged_headers = self._merge_headers(headers)
 
         body = None
-        if json_data is not None:
+        if files is not None:
+            form_data = data if isinstance(data, dict) else None
+            body, content_type = _encode_multipart(data=form_data, files=files)
+            merged_headers = merged_headers or {}
+            merged_headers["Content-Type"] = content_type
+        elif json_data is not None:
             body = json.dumps(json_data).encode("utf-8")
             merged_headers = merged_headers or {}
             merged_headers.setdefault("Content-Type", "application/json")
@@ -2110,6 +2117,7 @@ class Session:
         url: str,
         data: Union[str, bytes, Dict, None] = None,
         json_data: Optional[Dict] = None,
+        files: Optional[FilesType] = None,
         params: Optional[Dict[str, Any]] = None,
         headers: Optional[Dict[str, str]] = None,
         cookies: Optional[Dict[str, str]] = None,
@@ -2123,6 +2131,7 @@ class Session:
             url: Request URL
             data: Request body
             json_data: JSON body (will be serialized)
+            files: Files to upload as multipart/form-data
             params: URL query parameters
             headers: Request headers
             cookies: Cookies to send with this request
@@ -2132,7 +2141,13 @@ class Session:
         merged_headers = self._merge_headers(headers)
 
         body = None
-        if json_data is not None:
+        if files is not None:
+            form_data = data if isinstance(data, dict) else None
+            body_bytes, content_type = _encode_multipart(data=form_data, files=files)
+            body = body_bytes.decode("latin-1")
+            merged_headers = merged_headers or {}
+            merged_headers["Content-Type"] = content_type
+        elif json_data is not None:
             body = json.dumps(json_data)
             merged_headers = merged_headers or {}
             merged_headers.setdefault("Content-Type", "application/json")

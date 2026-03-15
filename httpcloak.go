@@ -29,6 +29,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
+	"net/textproto"
 	"strings"
 	"time"
 
@@ -112,6 +114,50 @@ func New(preset string, opts ...Option) *Client {
 		inner:   client.NewClient(preset, clientOpts...),
 		timeout: cfg.timeout,
 	}
+}
+
+// MultipartField represents a single field in a multipart/form-data body.
+// For text fields, set Name and Value. For file uploads, set Name, Filename,
+// Content, and optionally ContentType (defaults to application/octet-stream).
+type MultipartField struct {
+	Name        string // Form field name
+	Value       string // Text value (used when Filename is empty)
+	Filename    string // If set, this field is a file upload
+	Content     []byte // File content (used when Filename is set)
+	ContentType string // MIME type for file uploads (default: application/octet-stream)
+}
+
+// BuildMultipart encodes fields into a multipart/form-data body.
+// Returns the encoded body bytes and the Content-Type header value (including boundary).
+func BuildMultipart(fields []MultipartField) ([]byte, string, error) {
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	for _, f := range fields {
+		if f.Filename != "" {
+			ct := f.ContentType
+			if ct == "" {
+				ct = "application/octet-stream"
+			}
+			part, err := w.CreatePart(textproto.MIMEHeader{
+				"Content-Disposition": {fmt.Sprintf(`form-data; name="%s"; filename="%s"`, f.Name, f.Filename)},
+				"Content-Type":        {ct},
+			})
+			if err != nil {
+				return nil, "", err
+			}
+			if _, err := part.Write(f.Content); err != nil {
+				return nil, "", err
+			}
+		} else {
+			if err := w.WriteField(f.Name, f.Value); err != nil {
+				return nil, "", err
+			}
+		}
+	}
+	if err := w.Close(); err != nil {
+		return nil, "", err
+	}
+	return buf.Bytes(), w.FormDataContentType(), nil
 }
 
 // Request represents an HTTP request
@@ -278,6 +324,15 @@ func (c *Client) PostJSON(ctx context.Context, url string, body []byte) (*Respon
 // PostForm performs a POST request with form data
 func (c *Client) PostForm(ctx context.Context, url string, body []byte) (*Response, error) {
 	return c.Post(ctx, url, bytes.NewReader(body), "application/x-www-form-urlencoded")
+}
+
+// PostMultipart performs a POST request with multipart/form-data body.
+func (c *Client) PostMultipart(ctx context.Context, url string, fields []MultipartField) (*Response, error) {
+	body, contentType, err := BuildMultipart(fields)
+	if err != nil {
+		return nil, err
+	}
+	return c.Post(ctx, url, bytes.NewReader(body), contentType)
 }
 
 // Close releases all resources held by the client
