@@ -241,18 +241,31 @@ from httpcloak import Session
 
 session = Session()
 
-# Set a cookie
+# Set a simple cookie (global, sent to all domains)
 session.set_cookie("session_id", "abc123")
 
-# Get all cookies
+# Set a domain-scoped cookie with full metadata
+session.set_cookie("auth", "token",
+    domain=".example.com",
+    path="/",
+    secure=True,
+    http_only=True,
+    same_site="Lax",
+)
+
+# Get all cookies (returns List[Cookie] with full metadata)
 cookies = session.get_cookies()
-print(cookies)
+for cookie in cookies:
+    print(f"{cookie.name}={cookie.value} (domain: {cookie.domain})")
 
-# Access cookies as property
-print(session.cookies)
+# Get a specific cookie by name (returns Cookie or None)
+cookie = session.get_cookie("session_id")
+if cookie:
+    print(cookie.value)
 
-# Delete a cookie
+# Delete a cookie (omit domain to delete from all domains)
 session.delete_cookie("session_id")
+session.delete_cookie("auth", domain=".example.com")  # delete from specific domain
 
 # Clear all cookies
 session.clear_cookies()

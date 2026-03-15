@@ -979,8 +979,12 @@ def _setup_lib(lib):
     lib.httpcloak_request.restype = c_void_p
     lib.httpcloak_get_cookies.argtypes = [c_int64]
     lib.httpcloak_get_cookies.restype = c_void_p
-    lib.httpcloak_set_cookie.argtypes = [c_int64, c_char_p, c_char_p]
+    lib.httpcloak_set_cookie.argtypes = [c_int64, c_char_p]
     lib.httpcloak_set_cookie.restype = None
+    lib.httpcloak_delete_cookie.argtypes = [c_int64, c_char_p, c_char_p]
+    lib.httpcloak_delete_cookie.restype = None
+    lib.httpcloak_clear_cookies.argtypes = [c_int64]
+    lib.httpcloak_clear_cookies.restype = None
     lib.httpcloak_free_string.argtypes = [c_void_p]
     lib.httpcloak_free_string.restype = None
     lib.httpcloak_version.argtypes = []
@@ -2225,15 +2229,29 @@ class Session:
     # Cookie Management
     # =========================================================================
 
-    def get_cookies(self) -> Dict[str, str]:
-        """Get all cookies from the session."""
+    def get_cookies(self) -> "List[Cookie]":
+        """Get all cookies from the session with full metadata."""
         result_ptr = self._lib.httpcloak_get_cookies(self._handle)
         result = _ptr_to_string(result_ptr)
         if result:
-            return json.loads(result)
-        return {}
+            parsed = json.loads(result)
+            return [
+                Cookie(
+                    name=c.get("name", ""),
+                    value=c.get("value", ""),
+                    domain=c.get("domain", ""),
+                    path=c.get("path", ""),
+                    expires=c.get("expires", ""),
+                    max_age=c.get("max_age", 0),
+                    secure=c.get("secure", False),
+                    http_only=c.get("http_only", False),
+                    same_site=c.get("same_site", ""),
+                )
+                for c in parsed
+            ]
+        return []
 
-    def get_cookie(self, name: str) -> Optional[str]:
+    def get_cookie(self, name: str) -> "Optional[Cookie]":
         """
         Get a specific cookie by name.
 
@@ -2241,45 +2259,77 @@ class Session:
             name: Cookie name
 
         Returns:
-            Cookie value or None if not found
+            Cookie object or None if not found
         """
         cookies = self.get_cookies()
-        return cookies.get(name)
+        for c in cookies:
+            if c.name == name:
+                return c
+        return None
 
-    def set_cookie(self, name: str, value: str):
-        """Set a cookie in the session."""
+    def set_cookie(
+        self,
+        name: str,
+        value: str,
+        domain: str = "",
+        path: str = "/",
+        secure: bool = False,
+        http_only: bool = False,
+        same_site: str = "",
+        max_age: int = 0,
+        expires: "Optional[str]" = None,
+    ):
+        """
+        Set a cookie in the session.
+
+        Args:
+            name: Cookie name
+            value: Cookie value
+            domain: Cookie domain (empty = global cookie sent to all domains)
+            path: Cookie path (default: "/")
+            secure: Secure flag
+            http_only: HttpOnly flag
+            same_site: SameSite attribute (Strict, Lax, None)
+            max_age: Max age in seconds (0 means not set)
+            expires: Expiration date in RFC1123 format (e.g. "Mon, 02 Jan 2006 15:04:05 GMT")
+        """
+        cookie = {
+            "name": name,
+            "value": value,
+            "domain": domain,
+            "path": path,
+            "secure": secure,
+            "http_only": http_only,
+            "same_site": same_site,
+            "max_age": max_age,
+        }
+        if expires:
+            cookie["expires"] = expires
         self._lib.httpcloak_set_cookie(
             self._handle,
-            name.encode("utf-8"),
-            value.encode("utf-8"),
+            json.dumps(cookie).encode("utf-8"),
         )
 
-    def delete_cookie(self, name: str):
+    def delete_cookie(self, name: str, domain: str = ""):
         """
         Delete a specific cookie by name.
 
-        Note: This sets the cookie to an empty value with immediate expiry.
-        The cookie will not be sent in subsequent requests.
+        Args:
+            name: Cookie name to delete
+            domain: Domain to delete from (empty = delete from all domains)
         """
-        # Set cookie to empty value - effectively deletes it
-        self._lib.httpcloak_set_cookie(
+        self._lib.httpcloak_delete_cookie(
             self._handle,
             name.encode("utf-8"),
-            b"",
+            domain.encode("utf-8"),
         )
 
     def clear_cookies(self):
-        """
-        Clear all cookies from the session.
-
-        Note: This deletes all cookies by setting them to empty values.
-        """
-        cookies = self.get_cookies()
-        for name in cookies:
-            self.delete_cookie(name)
+        """Clear all cookies from the session."""
+        self._lib.httpcloak_clear_cookies(self._handle)
 
     @property
-    def cookies(self) -> Dict[str, str]:
+    def cookies(self) -> "List[Cookie]":
         """Get cookies as a property."""
         return self.get_cookies()
 
