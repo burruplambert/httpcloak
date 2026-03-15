@@ -446,6 +446,7 @@ func (p *HostPool) createConn(ctx context.Context) (*Conn, error) {
 		StreamPriorityMode:  http2.StreamPriorityChrome,
 		HPACKIndexingPolicy: hpack.IndexingChrome,
 		HPACKNeverIndex:     []string{"cookie", "authorization", "proxy-authorization"},
+		DisableCookieSplit:  true, // Chrome sends cookies as one HPACK entry, not split per RFC 9113
 	}
 
 	h2Conn, err := h2Transport.NewClientConn(tlsConn)
