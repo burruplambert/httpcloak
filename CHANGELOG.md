@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Fix Cookie API losing domain/path/expiry metadata** — `getCookies()` returned a flat `map[string]string` (name→value), losing domain/path/expiry metadata and causing last-write-wins collisions when two domains set a cookie with the same name. Now returns an array of Cookie objects with full metadata (domain, path, expires, maxAge, secure, httpOnly, sameSite). `setCookie()` accepts domain/path/flags for domain-scoped cookies — `setCookie("name", "value")` still works as a global cookie (backward compatible). `deleteCookie()` properly removes cookies from the jar (was setting to empty string) and accepts an optional domain parameter for targeted deletion. `clearCookies()` calls the Go core directly (was doing a broken client-side loop of get-then-delete that missed domain-scoped cookies). Affects all bindings: Node.js, Python, .NET, and the Go public API. Wire behavior, session serialization, and per-request `cookies` parameter are unchanged.
+
 ### Added
 
 - **Chrome 146 preset** — New default preset with updated `sec-ch-ua` brand rotation (`"Chromium";v="146", "Not-A.Brand";v="24", "Google Chrome";v="146"`) and User-Agent version bump. TLS and HTTP/2 fingerprints are identical to Chrome 145/144/143. All `-latest` aliases now resolve to Chrome 146. All code examples updated to use `chrome-latest` to avoid version-specific churn.
