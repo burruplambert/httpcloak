@@ -2256,16 +2256,17 @@ class Session:
         Get all cookies as a flat name-value dict.
 
         .. deprecated::
-            Use :meth:`get_cookies_detailed` instead, which returns ``List[Cookie]``
-            with full metadata. This method will return ``List[Cookie]`` in a future release.
+            In a future release, this method will return ``List[Cookie]`` with full metadata,
+            same as :meth:`get_cookies_detailed`.
         """
         if not getattr(Session, "_get_cookies_warned", False):
             Session._get_cookies_warned = True
             import warnings
             warnings.warn(
-                "get_cookies() returning a flat dict is deprecated. "
-                "Use get_cookies_detailed() which returns List[Cookie] with full metadata "
-                "(domain, path, expiry, etc.). get_cookies() will return List[Cookie] in a future release.",
+                "get_cookies() currently returns a flat {name: value} dict. "
+                "In a future release, it will return List[Cookie] with full metadata "
+                "(domain, path, expiry, etc.), same as get_cookies_detailed(). "
+                "Update your code accordingly.",
                 DeprecationWarning,
                 stacklevel=2,
             )
@@ -2293,8 +2294,8 @@ class Session:
         Get a specific cookie value by name.
 
         .. deprecated::
-            Use :meth:`get_cookie_detailed` instead, which returns a ``Cookie`` object
-            with full metadata. This method will return ``Optional[Cookie]`` in a future release.
+            In a future release, this method will return ``Optional[Cookie]`` with full metadata,
+            same as :meth:`get_cookie_detailed`.
 
         Args:
             name: Cookie name
@@ -2306,9 +2307,10 @@ class Session:
             Session._get_cookie_warned = True
             import warnings
             warnings.warn(
-                "get_cookie() returning a string is deprecated. "
-                "Use get_cookie_detailed() which returns a Cookie object with full metadata. "
-                "get_cookie() will return Optional[Cookie] in a future release.",
+                "get_cookie() currently returns a string value. "
+                "In a future release, it will return a Cookie object with full metadata "
+                "(domain, path, expiry, etc.), same as get_cookie_detailed(). "
+                "Update your code accordingly.",
                 DeprecationWarning,
                 stacklevel=2,
             )
@@ -2382,7 +2384,7 @@ class Session:
         Get cookies as a flat name-value dict.
 
         .. deprecated::
-            Use :meth:`get_cookies_detailed` instead. Will return ``List[Cookie]`` in a future release.
+            Will return ``List[Cookie]`` with full metadata in a future release.
         """
         return self.get_cookies()
 

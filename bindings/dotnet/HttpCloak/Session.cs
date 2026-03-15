@@ -921,10 +921,10 @@ public sealed class Session : IDisposable
     /// Get all cookies as a flat name-value dictionary.
     /// </summary>
     /// <remarks>
-    /// Deprecated: Use <see cref="GetCookiesDetailed"/> instead, which returns List&lt;Cookie&gt; with full metadata.
-    /// This method will be changed to return List&lt;Cookie&gt; in a future release.
+    /// In a future release, this method will return List&lt;Cookie&gt; with full metadata (domain, path, expiry, etc.),
+    /// same as <see cref="GetCookiesDetailed"/>. Update your code accordingly.
     /// </remarks>
-    [Obsolete("Use GetCookiesDetailed() instead, which returns List<Cookie> with full metadata. GetCookies() will return List<Cookie> in a future release.")]
+    [Obsolete("In a future release, GetCookies() will return List<Cookie> with full metadata, same as GetCookiesDetailed(). Update your code accordingly.")]
     public Dictionary<string, string> GetCookies()
     {
         var cookies = GetCookiesDetailed();
@@ -984,9 +984,10 @@ public sealed class Session : IDisposable
     /// <param name="name">Cookie name</param>
     /// <returns>Cookie value, or null if not found</returns>
     /// <remarks>
-    /// Deprecated: Use <see cref="GetCookieDetailed"/> instead. This method will return Cookie? in a future release.
+    /// In a future release, this method will return Cookie? with full metadata (domain, path, expiry, etc.),
+    /// same as <see cref="GetCookieDetailed"/>. Update your code accordingly.
     /// </remarks>
-    [Obsolete("Use GetCookieDetailed() instead, which returns a Cookie object with full metadata. GetCookie() will return Cookie? in a future release.")]
+    [Obsolete("In a future release, GetCookie() will return Cookie? with full metadata, same as GetCookieDetailed(). Update your code accordingly.")]
     public string? GetCookie(string name)
     {
         var cookie = GetCookieDetailed(name);

@@ -1903,15 +1903,15 @@ class Session {
 
   /**
    * Get all cookies as a flat name-value object.
-   * @deprecated Use getCookiesDetailed() instead, which returns Cookie[] with full metadata.
-   *             This method will be changed to return Cookie[] in a future release.
+   * @deprecated getCookies() will return Cookie[] with full metadata (domain, path, expiry) in a future release.
+   *             Use getCookiesDetailed() if you want the new format now.
    * @returns {Object} Cookies as key-value pairs
    */
   getCookies() {
     if (!Session._getCookiesDeprecated) {
       Session._getCookiesDeprecated = true;
       process.emitWarning(
-        'getCookies() returning a flat object is deprecated. Use getCookiesDetailed() which returns Cookie[] with full metadata (domain, path, expiry, etc.). getCookies() will return Cookie[] in a future release.',
+        'getCookies() currently returns a flat {name: value} object. In a future release, it will return Cookie[] with full metadata (domain, path, expiry, etc.), same as getCookiesDetailed(). Update your code accordingly.',
         'DeprecationWarning'
       );
     }
@@ -1935,8 +1935,8 @@ class Session {
 
   /**
    * Get a specific cookie value by name.
-   * @deprecated Use getCookieDetailed() instead, which returns a Cookie object with full metadata.
-   *             This method will be changed to return Cookie|null in a future release.
+   * @deprecated getCookie() will return a Cookie object (with domain, path, expiry) instead of a string in a future release.
+   *             Use getCookieDetailed() if you want the new format now.
    * @param {string} name - Cookie name
    * @returns {string|null} Cookie value or null if not found
    */
@@ -1944,7 +1944,7 @@ class Session {
     if (!Session._getCookieDeprecated) {
       Session._getCookieDeprecated = true;
       process.emitWarning(
-        'getCookie() returning a string is deprecated. Use getCookieDetailed() which returns a Cookie object with full metadata. getCookie() will return Cookie|null in a future release.',
+        'getCookie() currently returns a string value. In a future release, it will return a Cookie object with full metadata (domain, path, expiry, etc.), same as getCookieDetailed(). Update your code accordingly.',
         'DeprecationWarning'
       );
     }
@@ -1998,7 +1998,7 @@ class Session {
 
   /**
    * Get cookies as a property.
-   * @deprecated Use getCookiesDetailed() instead. This property will return Cookie[] in a future release.
+   * @deprecated This property will return Cookie[] with full metadata in a future release.
    * @returns {Object} Cookies as key-value pairs
    */
   get cookies() {

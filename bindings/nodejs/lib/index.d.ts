@@ -346,13 +346,13 @@ export class Session {
 
   /**
    * Get all cookies as a flat name-value object.
-   * @deprecated Use getCookiesDetailed() instead. Will return Cookie[] in a future release.
+   * @deprecated Will return Cookie[] with full metadata in a future release. Use getCookiesDetailed() for the new format now.
    */
   getCookies(): Record<string, string>;
 
   /**
    * Get a specific cookie value by name.
-   * @deprecated Use getCookieDetailed() instead. Will return Cookie|null in a future release.
+   * @deprecated Will return Cookie|null in a future release. Use getCookieDetailed() for the new format now.
    */
   getCookie(name: string): string | null;
 
@@ -379,7 +379,7 @@ export class Session {
 
   /**
    * Get cookies as a property.
-   * @deprecated Use getCookiesDetailed() instead. Will return Cookie[] in a future release.
+   * @deprecated Will return Cookie[] with full metadata in a future release.
    */
   readonly cookies: Record<string, string>;
 
