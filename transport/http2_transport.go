@@ -649,6 +649,7 @@ alpnCheck:
 		UserAgent:           userAgent,
 		StreamPriorityMode:  http2.StreamPriorityChrome,
 		HPACKIndexingPolicy: hpack.IndexingChrome,
+		HPACKNeverIndex:     []string{"cookie", "authorization", "proxy-authorization"},
 	}
 
 	h2Conn, err := h2Transport.NewClientConn(tlsConn)
