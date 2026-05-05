@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -830,4 +831,87 @@ func truncateStr(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// TestDoStreamCookieJarParity verifies that DoStream applies cookies from the
+// jar before the request and stores Set-Cookie from the response — same as Do.
+//
+// Regression for the asymmetry where a session that authenticated via Do()
+// then issued a streaming request would silently lose its cookie state, and
+// Set-Cookie headers from streamed responses never made it into the jar.
+func TestDoStreamCookieJarParity(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test")
+	}
+
+	var lastCookieHeader string
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/login":
+			http.SetCookie(w, &http.Cookie{Name: "session", Value: "auth-token-1", Path: "/"})
+			fmt.Fprint(w, "logged in")
+		case "/stream-echo":
+			lastCookieHeader = r.Header.Get("Cookie")
+			http.SetCookie(w, &http.Cookie{Name: "stream", Value: "from-stream", Path: "/"})
+			w.Header().Set("Content-Type", "text/plain")
+			flusher, _ := w.(http.Flusher)
+			fmt.Fprint(w, "chunk-1\n")
+			if flusher != nil {
+				flusher.Flush()
+			}
+			fmt.Fprint(w, "chunk-2\n")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	// Force H1 because httptest.NewTLSServer doesn't speak HTTP/2 by default;
+	// the cookie behaviour we're testing is protocol-independent.
+	c := NewSession("chrome-latest", WithInsecureSkipVerify(), WithForceHTTP1())
+	defer c.Close()
+
+	// Step 1: authenticate via Do() so the jar gets a session cookie.
+	loginResp, err := c.Do(context.Background(), &Request{Method: "GET", URL: server.URL + "/login"})
+	if err != nil {
+		t.Fatalf("login Do failed: %v", err)
+	}
+	loginResp.Close()
+	if got := c.cookies.CookieHeader(mustParseURL(t, server.URL+"/")); !strings.Contains(got, "session=auth-token-1") {
+		t.Fatalf("login: jar didn't store session cookie, got %q", got)
+	}
+
+	// Step 2: issue a streaming request. Pre-fix this would send NO Cookie header.
+	streamResp, err := c.DoStream(context.Background(), &Request{Method: "GET", URL: server.URL + "/stream-echo"})
+	if err != nil {
+		t.Fatalf("DoStream failed: %v", err)
+	}
+	if _, err := io.ReadAll(streamResp); err != nil {
+		t.Fatalf("read stream body: %v", err)
+	}
+	streamResp.Close()
+
+	// Verify request side: server saw the auth cookie.
+	if !strings.Contains(lastCookieHeader, "session=auth-token-1") {
+		t.Errorf("DoStream did not send jar cookie. Server saw Cookie: %q", lastCookieHeader)
+	}
+
+	// Verify response side: stream's Set-Cookie made it into the jar.
+	jarAfter := c.cookies.CookieHeader(mustParseURL(t, server.URL+"/"))
+	if !strings.Contains(jarAfter, "stream=from-stream") {
+		t.Errorf("DoStream did not store Set-Cookie from response. Jar: %q", jarAfter)
+	}
+	// Original cookie should still be present.
+	if !strings.Contains(jarAfter, "session=auth-token-1") {
+		t.Errorf("DoStream Set-Cookie store dropped pre-existing cookie. Jar: %q", jarAfter)
+	}
+}
+
+func mustParseURL(t *testing.T, raw string) *url.URL {
+	t.Helper()
+	u, err := url.Parse(raw)
+	if err != nil {
+		t.Fatalf("parse %q: %v", raw, err)
+	}
+	return u
 }

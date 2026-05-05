@@ -171,6 +171,16 @@ func (c *Client) DoStream(ctx context.Context, req *Request) (*StreamResponse, e
 		}
 	}
 
+	// Apply cookies from jar (parity with Do, see client.go:788-794).
+	// Without this, callers who maintain a session via Do() and then issue
+	// a streaming request lose their authenticated cookie state.
+	if c.cookies != nil {
+		cookieHeader := c.cookies.CookieHeader(parsedURL)
+		if cookieHeader != "" {
+			httpReq.Header.Set("Cookie", cookieHeader)
+		}
+	}
+
 	// Add organic jitter
 	applyOrganicJitter(httpReq)
 
@@ -248,6 +258,14 @@ func (c *Client) DoStream(ctx context.Context, req *Request) (*StreamResponse, e
 		headerValues := make([]string, len(values))
 		copy(headerValues, values)
 		headers[lowerKey] = headerValues
+	}
+
+	// Store cookies from response (parity with Do, see client.go:943-947).
+	// Set-Cookie is a response *header*, not body, so it's available before
+	// the streaming body is consumed and we don't need to defer this.
+	setCookies := resp.Header["Set-Cookie"]
+	if c.cookies != nil && len(setCookies) > 0 {
+		c.cookies.SetCookiesFromHeaderList(parsedURL, setCookies)
 	}
 
 	// Setup decompression reader
