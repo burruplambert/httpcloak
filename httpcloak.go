@@ -30,6 +30,7 @@ import (
 	"fmt"
 	"io"
 	"mime/multipart"
+	"net"
 	"net/textproto"
 	"strings"
 	"time"
@@ -512,6 +513,20 @@ func WithSessionPreferIPv4() SessionOption {
 func WithLocalAddress(addr string) SessionOption {
 	return func(c *sessionConfig) {
 		c.localAddr = addr
+	}
+}
+
+// WithLocalAddrIP is the net.IP-typed equivalent of WithLocalAddress. Pass
+// the parsed IP directly when you already have a net.IP value (e.g. when
+// rotating from a precomputed pool). Same semantics: nil is a no-op so
+// callers building options conditionally don't accidentally clobber a
+// previously-set address.
+func WithLocalAddrIP(ip net.IP) SessionOption {
+	return func(c *sessionConfig) {
+		if ip == nil {
+			return
+		}
+		c.localAddr = ip.String()
 	}
 }
 
