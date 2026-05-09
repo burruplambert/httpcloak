@@ -8,13 +8,17 @@ const path = require("path");
 
 const VERSION = "1.4.0";
 
+// Platforms we actually build and publish via CI's npm-platform matrix.
+// Keep in sync with .github/workflows/bindings.yml's `npm_platform` matrix —
+// adding a row here without adding it to the matrix means npm install will
+// fail with an unresolvable optional dependency on yarn classic / pnpm
+// strict modes.
 const PLATFORMS = [
   { name: "linux-x64", os: "linux", cpu: "x64", libName: "libhttpcloak-linux-amd64.so" },
   { name: "linux-arm64", os: "linux", cpu: "arm64", libName: "libhttpcloak-linux-arm64.so" },
   { name: "darwin-x64", os: "darwin", cpu: "x64", libName: "libhttpcloak-darwin-amd64.dylib" },
   { name: "darwin-arm64", os: "darwin", cpu: "arm64", libName: "libhttpcloak-darwin-arm64.dylib" },
   { name: "win32-x64", os: "win32", cpu: "x64", libName: "libhttpcloak-windows-amd64.dll" },
-  { name: "win32-arm64", os: "win32", cpu: "arm64", libName: "libhttpcloak-windows-arm64.dll" },
 ];
 
 const npmDir = path.join(__dirname, "..", "npm");
