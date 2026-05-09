@@ -5,12 +5,270 @@ sidebar_position: 6
 
 # Error Handling
 
-:::info Chapter in progress
-This chapter is being written. It will cover:
+Errors come in two flavors and they're really not the same thing:
 
-- The error types that come back across bindings
-- Telling a network error from a real 5xx
-- Retry-friendly vs fatal errors
+1. **Network / protocol errors.** DNS failed, connection refused, TLS handshake blew up, the request timed out before a response. The request never made it, or it made it and the server never replied. These come back as Go `error` / Python exception / Node thrown error / .NET exception.
 
-For now, see the [GitHub repo](https://github.com/sardanioss/httpcloak) for source.
+2. **Real responses with a non-2xx status.** The server received your request, processed it, decided it didn't like it, and sent back `404` or `500` or whatever. The HTTP exchange is complete. These come back as **normal Response objects**. You check `StatusCode`.
+
+Mixing them up is the most common bug. A 500 is not a network error. The server told you no. The connection is fine.
+
+## The split, with code
+
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+<Tabs groupId="lang">
+<TabItem value="go" label="Go">
+
+```go
+resp, err := s.Get(ctx, url)
+if err != nil {
+    // Network / protocol / context error. No response.
+    return err
+}
+defer resp.Close()
+
+if resp.StatusCode >= 500 {
+    // Server-side error. The exchange completed.
+    return fmt.Errorf("server error: %d", resp.StatusCode)
+}
+if resp.StatusCode >= 400 {
+    // Client-side error. You sent something the server rejected.
+    return fmt.Errorf("client error: %d", resp.StatusCode)
+}
+
+// 2xx. We're good.
+body, _ := resp.Bytes()
+```
+
+</TabItem>
+<TabItem value="python" label="Python">
+
+```python
+try:
+    r = s.get(url)
+except httpcloak.HTTPCloakError as e:
+    # Network / protocol / context error
+    raise
+
+if r.status_code >= 500:
+    raise RuntimeError(f"server error: {r.status_code}")
+if r.status_code >= 400:
+    raise RuntimeError(f"client error: {r.status_code}")
+```
+
+</TabItem>
+<TabItem value="nodejs" label="Node.js">
+
+```js
+let r;
+try {
+  r = await s.get(url);
+} catch (e) {
+  // Network / protocol error
+  throw e;
+}
+
+if (r.statusCode >= 500) throw new Error(`server error: ${r.statusCode}`);
+if (r.statusCode >= 400) throw new Error(`client error: ${r.statusCode}`);
+```
+
+</TabItem>
+<TabItem value="dotnet" label=".NET">
+
+```csharp
+Response r;
+try {
+    r = s.Get(url);
+} catch (HttpCloakException e) {
+    // Network / protocol error
+    throw;
+}
+
+if (r.StatusCode >= 500) throw new Exception($"server error: {r.StatusCode}");
+if (r.StatusCode >= 400) throw new Exception($"client error: {r.StatusCode}");
+```
+
+</TabItem>
+</Tabs>
+
+## Common error shapes
+
+Things that come back as a real error (not a Response):
+
+### DNS failure
+
+```
+dns_resolve nope.example: lookup nope.example: no such host
+```
+
+In Go, this is wrapped around a `*net.DNSError`. Check `IsNotFound`, `IsTemporary`, `IsTimeout` on it.
+
+```go
+var dnsErr *net.DNSError
+if errors.As(err, &dnsErr) {
+    if dnsErr.IsNotFound { /* domain doesn't exist */ }
+    if dnsErr.IsTimeout  { /* DNS server didn't reply in time */ }
+}
+```
+
+In other bindings the message string contains `dns_resolve` or `lookup`.
+
+### Connection refused
+
+```
+dial example.com: dial tcp 1.2.3.4:443: connect: connection refused
+```
+
+Server isn't listening, or a firewall is dropping it. Same shape on all bindings.
+
+### TLS handshake failure
+
+```
+tls: handshake failure
+remote error: tls: protocol_version
+```
+
+Could be cert mismatch, expired cert, the server only supports TLS 1.3 and your config disabled it, or an anti-bot system rejecting your fingerprint at TLS level. The error message will have a hint, but they're not always easy to read.
+
+### Timeout
+
+```
+context deadline exceeded
+i/o timeout
+```
+
+The Go form: `errors.Is(err, context.DeadlineExceeded)` returns true when the request didn't finish before your context deadline. There's also a wrapped `*net.OpError` with `Timeout() == true` for raw socket timeouts.
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+defer cancel()
+
+_, err := s.Get(ctx, "https://httpbin.org/delay/10")
+if errors.Is(err, context.DeadlineExceeded) {
+    // we hit our timeout
+}
+```
+
+### Cancellation
+
+```
+context canceled
+```
+
+Same as timeout but voluntary. `errors.Is(err, context.Canceled)`.
+
+## What's a real response (not an error)
+
+These all come back as a populated `Response` with a status code, **not** as an error:
+
+- `4xx`: Bad Request, Unauthorized, Forbidden, Not Found, Method Not Allowed, etc.
+- `5xx`: Server errors, Bad Gateway, Service Unavailable, Gateway Timeout.
+- `3xx` redirects (when the lib stops following them, e.g. with `WithoutRedirects()`).
+- Empty bodies, weird Content-Types, malformed JSON in the body.
+
+The HTTP exchange completed. The server replied. Whether you treat it as a failure is your business logic, not a transport concern.
+
+## Retry guidance
+
+:::warning
+Don't retry on 4xx. The server told you no for a reason. Retrying just hammers them and won't change the outcome. Fix the request.
 :::
+
+Rough rules:
+
+| Situation | Retry? |
+|---|---|
+| Network error (DNS, refused, reset) | Yes, with backoff |
+| Timeout | Yes, but bump the deadline if the upstream is slow |
+| TLS handshake failure | No, fix the config |
+| 4xx | No |
+| 5xx + idempotent verb (GET, HEAD, PUT, DELETE) | Yes |
+| 5xx + POST/PATCH | Only if you're sure the server didn't already process it. POST is **not** idempotent. |
+| 429 Too Many Requests | Yes, but back off harder. Honor `Retry-After` if present. |
+
+The session has built-in retry support. Default is **off** (issue #57 changed the default from 3 to 0 because the old behavior silently retried POSTs on 5xx, breaking idempotency assumptions):
+
+```go
+s := httpcloak.NewSession("chrome-latest",
+    httpcloak.WithRetry(3),
+    // or fine-grained:
+    httpcloak.WithRetryConfig(3, 500*time.Millisecond, 10*time.Second, []int{500, 502, 503, 504}),
+)
+```
+
+Pass status codes you actually want to retry on. Don't blindly retry on 4xx.
+
+## A timeout test
+
+The simplest way to verify your timeout handling is to hit `httpbin.org/delay/N` with a context shorter than N:
+
+<Tabs groupId="lang">
+<TabItem value="go" label="Go">
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+defer cancel()
+
+_, err := s.Get(ctx, "https://httpbin.org/delay/10")
+fmt.Println(err)
+// dial httpbin.org [h1]: dial tcp4 ...: i/o timeout
+fmt.Println(errors.Is(err, context.DeadlineExceeded))
+// true
+```
+
+</TabItem>
+<TabItem value="python" label="Python">
+
+```python
+import httpcloak
+
+s = httpcloak.Session(preset="chrome-latest", timeout=2)
+try:
+    r = s.get("https://httpbin.org/delay/10")
+except httpcloak.HTTPCloakError as e:
+    print("timed out:", e)
+```
+
+</TabItem>
+<TabItem value="nodejs" label="Node.js">
+
+```js
+const s = new Session({ preset: "chrome-latest", timeout: 2 });
+try {
+  await s.get("https://httpbin.org/delay/10");
+} catch (e) {
+  console.log("timed out:", e.message);
+}
+```
+
+</TabItem>
+<TabItem value="dotnet" label=".NET">
+
+```csharp
+using var s = new Session(new SessionOptions {
+    Preset = "chrome-latest",
+    Timeout = 2,
+});
+try {
+    s.Get("https://httpbin.org/delay/10");
+} catch (HttpCloakException e) {
+    Console.WriteLine($"timed out: {e.Message}");
+}
+```
+
+</TabItem>
+</Tabs>
+
+`/delay/10` makes the server sit on the request for 10 seconds. With a 2-second timeout you'll get back a deadline-exceeded error, no Response.
+
+## Logging tip
+
+When debugging unknown failures in production, log three things:
+
+1. The full error message (don't strip the wrap chain).
+2. The error's Go type (or Python class) so you can pattern-match later.
+3. If you got a Response: the status code and a tail of the body.
+
+The error message alone isn't always enough to tell DNS-failed from timeout-on-DNS-server. The type usually is.
