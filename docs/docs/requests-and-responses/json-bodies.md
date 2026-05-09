@@ -5,11 +5,11 @@ sidebar_position: 3
 
 # JSON Bodies
 
-Most APIs talk JSON. Send a body, parse a body. This is the bread and butter.
+Most APIs talk JSON. Send a body, parse a body. Bread and butter stuff.
 
 ## Sending JSON
 
-The shape: pass a struct (Go) or a dict / object (Python, Node, .NET), the lib serializes it, sets `Content-Type: application/json`, and ships it.
+The shape: pass a struct (Go) or a dict / object (Python, Node, .NET), the lib serializes it, sets `Content-Type: application/json`, and ships it out.
 
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
@@ -17,7 +17,7 @@ import TabItem from '@theme/TabItem';
 <Tabs groupId="lang">
 <TabItem value="go" label="Go">
 
-In Go you build the body yourself with `encoding/json` and pass an `io.Reader`. The Go API stays explicit so you can stream big payloads without building them in memory first.
+In Go you build the body yourself with `encoding/json` and pass an `io.Reader`. The Go API stays explicit so you can stream big payloads instead of buffering them whole.
 
 ```go
 package main
@@ -57,7 +57,7 @@ func main() {
 }
 ```
 
-There's also a shortcut on the non-session client: `client.PostJSON(ctx, url, bodyBytes)` which sets the Content-Type for you.
+The non-session client has a shortcut too: `client.PostJSON(ctx, url, bodyBytes)` sets the Content-Type for you.
 
 </TabItem>
 <TabItem value="python" label="Python">
@@ -75,7 +75,7 @@ r = s.post(
 print(r.json()["json"])  # {"hello": "world", "n": 42}
 ```
 
-The `json=` kwarg handles serialization and sets `Content-Type: application/json`. If you've already serialized the body yourself, use `data=` and set the header manually.
+The `json=` kwarg handles serialization and sets `Content-Type: application/json`. Already serialized the body? Use `data=` and set the header yourself.
 
 </TabItem>
 <TabItem value="nodejs" label="Node.js">
@@ -106,14 +106,14 @@ var r = s.PostJson("https://httpbin.org/post", payload);
 Console.WriteLine(r.Text);
 ```
 
-`PostJson` uses `System.Text.Json` under the hood and sets the Content-Type header for you.
+`PostJson` uses `System.Text.Json` under the hood and sets the Content-Type header for you. No ceremony.
 
 </TabItem>
 </Tabs>
 
 ## Reading JSON
 
-Responses come back with bytes you can parse on demand.
+Responses come back as bytes you can parse on demand.
 
 <Tabs groupId="lang">
 <TabItem value="go" label="Go">
@@ -133,7 +133,7 @@ if err := resp.JSON(&data); err != nil {
 fmt.Println(data.Slideshow.Title)
 ```
 
-`resp.JSON(&v)` reads the full body and unmarshals into `v`. The body is buffered after the first read, so you can call `resp.Bytes()` or `resp.Text()` after `resp.JSON()` and get the same payload back.
+`resp.JSON(&v)` reads the full body and unmarshals into `v`. The body's buffered after the first read, so you can call `resp.Bytes()` or `resp.Text()` afterward and get the same payload back.
 
 </TabItem>
 <TabItem value="python" label="Python">
@@ -172,36 +172,36 @@ var title = doc.RootElement
 
 ### Content-Type sniffing
 
-If you send a body with no `Content-Type`, something downstream may sniff it and pick one. JSON requests **must** include `Content-Type: application/json`, otherwise:
+Send a body with no `Content-Type` and something downstream might sniff it and pick one for you. JSON requests **must** carry `Content-Type: application/json`, otherwise:
 
-- Some servers will treat the body as form data and 400 you back.
-- Some WAFs flag the request as unusual.
+- Some servers treat the body as form data and 400 you back.
+- Some WAFs flag the request as suspicious.
 
-The shortcut wrappers (`PostJson`, `post(json=...)`, etc.) set this for you. If you build the request by hand, set it yourself.
+The shortcut wrappers (`PostJson`, `post(json=...)`, etc.) set this for you. Build the request by hand and you're on your own.
 
 ### Encoding
 
-JSON is always UTF-8 on the wire. Don't try to send Latin-1 or UTF-16 even if the server "would accept it." Real browsers send UTF-8. Anti-bot products expect UTF-8.
+JSON is always UTF-8 on the wire. Don't try Latin-1 or UTF-16 even if the server "would accept it." Real browsers send UTF-8. Anti-bot products expect UTF-8.
 
 ### Big responses
 
-If you're pulling something multi-MB or larger, don't load it whole in memory. Use the streaming API. See [Streaming Responses](./streaming-responses).
+If you're pulling something multi-MB or bigger, don't buffer it whole. Use the streaming API instead. See [Streaming Responses](./streaming-responses).
 
-`resp.JSON()` and `resp.Bytes()` both buffer the whole body. For a 200MB JSON dump that's not what you want.
+`resp.JSON()` and `resp.Bytes()` both pull the entire body into memory. For a 200MB JSON dump, that's gonna hurt.
 
 ### Numbers
 
-Go: JSON numbers default to `float64`. If you have integer IDs that exceed 2^53 (e.g. snowflake IDs), use `json.Number` or string-encode them. Python and Node native ints don't have this issue. .NET's `JsonElement.GetInt64()` handles 64-bit cleanly.
+Go: JSON numbers default to `float64`. Got integer IDs over 2^53 (snowflake IDs and friends)? Use `json.Number` or string-encode them. Python and Node native ints don't have this issue. .NET's `JsonElement.GetInt64()` handles 64-bit cleanly.
 
 ### Trailing newlines, BOMs
 
-httpbin and most decent servers don't send these, but if you ever hit a server that prefixes its JSON with a UTF-8 BOM (`\xef\xbb\xbf`), most parsers will choke. Strip the BOM before parsing. Rare, but it shows up with some old Java backends.
+httpbin and most decent servers don't send these, but if you hit a server that prefixes its JSON with a UTF-8 BOM (`\xef\xbb\xbf`), most parsers choke. Strip the BOM before parsing. Rare, but it pops up on some old Java backends.
 
-## A test pattern that works
+## A test pattern that just works
 
 The httpbin echo endpoints are perfect for verifying your client serializes correctly:
 
 - `POST https://httpbin.org/post` echoes the request as JSON, including a parsed `json` field if you sent JSON.
-- `PUT https://httpbin.org/put`, `DELETE https://httpbin.org/delete`, `PATCH https://httpbin.org/patch` all do the same thing for their methods.
+- `PUT https://httpbin.org/put`, `DELETE https://httpbin.org/delete`, `PATCH https://httpbin.org/patch` all do the same for their methods.
 
-So if your client should be sending `{"hello": "world"}`, hit `/post` and check that `response.json["hello"] == "world"`. If it's missing or the wrong type, the lib didn't serialize the way you expected, or the Content-Type was wrong.
+So if your client should be sending `{"hello": "world"}`, hit `/post` and check that `response.json["hello"] == "world"`. Missing or wrong type? The lib didn't serialize what you thought, or the Content-Type was off.

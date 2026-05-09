@@ -15,7 +15,7 @@ dotnet add package HttpCloak
 
 The NuGet package ships native binaries for `linux-x64`, `linux-arm64`, `osx-x64`, `osx-arm64`, `win-x64` under the standard `runtimes/` layout. .NET picks the right one based on RID at build time, no extra configuration.
 
-Target frameworks supported: `net6.0`, `net7.0`, `net8.0`, `net9.0`, `net10.0`. Use the latest LTS (`net8.0` at the time of writing) unless you have a reason not to.
+Target frameworks: `net6.0`, `net7.0`, `net8.0`, `net9.0`, `net10.0`. Use the latest LTS (`net8.0` at the time of writing) unless you've got a reason not to.
 
 ## Quick start
 
@@ -29,7 +29,7 @@ Console.WriteLine($"Protocol: {r.Protocol}");
 Console.WriteLine($"Body length: {r.Text.Length}");
 ```
 
-The `using` declaration disposes the session at the end of the enclosing scope. The session implements `IDisposable` and you should always pair `new Session(...)` with `using`.
+The `using` declaration disposes the session when the enclosing scope ends. The session implements `IDisposable`, so always pair `new Session(...)` with `using`.
 
 ## `Session`
 
@@ -119,7 +119,7 @@ Response Options(string url, ...);
 Response Request(string method, string url, string? body = null, ...);
 ```
 
-There are also overloads that accept `byte[]` and `Stream` for the body:
+There are also overloads that take `byte[]` and `Stream` for the body:
 
 ```csharp
 Response Post(string url, byte[] body, ...);
@@ -129,7 +129,7 @@ Response RequestBinary(string method, string url, byte[] body, ...);
 Response RequestStream(string method, string url, Stream bodyStream, ...);
 ```
 
-The `Stream` overloads are for streaming uploads where you don't want to materialise the body in memory. Common use: uploading a large file from disk.
+The `Stream` overloads are for streaming uploads when you don't want to materialise the body in memory. Common case: uploading a big file from disk.
 
 ### Streaming responses
 
@@ -139,7 +139,7 @@ StreamResponse PostStream(string url, string? body = null, ...);
 StreamResponse RequestStream(string method, string url, string? body = null, ...);
 ```
 
-`StreamResponse` exposes a `Stream`-like API and `IDisposable`. Use a `using` block when consuming it.
+`StreamResponse` exposes a `Stream`-like API and `IDisposable`. Wrap it in a `using` block when you consume it.
 
 ### Fast path
 
@@ -192,7 +192,7 @@ void DeleteCookie(string name, string domain = "");
 void ClearCookies();
 ```
 
-The deprecated variants currently return shape-compatible data; they'll switch to the detailed shape in a future major. Migrate to `*Detailed` when convenient.
+The deprecated variants currently return shape-compatible data. They'll switch to the detailed shape in a future major. Migrate to `*Detailed` when convenient.
 
 ### Proxy management
 
@@ -258,7 +258,7 @@ public sealed class Response
 - `CancellationToken` parameter on all `*Async` methods. Use it.
 - `IDisposable` on `Session`, `StreamResponse`, `FastResponse`, `LocalProxy`. Pair every `new` with `using`.
 - Errors throw `HttpCloakException`.
-- Nullable annotations are turned on. `string?` means it can be null, `string` means it can't.
+- Nullable annotations are on. `string?` means it can be null, `string` means it can't.
 
 ## Concurrency
 
@@ -270,7 +270,7 @@ var tasks = urls.Select(u => s.GetAsync(u));
 var responses = await Task.WhenAll(tasks);
 ```
 
-For browser-tab style parallelism with shared cookies, use `Fork(n)`. Each fork has its own connection pool but inherits cookies and TLS resumption tickets from the parent.
+For browser-tab-style parallelism with shared cookies, use `Fork(n)`. Each fork has its own connection pool but inherits cookies and TLS resumption tickets from the parent.
 
 ## Custom fingerprints
 
@@ -298,15 +298,15 @@ HttpCloak.StreamResponse
 HttpCloak.FastResponse
 ```
 
-`LocalProxy` runs a local HTTP proxy server that applies the fingerprint to any HTTP client pointing at it. `PresetPool` and JSON loading are covered in [JSON preset builder](/fingerprinting/json-preset-builder). `SessionCacheBackend` plugs into [Session save and restore](/connection-lifecycle/session-save-restore).
+`LocalProxy` runs a local HTTP proxy server that applies the fingerprint to whatever HTTP client points at it. `PresetPool` and JSON loading are covered in [JSON preset builder](/fingerprinting/json-preset-builder). `SessionCacheBackend` plugs into [Session save and restore](/connection-lifecycle/session-save-restore).
 
 ## P/Invoke pitfalls
 
-The native lib is a cgo shared library. A few things to keep in mind:
+The native lib's a cgo shared library. A few things to keep in mind:
 
-- The lib is loaded once per process. Loading it from multiple `AppDomain`s is not supported.
-- The lib calls back into managed code for the distributed session cache. Pin the delegates as the `SessionCacheBackend` class already does: don't roll your own without reading that source.
-- `Native.cs` exposes the raw P/Invoke surface but is internal. You should never need to touch it from app code; the `Session` / `LocalProxy` / `PresetPool` classes wrap everything.
+- The lib's loaded once per process. Loading it from multiple `AppDomain`s isn't supported.
+- The lib calls back into managed code for the distributed session cache. Pin the delegates the way `SessionCacheBackend` already does, don't roll your own without reading that source.
+- `Native.cs` exposes the raw P/Invoke surface but is internal. You should never need to touch it from app code, the `Session` / `LocalProxy` / `PresetPool` classes wrap everything.
 
 ## See also
 

@@ -5,7 +5,7 @@ sidebar_position: 4
 
 # Per-Request Cookies
 
-Sometimes you just want to slap a `Cookie` header onto a single request without touching the session jar. Maybe you're testing one specific cookie, maybe you've already got the value from somewhere else, or maybe the jar is off and you're driving manually.
+Sometimes you just want to slap a `Cookie` header onto a single request without touching the session jar. Maybe you're testing one specific cookie. Maybe you've already got the value from somewhere else. Maybe the jar is off and you're driving manually.
 
 httpcloak passes the `Cookie` header through unchanged. Whatever string you give it goes on the wire.
 
@@ -86,7 +86,7 @@ var r2 = s.Get("https://httpbin.org/cookies", cookies: cookies);
 
 If the jar is on, the lib **merges** your per-request `Cookie` header with whatever the jar would have sent. Your header comes first, jar contents come after, joined with `; `.
 
-That's usually what you want. But if your goal is "use only this one cookie, ignore the jar," you've got two clean ways:
+That's usually what you want. But if your goal is "use only this one cookie, ignore the jar," you've got two clean options:
 
 1. Disable the jar with [`WithoutCookieJar()`](./disabling-cookie-jar) for that whole session.
 2. Call `ClearCookies()` on the session right before the request, then attach your header.
@@ -97,9 +97,9 @@ Don't try to fight the merge by setting `Cookie: ""`. The lib treats empty as "n
 
 The order of cookies in the `Cookie` header is part of your client's fingerprint. Real browsers sort consistently (longer path first, then by creation time, per RFC 6265). httpcloak preserves whatever you give it byte-for-byte.
 
-So if you're hand-rolling cookies and you want to look like a browser, sort them yourself. Don't shuffle them across requests, don't rely on `dict` iteration order in scripts, and double-check your sort matches the order the jar would have produced.
+So if you're hand-rolling cookies and you want to look like a browser, sort them yourself. Don't shuffle them across requests, don't rely on `dict` iteration order in scripts, and double-check your sort matches the order the jar would have produced. Anti-bot vendors absolutely watch for cookie order drift between requests.
 
-If the jar is doing the work for you, you don't need to think about this. The jar handles the sort. This only matters when you're driving the `Cookie` header manually.
+If the jar is doing the work for you, you don't have to think about this. The jar handles the sort. This only matters when you're driving the `Cookie` header manually.
 
 ## When per-request beats the jar
 

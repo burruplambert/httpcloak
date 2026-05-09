@@ -5,19 +5,19 @@ sidebar_position: 2
 
 # Presets
 
-Every fingerprint preset that ships with httpcloak. Use this as the lookup when you need to know which preset gives which JA3, JA4, Akamai HTTP/2 hash, and User-Agent.
+Every fingerprint preset that ships with httpcloak. This is the lookup table when you need to know which preset gives you which JA3, JA4, Akamai H2 hash, and User-Agent.
 
-The list below is the registry from `fingerprint/presets.go`. The newer Chrome versions (147, 148) live in the embedded JSON registry (`fingerprint/embedded/*.json`) and inherit from older presets via the `based_on` field.
+Below comes from the registry in `fingerprint/presets.go`. The newer Chrome versions (147, 148) live in the embedded JSON registry at `fingerprint/embedded/*.json` and inherit from older presets via `based_on`.
 
 :::tip
-You can always check what a real browser sends today at [tls.peet.ws/api/all](https://tls.peet.ws/api/all). Chrome being a lil bitch won't show you header order in DevTools, so peet is your only source of truth there.
+Want to see what a real browser sends right now? Hit [tls.peet.ws/api/all](https://tls.peet.ws/api/all). DevTools won't show you header order, so peet is your only source of truth there.
 :::
 
 ---
 
 ## Aliases
 
-The `-latest` aliases follow the newest version we track. They're not separate fingerprints, just pointers.
+The `-latest` aliases follow the newest version we track. Not separate fingerprints, just pointers.
 
 | Alias | Resolves to |
 |---|---|
@@ -34,13 +34,13 @@ The `-latest` aliases follow the newest version we track. They're not separate f
 | `ios-safari-latest` | `safari-18-ios` (back-compat naming) |
 | `android-chrome-latest` | `chrome-148-android` (back-compat naming) |
 
-`chrome-148` (no platform suffix) auto-detects the running OS and dispatches to `chrome-148-windows`, `chrome-148-macos`, or `chrome-148-linux`. Use this if your binary needs to look like the host OS. Use the explicit suffix when you want a Windows fingerprint from a Linux box (the common scraping case).
+`chrome-148` with no platform suffix sniffs the running OS and dispatches to `chrome-148-windows`, `chrome-148-macos`, or `chrome-148-linux`. Pick this if your binary should match the host OS. Pick the explicit suffix when you want, say, a Windows fingerprint from a Linux box. That's the common scraping case.
 
 ---
 
 ## Captured hashes (verified against tls.peet.ws)
 
-These captures are from the Linux build host on `2026-05-10`. Captured via `NewSession(preset).Get(ctx, "https://tls.peet.ws/api/all")`. The `protocol` column is what tls.peet observed (H2 because peet doesn't advertise H3).
+Captured from the Linux build host on `2026-05-10` via `NewSession(preset).Get(ctx, "https://tls.peet.ws/api/all")`. The `protocol` column is what tls.peet observed (H2, because peet doesn't advertise H3).
 
 | Preset | Protocol | JA3 hash | JA4 | Akamai HTTP/2 hash | PeetPrint |
 |---|---|---|---|---|---|
@@ -53,7 +53,7 @@ These captures are from the Linux build host on `2026-05-10`. Captured via `NewS
 Notes:
 
 - `chrome-latest` and `chrome-148-windows` differ on `ja3_hash` because the cipher / extension order is platform-specific (Linux uses `HelloChrome_148_Linux`, Windows uses `HelloChrome_148_Windows`). JA4 collapses to the same value because JA4 is order-insensitive in the cipher / extension portions.
-- `safari-18` and `safari-18-ios` share the JA4 + Akamai because the H2 stack is identical; the JA3 differs because of platform-specific ClientHello extensions.
+- `safari-18` and `safari-18-ios` share JA4 + Akamai because the H2 stack is identical. The JA3 differs because of platform-specific ClientHello extensions.
 
 For other presets, capture them yourself the same way. Or read the JSON in `fingerprint/embedded/<name>.json` for the static parts (UA, sec-ch-ua, header order).
 
@@ -61,7 +61,7 @@ For other presets, capture them yourself the same way. Or read the JSON in `fing
 
 ## Chrome desktop
 
-The Chrome desktop family. Versions 143-146 are Go-defined in `fingerprint/presets.go`. Versions 147 and 148 are JSON in `fingerprint/embedded/` that inherit from 146 / 147 with only the User-Agent and `sec-ch-ua` brand list changed.
+The Chrome desktop family. Versions 143-146 are Go-defined in `fingerprint/presets.go`. Versions 147 and 148 ship as JSON in `fingerprint/embedded/`, inheriting from 146 / 147 with just the User-Agent and `sec-ch-ua` brand list bumped.
 
 | Preset | UA | `sec-ch-ua` | Notes |
 |---|---|---|---|
@@ -80,19 +80,19 @@ The Chrome desktop family. Versions 143-146 are Go-defined in `fingerprint/prese
 | `chrome-141` | `...Chrome/141.0.0.0...` | matching brand list | Auto-detects platform. |
 | `chrome-133` | `...Chrome/133.0.0.0...` | matching brand list | Auto-detects platform. |
 
-The unsuffixed `chrome-148` / `chrome-147` / `chrome-146` / `chrome-145` / `chrome-144` / `chrome-143` resolve to the platform-suffixed variant matching the host OS at runtime. For consistent results across machines, use the suffix.
+The unsuffixed `chrome-148` / `chrome-147` / `chrome-146` / `chrome-145` / `chrome-144` / `chrome-143` resolve to whichever platform-suffixed variant matches the host OS at runtime. For consistent results across machines, pick the suffix.
 
 All Chrome desktop presets:
 
-- Support HTTP/3 via `tls.HelloChrome_<v>_QUIC` plus a PSK variant for resumption.
-- Use the Chrome H2 fingerprint config (`chromeH2Config`): pseudo-header order `m,a,s,p`, settings order from real Chrome captures, RFC 7540 priorities sent on `HEADERS`.
+- Speak HTTP/3 via `tls.HelloChrome_<v>_QUIC` plus a PSK variant for resumption.
+- Use the Chrome H2 config (`chromeH2Config`): pseudo-header order `m,a,s,p`, settings order from real Chrome captures, RFC 7540 priorities on `HEADERS`.
 - Default Akamai: `1:65536;2:0;4:6291456;6:262144|15663105|0|m,a,s,p`.
 
 ---
 
 ## Chrome iOS
 
-iOS Chrome is a WebKit wrapper, so its TLS fingerprint matches Safari iOS, not desktop Chrome.
+iOS Chrome is a WebKit wrapper, so its TLS fingerprint matches Safari iOS, not desktop Chrome. Apple's rule, not ours.
 
 | Preset | UA | TLS | Notes |
 |---|---|---|---|
@@ -106,14 +106,14 @@ iOS Chrome is a WebKit wrapper, so its TLS fingerprint matches Safari iOS, not d
 All iOS Chrome presets:
 
 - Use the iOS Safari H2 stack (`safariH2Config`): pseudo `m,s,p,a`, `NO_RFC7540_PRIORITIES=1`.
-- Support HTTP/3 via `HelloIOS_18_QUIC`.
+- Speak HTTP/3 via `HelloIOS_18_QUIC`.
 - Default Akamai: `2:0;4:2097152;3:100;5:16384;9:1|10485760|0|m,s,p,a`.
 
 ---
 
 ## Chrome Android
 
-Chrome on Android uses Chrome's native TLS stack (not WebKit-restricted like iOS).
+Android Chrome ships its own native TLS stack. No WebKit lockdown like iOS.
 
 | Preset | UA | TLS | Notes |
 |---|---|---|---|
@@ -124,13 +124,13 @@ Chrome on Android uses Chrome's native TLS stack (not WebKit-restricted like iOS
 | `chrome-144-android` | `...Chrome/144.0.0.0...` | `HelloChrome_144_Linux` | Native Go preset. |
 | `chrome-143-android` | `...Chrome/143.0.0.0...` | `HelloChrome_143_Linux` | Native Go preset. |
 
-The `sec-ch-ua-mobile` value is `?1` (vs `?0` for desktop), `sec-ch-ua-platform` is `"Android"`. Default Akamai matches Chrome desktop (because the H2 stack is the same).
+`sec-ch-ua-mobile` becomes `?1` (vs `?0` on desktop). `sec-ch-ua-platform` is `"Android"`. Default Akamai matches Chrome desktop because the H2 stack is the same.
 
 ---
 
 ## Firefox
 
-Firefox uses a totally different TLS extension order from Chrome (compare the JA3s above).
+Firefox uses a totally different TLS extension order from Chrome. Compare the JA3s above and you'll see.
 
 | Preset | UA | TLS | Notes |
 |---|---|---|---|
@@ -140,9 +140,9 @@ Firefox uses a totally different TLS extension order from Chrome (compare the JA
 All Firefox presets:
 
 - Use the Firefox H2 stack (`firefoxH2Config`): pseudo `m,p,a,s`, `ENABLE_PUSH=0`, custom HPACK ordering.
-- Send `TE: trailers` (Chrome doesn't).
+- Send `TE: trailers`. Chrome doesn't.
 - Default Akamai for `firefox-148`: `1:65536;2:0;4:131072;5:16384|12517377|0|m,p,a,s`.
-- Don't send `sec-ch-ua` headers (Firefox doesn't implement Client Hints).
+- Skip `sec-ch-ua` headers entirely. Firefox doesn't implement Client Hints.
 
 ---
 
@@ -154,9 +154,9 @@ All Firefox presets:
 
 Safari macOS:
 
-- Pseudo order `m,s,p,a` (different from Chrome and Firefox).
+- Pseudo order `m,s,p,a`. Different from both Chrome and Firefox.
 - `NO_RFC7540_PRIORITIES=1`. Safari opts out of stream priorities.
-- No `sec-ch-ua`. Header order is shorter than Chrome.
+- No `sec-ch-ua`. Header order is shorter than Chrome's.
 - Default Akamai: `2:0;4:2097152;3:100;5:16384;9:1|10485760|0|m,s,p,a`.
 
 ---
@@ -168,13 +168,13 @@ Safari macOS:
 | `safari-18-ios` | `Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1` | `HelloIOS_18` | H3 via `HelloIOS_18_QUIC`. |
 | `safari-17-ios` | `...iPhone OS 17_0...Version/17.0 Mobile...` | `HelloIOS_17` | Older variant. |
 
-iOS Safari shares the H2 fingerprint with macOS Safari but uses a slightly different TLS extension order (visible in the JA3, identical in JA4).
+iOS Safari shares the H2 fingerprint with macOS Safari but ships a slightly different TLS extension order. Visible in the JA3, identical in JA4.
 
 ---
 
 ## Per-preset details
 
-For the static parts of any preset (UA, sec-ch-ua, header order, H2 settings), the source of truth is the JSON file in `fingerprint/embedded/` (for v147+) or the Go function in `fingerprint/presets.go` (for v146 and earlier).
+For the static parts of any preset (UA, sec-ch-ua, header order, H2 settings), the source of truth is either the JSON in `fingerprint/embedded/` (v147+) or the Go function in `fingerprint/presets.go` (v146 and older).
 
 To dump any preset as canonical JSON:
 
@@ -185,7 +185,7 @@ j, err := fingerprint.Describe("chrome-148-windows")
 // j is the round-trip-stable JSON form
 ```
 
-The same JSON loads back via `fingerprint.LoadPresetFromJSON` and `fingerprint.BuildPreset` without modification, so this is also how you'd snapshot a preset to disk for diffing across versions.
+That same JSON loads back via `fingerprint.LoadPresetFromJSON` and `fingerprint.BuildPreset` unmodified. So this is also how you snapshot a preset to disk for diffing across versions.
 
 ---
 
@@ -202,6 +202,6 @@ Quick guide:
 | Sites that block Chrome but pass Safari | `safari-latest` |
 | Pinning to a specific version for reproducibility | `chrome-148-windows` (no `-latest`) |
 
-For sites that fingerprint the TCP/IP stack (uncommon, but some bot-management products do it), pair the preset with `WithTCPFingerprint(...)` to spoof TTL / window size / MSS.
+For sites that fingerprint the TCP/IP stack (rare, but a few bot-management products do), pair the preset with `WithTCPFingerprint(...)` to spoof TTL / window size / MSS.
 
-For everything else: start with `chrome-latest`, capture against `tls.peet.ws/api/all`, compare against a real Chrome from the same OS, file an issue if the JA3 / Akamai / JA4 doesn't match.
+For everything else: start with `chrome-latest`, capture against `tls.peet.ws/api/all`, compare against a real Chrome on the same OS, file an issue if JA3 / Akamai / JA4 doesn't match.

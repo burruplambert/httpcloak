@@ -5,7 +5,7 @@ sidebar_position: 5
 
 # Domain and Path Matching
 
-When the jar decides which cookies ride along on the next request, it walks four checks: domain, path, secure, expiry. Get any of them wrong and the cookie either leaks where it shouldn't or silently goes missing where it should have been sent.
+The jar runs four checks before a cookie rides along: domain, path, secure, expiry. Get any of them wrong and the cookie either leaks where it shouldn't or silently goes missing where it should have been sent.
 
 This page covers the rules httpcloak's jar follows and the surprises that catch most people out.
 
@@ -28,7 +28,7 @@ Examples with a request to `https://api.example.com/`:
 | `.other.com` | domain | no |
 
 :::caution Leading dot, RFC vs reality
-Strict RFC 2109 said `Domain=example.com` (no leading dot) meant "exactly example.com." RFC 6265 and every modern browser treat it as if you wrote `.example.com`, so it includes subdomains. When httpcloak parses `Set-Cookie` from a response, it follows the modern behaviour: stored with the leading dot internally, matches subdomains.
+Strict RFC 2109 said `Domain=example.com` (no leading dot) meant "exactly example.com." RFC 6265 and every modern browser treat it as if you wrote `.example.com`, so it includes subdomains. When httpcloak parses `Set-Cookie` from a response, it follows the modern behavior: stored with the leading dot internally, matches subdomains.
 
 Heads up: when you call the programmatic `SetCookie()` / `set_cookie()` API yourself, the same string `Domain="example.com"` (no leading dot) is currently stored as **host-only** instead, which is the older RFC 2109 reading. Asymmetry with response-header parsing. If you want a domain cookie via the API, write the leading dot explicitly: `Domain=".example.com"`.
 :::
@@ -167,9 +167,9 @@ var r2 = s.Get("https://httpbin.org/anything");
 - **You meant host-only but typed `Domain`.** Setting `Domain=example.com` makes the cookie ride out to every subdomain. If you only want `example.com` itself, omit `Domain` entirely.
 - **Path looks like it matches but doesn't.** `/api` does not match `/apiv2`. The boundary check requires a `/` (or exact equality).
 - **Secure cookie set over HTTP.** Some local dev setups proxy through plain HTTP. The jar won't store a `Secure` cookie if the response wasn't HTTPS.
-- **Setting `Domain` for someone else's domain.** A response from `a.com` setting `Domain=b.com` gets rejected. Cross-site cookie injection is not a thing the jar will help you with.
-- **Forgetting expiry on long-lived sessions.** A cookie with `Max-Age=10` is gone in ten seconds. The jar will quietly stop sending it. If a server-side flow seems to log you out for no reason, check the cookie expiry.
+- **Setting `Domain` for someone else's domain.** A response from `a.com` setting `Domain=b.com` gets rejected. Cross-site cookie injection isn't a thing the jar will help you with.
+- **Forgetting expiry on long-lived sessions.** A cookie with `Max-Age=10` is gone in ten seconds. The jar will quietly stop sending it. If a server-side flow seems to log you out for no reason, check the cookie expiry first.
 
 :::warning Don't leak cookies to subdomains
-If you set `Domain` in your `Cookie` header without thinking, you can leak cookies to subdomains you didn't mean to hit. Match the browser's behaviour: leave `Domain` empty on cookies you set yourself when you only want host-only matching. Adding the attribute opts you into subdomain delivery for the rest of the cookie's life.
+If you set `Domain` in your `Cookie` header without thinking, you can leak cookies to subdomains you didn't mean to hit. Match the browser's behavior: leave `Domain` empty on cookies you set yourself when you only want host-only matching. Adding the attribute opts you into subdomain delivery for the rest of the cookie's life.
 :::

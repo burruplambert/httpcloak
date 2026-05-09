@@ -5,7 +5,7 @@ sidebar_position: 4
 
 # Architecture
 
-The high-level component map of the library. Use this when you're trying to figure out which package owns a behaviour, or when you want to know how a request flows from `Session.Do` to a TLS ClientHello on the wire.
+A top-down map of the library. Pull this up when you're trying to figure out which package owns a behaviour, or when you want to trace a request from `Session.Do` all the way down to a TLS ClientHello hitting the wire.
 
 ---
 
@@ -63,7 +63,7 @@ The high-level component map of the library. Use this when you're trying to figu
                +-------------------------------+
 ```
 
-Three transports, one session layer, one fingerprint registry, one DNS layer. The session decides which transport handles a given request based on what the host advertises (Alt-Svc for H3) and what was forced via options.
+Three transports, one session layer, one fingerprint registry, one DNS layer. The session picks which transport handles a request based on what the host advertises (Alt-Svc for H3) and whatever you forced via options.
 
 ---
 
@@ -71,7 +71,7 @@ Three transports, one session layer, one fingerprint registry, one DNS layer. Th
 
 ### `httpcloak` (root)
 
-The public Go API. `Client`, `Session`, all `WithX` option constructors, multipart helpers. This package is intentionally thin: everything interesting lives in subpackages. Most options just set fields on a `protocol.SessionConfig` that gets handed to `session.NewSession`.
+The public Go API. `Client`, `Session`, all the `WithX` option constructors, multipart helpers. Deliberately thin. Everything interesting lives in subpackages. Most options just set fields on a `protocol.SessionConfig` that gets handed to `session.NewSession`.
 
 Files: `httpcloak.go`, `local_proxy.go`.
 
@@ -79,43 +79,43 @@ Files: `httpcloak.go`, `local_proxy.go`.
 
 Stateful session. Owns the cookie jar, the per-host transport map, and the lifecycle of `Refresh` / `Fork` / `Warmup` / state persistence.
 
-Notable behaviours:
+The interesting bits:
 
-- One transport per host, lazily created. The first request to `example.com` builds the transport; subsequent requests reuse it.
-- `Refresh()` closes connections but keeps the cookie jar and TLS resumption ticket cache. Optionally switches protocol.
-- `Fork(n)` returns `n` child sessions sharing the cookie jar and TLS cache but with their own connections. Mimics multiple browser tabs.
-- `Warmup(ctx, url)` simulates a real page load: fetches the HTML, parses it, then fetches CSS/JS/image subresources with realistic per-resource priorities and timing.
+- One transport per host, lazily created. First request to `example.com` builds the transport. Every request after reuses it.
+- `Refresh()` closes connections but keeps the cookie jar and the TLS resumption ticket cache. Can switch protocols on the way.
+- `Fork(n)` returns `n` child sessions sharing the cookie jar and TLS cache but with their own connections. Like opening multiple browser tabs.
+- `Warmup(ctx, url)` simulates a real page load: fetches the HTML, parses it, then pulls CSS/JS/image subresources with realistic per-resource priorities and timing.
 
 ### `transport/`
 
-The three transports plus the unifying `Transport` wrapper. Each transport handles one protocol family.
+The three transports plus the unifying `Transport` wrapper. One transport per protocol family.
 
-- **`HTTP1Transport`**: raw TCP, TLS via uTLS, HTTP/1.1 framing via the `sardanioss/http` fork. Used when a host doesn't speak H2 or H1 is forced.
-- **`HTTP2Transport`**: uTLS for ClientHello, then a custom `http2.ClientConn` from the `sardanioss/http` fork. The custom conn is what lets us send Chrome's exact `SETTINGS` order, `PRIORITY` frames, `WINDOW_UPDATE` value, and HPACK indexing policy.
+- **`HTTP1Transport`**: raw TCP, TLS via uTLS, HTTP/1.1 framing through the `sardanioss/http` fork. Kicks in when a host doesn't speak H2 or H1's been forced.
+- **`HTTP2Transport`**: uTLS for the ClientHello, then a custom `http2.ClientConn` from the `sardanioss/http` fork. That custom conn is what lets us send Chrome's exact `SETTINGS` order, `PRIORITY` frames, `WINDOW_UPDATE` value, and HPACK indexing policy.
 - **`HTTP3Transport`**: `quic-go` from `sardanioss/quic-go` (with the `PRIORITY_UPDATE` fix and Chrome-style initial packet shaping) plus `http3.Transport`.
 
-Other things this package owns:
+The other stuff this package owns:
 
-- **Speculative TLS for proxy CONNECT**: sends the CONNECT request and the TLS ClientHello in a single TCP write, saving one round-trip. Off by default because some proxies choke. Toggled via `WithEnableSpeculativeTLS`.
-- **Happy Eyeballs**: iPv4/IPv6 racing in H3 dial functions. The first address that completes the QUIC handshake wins; the loser is closed.
-- **`raceH3H2`**: protocol racing. When a host advertises H3 via Alt-Svc but the user hasn't forced a protocol, both an H3 dial and an H2 dial are started in parallel. First successful handshake wins.
+- **Speculative TLS for proxy CONNECT**: sends the CONNECT request and the TLS ClientHello in one TCP write. Saves a round-trip. Off by default because some proxies choke on it. Toggle via `WithEnableSpeculativeTLS`.
+- **Happy Eyeballs**: IPv4/IPv6 racing inside the H3 dial functions. First address that completes the QUIC handshake wins. The loser gets closed.
+- **`raceH3H2`**: protocol racing. When a host advertises H3 via Alt-Svc and you haven't forced a protocol, an H3 dial and an H2 dial fire off in parallel. First successful handshake wins.
 - **TLS session ticket cache**: in-memory by default, pluggable via `WithSessionCache(backend, errCb)` for distributed setups (Redis, etc.).
-- **Connection pool**: per-transport, with idle timeout. H3 idle is configurable via `WithQuicIdleTimeout`.
+- **Connection pool**: per-transport with idle timeout. H3 idle is set via `WithQuicIdleTimeout`.
 
 ### `fingerprint/`
 
 The preset registry and the data structures behind it.
 
 - `presets.go`: Go-defined presets (Chrome 133-146, Firefox 133, Safari 18, iOS, Android variants). Each preset is a `func() *Preset`.
-- `embedded/*.json`: JSON-defined presets (Chrome 147, 148 across all platforms). Loaded at package init time and registered alongside the Go presets.
-- `custom_preset.go`: JSON parsing + `BuildPreset`. Used both for the embedded JSONs and for user-supplied presets via `LoadPresetFromFile` / `LoadPresetFromJSON`.
-- `describe.go`: the inverse of `BuildPreset`. Produces canonical JSON from a `*Preset`. Round-trip stable.
+- `embedded/*.json`: JSON-defined presets (Chrome 147, 148 across every platform). Loaded at package init and registered alongside the Go presets.
+- `custom_preset.go`: JSON parsing plus `BuildPreset`. Powers both the embedded JSONs and user-supplied presets through `LoadPresetFromFile` / `LoadPresetFromJSON`.
+- `describe.go`: the inverse of `BuildPreset`. Spits canonical JSON from a `*Preset`. Round-trip stable.
 - `client_hello_ids.go`: string-to-uTLS ClientHelloID resolution.
-- `akamai.go`: Akamai HTTP/2 fingerprint string parser. The shorthand format `SETTINGS|WINDOW_UPDATE|PRIORITY|PSEUDO` is parsed here.
+- `akamai.go`: Akamai H2 fingerprint string parser. The shorthand format `SETTINGS|WINDOW_UPDATE|PRIORITY|PSEUDO` is parsed here.
 - `ja3.go`: JA3 string parser and TLS spec builder.
 - `headers.go`: header order and value handling.
-- `preset_pool.go`: round-robin / random rotation across multiple presets.
-- `priority_table_test.go` (and the runtime piece in transport): RFC 9218 priority handling for `sec-fetch-dest` driven priorities.
+- `preset_pool.go`: round-robin or random rotation across multiple presets.
+- `priority_table_test.go` (paired with the runtime piece in transport): RFC 9218 priority handling for `sec-fetch-dest` driven priorities.
 
 ### `proxy/`
 
@@ -123,25 +123,25 @@ Proxy implementations. Three protocols:
 
 - **HTTP CONNECT**: for `http://` and `https://` proxy URLs. Used by H1 and H2.
 - **SOCKS5**: for `socks5://` URLs. Used by H1, H2, and (if the proxy supports UDP-associate) H3.
-- **MASQUE**: UDP-tunnelled-over-HTTP/3 proxying. Used for H3 over an HTTP-aware UDP proxy. Implements the CONNECT-UDP method.
+- **MASQUE**: UDP-tunnelled-over-HTTP/3 proxying. Used for H3 through an HTTP-aware UDP proxy. Implements the CONNECT-UDP method.
 
-Proxy chains are supported (proxy through a proxy). `WithSessionProxy` sets a single URL for all protocols; `WithSessionTCPProxy` + `WithSessionUDPProxy` lets you split (e.g. SOCKS5 for H1/H2, MASQUE for H3).
+Proxy chains work (proxy through a proxy). `WithSessionProxy` sets one URL for all protocols. `WithSessionTCPProxy` + `WithSessionUDPProxy` lets you split it (say, SOCKS5 for H1/H2, MASQUE for H3).
 
 ### `dns/`
 
 DNS resolution layer.
 
 - A/AAAA lookup with caching.
-- HTTPS RR lookup for ECH config retrieval. Used by `WithECHFrom` and the default ECH-when-available path.
+- HTTPS RR lookup for pulling ECH config. Used by `WithECHFrom` and the default ECH-when-available path.
 - Per-resolver overrides (system, DoH, custom).
 
 ### `protocol/`
 
-The IPC layer for the daemon binary (`httpcloak-daemon`). Languages other than Go (Python, Node.js, .NET) talk to the daemon over stdin/stdout JSON. Not relevant for direct Go usage, but `protocol/types.go` defines `SessionConfig` which the root package's `NewSession` builds internally.
+The IPC layer for the daemon binary (`httpcloak-daemon`). Languages other than Go (Python, Node.js, .NET) talk to the daemon over stdin/stdout JSON. Not relevant if you're using the Go API directly. But `protocol/types.go` defines `SessionConfig`, which is what the root package's `NewSession` builds internally.
 
 ### `client/`
 
-A second, lower-level client surface that predates the unified root API. Most users should use the root `httpcloak.Client` / `Session` instead. The `client/` package still ships its own `WithX` options for backwards compatibility (e.g. `client.WithPreset`, `client.WithECHConfig`, certificate pinning via `PinCertificate`).
+A second, lower-level client surface that predates the unified root API. Most folks should stick with the root `httpcloak.Client` / `Session`. The `client/` package still ships its own `WithX` options for backwards compatibility (`client.WithPreset`, `client.WithECHConfig`, certificate pinning via `PinCertificate`).
 
 ### Other directories
 
@@ -154,7 +154,7 @@ A second, lower-level client surface that predates the unified root API. Most us
 
 ## Forked dependencies
 
-httpcloak depends on four forks. Each fork patches the upstream to expose fingerprint-relevant behaviour.
+httpcloak rides on four forks. Each one patches upstream to expose fingerprint-relevant knobs.
 
 | Fork | Upstream | What we changed |
 |---|---|---|
@@ -163,35 +163,35 @@ httpcloak depends on four forks. Each fork patches the upstream to expose finger
 | `sardanioss/quic-go` | `quic-go/quic-go` | Chrome-style initial packet shaping, transport parameter order control, `PRIORITY_UPDATE` frame fix, GREASE frame emission. |
 | `sardanioss/net` | `golang.org/x/net` | Various small fixes for the `http2` interaction. |
 
-These are pinned in `go.mod`. For local development you can use `go.work` to point at a local checkout of the fork.
+These are pinned in `go.mod`. For local dev you can use `go.work` to point at a local checkout of the fork.
 
 ---
 
 ## Request flow
 
-A typical `Session.Get(ctx, "https://example.com/")` follows this path:
+A normal `Session.Get(ctx, "https://example.com/")` walks this path:
 
-1. **Cookie injection**: `session/` looks up cookies for the URL and adds them as a `Cookie:` header (unless `WithoutCookieJar` is set or the caller passed their own).
-2. **Header building**: preset's header order + values + the user's request-level overrides are merged into the final ordered list. `User-Agent`, `sec-ch-ua`, `accept-language`, etc. come from the preset.
-3. **Transport selection**: `session/` looks up the per-host transport. If none exists, it builds one based on what the host has advertised (H3 via Alt-Svc cache) or what the user forced.
-4. **Connect / dial**: the transport opens a connection if needed. For H1/H2: TCP, then TLS via uTLS with the preset's ClientHello. For H3: UDP, then QUIC handshake with the preset's QUIC ClientHello + transport parameters.
-   - With Happy Eyeballs: IPv4 and IPv6 are raced.
-   - With protocol racing: H3 and H2 are raced if the host advertises both.
-   - With a proxy: CONNECT / SOCKS5 / MASQUE first, then handshake.
-5. **DNS / ECH**: handled by `dns/`. ECH HTTPS RR is fetched if not disabled.
-6. **Wire send**: the transport writes the request frames (HTTP/2 `HEADERS` + `DATA`, or HTTP/3 equivalent). The frame ordering, settings, priorities all come from the preset.
+1. **Cookie injection**: `session/` looks up cookies for the URL and tacks them on as a `Cookie:` header (unless `WithoutCookieJar` is set or the caller already passed their own).
+2. **Header building**: preset's header order + values + your request-level overrides get merged into the final ordered list. `User-Agent`, `sec-ch-ua`, `accept-language`, etc. all come from the preset.
+3. **Transport selection**: `session/` looks up the per-host transport. If none yet, it builds one based on whatever the host has advertised (H3 via Alt-Svc cache) or what you forced.
+4. **Connect / dial**: the transport opens a connection if needed. For H1/H2: TCP, then TLS via uTLS with the preset's ClientHello. For H3: UDP, then QUIC handshake with the preset's QUIC ClientHello plus transport parameters.
+   - Happy Eyeballs races IPv4 and IPv6.
+   - Protocol racing fires H3 and H2 in parallel if the host advertises both.
+   - Through a proxy: CONNECT / SOCKS5 / MASQUE first, then handshake.
+5. **DNS / ECH**: handled by `dns/`. ECH HTTPS RR is fetched unless disabled.
+6. **Wire send**: the transport writes request frames (HTTP/2 `HEADERS` + `DATA`, or HTTP/3 equivalent). Frame ordering, settings, priorities all come from the preset.
 7. **Response**: read back, parsed, body delivered as `io.ReadCloser`.
-8. **Cookie storage**: `Set-Cookie` headers from the response are added to the jar (unless `WithoutCookieJar`).
-9. **Redirect**: if the response is 3xx and following is enabled, repeat from step 1 with the new URL.
+8. **Cookie storage**: `Set-Cookie` headers from the response go into the jar (unless `WithoutCookieJar`).
+9. **Redirect**: if the response is 3xx and follow is on, jump back to step 1 with the new URL.
 
 ---
 
 ## Threading and concurrency
 
 - `Session` is goroutine-safe for concurrent requests. Internal state (cookie jar, transport map, TLS cache) is mutex-protected.
-- `Fork(n)` returns sessions that share the cookie jar mutex with the parent. Concurrent requests across forks contend on the jar but have independent connections.
-- Transport `Close()` paths are wrapped in `closeWithTimeout` because QUIC `Close` can block indefinitely on a half-closed UDP socket. This is documented as one of the timeout patterns we keep an eye on.
-- Per-request context propagates through to the transport. Cancelling the context cancels the in-flight read / handshake / dial.
+- `Fork(n)` returns sessions sharing the cookie jar mutex with the parent. Concurrent requests across forks contend on the jar but ride independent connections.
+- Transport `Close()` paths are wrapped in `closeWithTimeout` because QUIC `Close` can hang forever on a half-closed UDP socket. One of the timeout patterns we keep a close eye on.
+- Per-request context propagates down to the transport. Cancel the context, you cancel the in-flight read, handshake, or dial.
 
 ---
 
@@ -207,4 +207,4 @@ A typical `Session.Get(ctx, "https://example.com/")` follows this path:
 | Hangs on close | `transport/` close paths. Check the QUIC close timeout wrapping. |
 | Timeout not respected | `session/` and `transport/`. Context propagation, deadline computation. |
 
-For everything else: the source is easier to read than this map. Start at `httpcloak.NewSession`, follow the calls.
+For everything else, the source reads easier than this map. Start at `httpcloak.NewSession` and just follow the calls.

@@ -5,24 +5,24 @@ sidebar_position: 1
 
 # Options
 
-The full list of every option you can pass to `httpcloak.New(...)` and `httpcloak.NewSession(...)`. Use this page as a lookup. For the why and how of each option, follow the link to the topic page.
+Every option you can pass to `httpcloak.New(...)` and `httpcloak.NewSession(...)`, all in one place. Lookup-style. For the reasoning behind each one, follow the link to the topic page.
 
 :::info
-This is a flat reference. For why each option exists and how to use it well, see the topic sections (Proxies, Fingerprinting, Sessions, etc.).
+Flat reference. For why each option exists and when to reach for it, see the topic sections (Proxies, Fingerprinting, Sessions, etc.).
 :::
 
-Two surfaces exist:
+Two surfaces:
 
-- **`httpcloak.New(preset, ...Option)`** returns a stateless `*Client`. Few options.
-- **`httpcloak.NewSession(preset, ...SessionOption)`** returns a stateful `*Session` (cookies, TLS resumption, header memory). All the interesting options live here.
+- **`httpcloak.New(preset, ...Option)`** gives you a stateless `*Client`. Few options.
+- **`httpcloak.NewSession(preset, ...SessionOption)`** gives you a stateful `*Session` (cookies, TLS resumption, header memory). All the juicy options live here.
 
-If you're new, start with `NewSession`. `New` exists for one-shot scripts.
+New here? Start with `NewSession`. `New` is for one-shot scripts.
 
 ---
 
 ## Client options (`httpcloak.New`)
 
-These configure the stateless `Client`. Two options total, by design.
+The stateless `Client`. Two options, by design.
 
 | Signature | Default | What it does |
 |---|---|---|
@@ -33,11 +33,11 @@ These configure the stateless `Client`. Two options total, by design.
 
 ## Session options (`httpcloak.NewSession`)
 
-The full surface. Grouped by category. All option constructors return a `SessionOption`.
+The full surface, grouped by category. Every option constructor returns a `SessionOption`.
 
 ### Lifecycle and cookies
 
-Options that control session-level state: cookie jar, header memory, protocol switching after `Refresh()`.
+Session-level state: the cookie jar, header memory, what protocol you flip to after `Refresh()`.
 
 | Signature | Default | What it does |
 |---|---|---|
@@ -47,7 +47,7 @@ Options that control session-level state: cookie jar, header memory, protocol sw
 
 ### Network, proxies, local binding
 
-Options that change how connections are made: proxy routing, IP family preference, source IP.
+How connections get made: proxy routing, IP family preference, source IP.
 
 | Signature | Default | What it does |
 |---|---|---|
@@ -62,7 +62,7 @@ Options that change how connections are made: proxy routing, IP family preferenc
 
 ### Protocol forcing
 
-Options that lock or unlock specific HTTP versions.
+Lock or unlock specific HTTP versions.
 
 | Signature | Default | What it does |
 |---|---|---|
@@ -107,7 +107,7 @@ Options that lock or unlock specific HTTP versions.
 
 ### Custom fingerprint struct (`CustomFingerprint`)
 
-The struct passed to `WithCustomFingerprint`. Defined in the root package.
+The struct you hand to `WithCustomFingerprint`. Lives in the root package.
 
 | Field | Type | Notes |
 |---|---|---|
@@ -122,7 +122,7 @@ The struct passed to `WithCustomFingerprint`. Defined in the root package.
 
 ## Per-request options
 
-The `Request` struct has a per-call override that doesn't go through `SessionOption`:
+The `Request` struct carries per-call overrides. These don't go through `SessionOption`:
 
 | Field | Type | What it does |
 |---|---|---|
@@ -137,7 +137,7 @@ The `Request` struct has a per-call override that doesn't go through `SessionOpt
 
 ## Session methods (mutators after construction)
 
-These aren't `SessionOption` constructors; they live on `*Session` and you call them after `NewSession` returns.
+Not `SessionOption` constructors. These live on `*Session` and you call them after `NewSession` hands you one.
 
 | Method | What it does |
 |---|---|
@@ -168,7 +168,7 @@ Cookie API:
 | `DeleteCookie(name, domain string)` | Delete by name. Empty domain wipes from every domain. |
 | `ClearCookies()` | Wipe the jar. |
 
-Loaders (package-level, not methods):
+Loaders. Package-level, not methods:
 
 | Function | What it does |
 |---|---|
@@ -180,7 +180,7 @@ Loaders (package-level, not methods):
 
 ## Top-level helpers
 
-These aren't options but live in the root package.
+Not options. Just useful symbols in the root package.
 
 | Symbol | What it does |
 |---|---|
@@ -210,4 +210,4 @@ These aren't options but live in the root package.
 | Local IP bind | none (OS-chosen) |
 | IPv4/IPv6 preference | racing (Happy Eyeballs) |
 
-If a default doesn't match what you expect, file an issue with the preset name and the `tls.peet.ws/api/all` capture.
+If a default isn't what you expected, file an issue with the preset name and a `tls.peet.ws/api/all` capture.

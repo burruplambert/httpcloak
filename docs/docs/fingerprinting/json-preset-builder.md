@@ -8,9 +8,9 @@ import TabItem from '@theme/TabItem';
 
 # JSON Preset Builder
 
-This is the customization workflow you actually want.
+This is the customization workflow you'll actually want.
 
-The idea: take any built-in preset, dump it as fully-resolved JSON, mutate the fields you care about, load the mutated JSON back as a new preset under a fresh name. No Go code change, no rebuild. Three function calls and you're done.
+Take any built-in preset, dump it as fully-resolved JSON, mutate the fields you care about, load the mutated JSON back as a new preset under a fresh name. No Go code change, no rebuild. Three function calls and you're done.
 
 ## The three functions
 
@@ -22,21 +22,21 @@ The idea: take any built-in preset, dump it as fully-resolved JSON, mutate the f
 
 ## Round-trip is byte-identical
 
-Calling `describe_preset` then `load_preset_from_json` then `describe_preset` again produces byte-for-byte identical JSON. We rely on that property internally, it's why our embedded Chrome 148 presets are JSON files instead of Go code. We tested it for every shipped preset.
+Call `describe_preset`, then `load_preset_from_json`, then `describe_preset` again, you get byte-for-byte identical JSON. We lean on that property internally, it's why our embedded Chrome 148 presets are JSON files instead of Go code. Tested for every shipped preset.
 
-What this means for you: you can describe, edit, load, describe, diff. The diff shows exactly what changed. No surprise drift from defaults being lost.
+What this means for you: describe, edit, load, describe, diff. The diff shows exactly what changed. No surprise drift from defaults getting dropped.
 
 ## Use cases
 
-- **Spoof a Chrome version we haven't shipped yet.** Take `chrome-latest`, override the User-Agent and sec-ch-ua brand list, register as `chrome-149-windows`. Five minutes.
-- **Pin a specific UA OS that doesn't match your runtime.** A Linux server can ship `chrome-148-windows` UA without touching the TLS handshake.
+- **Spoof a Chrome version we haven't shipped yet.** Grab `chrome-latest`, override the User-Agent and sec-ch-ua brand list, register as `chrome-149-windows`. Five minutes.
+- **Pin a UA OS that doesn't match your runtime.** A Linux box can ship the `chrome-148-windows` UA without touching the TLS handshake.
 - **Remove or add a single TLS extension.** Override `tls.signature_algorithms` or `tls.alpn` without rebuilding the whole ClientHello.
 - **Tweak one HTTP/2 SETTINGS value.** Bump `initial_window_size`, leave everything else alone.
 - **Swap in a captured ClientHello from a real browser session.** See the [Build a custom preset from a tls.peet.ws capture](/recipes/build-custom-chrome-from-tls-peet) recipe.
 
 ## Walkthrough: dump, mutate, load, send
 
-We'll take `chrome-148-windows`, change the User-Agent, register the result as `my-chrome-mutant`, and send a request through it.
+Take `chrome-148-windows`, change the User-Agent, register the result as `my-chrome-mutant`, fire a request through it.
 
 <Tabs groupId="lang">
 <TabItem value="go" label="Go">
@@ -164,7 +164,7 @@ Console.WriteLine(r.Text);
 </TabItem>
 </Tabs>
 
-What we get back from `tls.peet.ws/api/all`:
+What `tls.peet.ws/api/all` reflects back:
 
 ```text
 user_agent:              Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/200.0.0.0 Safari/537.36
@@ -173,11 +173,11 @@ peetprint_hash:          1d4ffe9b0e34acac0bd883fa7f79d7b5
 akamai_fingerprint_hash: 52d84b11737d980aef856699f885ca86
 ```
 
-The User-Agent is our custom value. The TLS / H2 fingerprint is byte-identical to the original `chrome-148-windows`. Mutation isolated to exactly the field we touched, nothing else drifted.
+The User-Agent's our custom value. The TLS / H2 fingerprint is byte-identical to the original `chrome-148-windows`. Mutation lands on exactly the field we touched, nothing else drifted.
 
 ## What `describe_preset` returns
 
-The output is a complete `PresetFile` with everything resolved:
+A complete `PresetFile` with everything resolved:
 
 ```json
 {
@@ -230,18 +230,18 @@ The output is a complete `PresetFile` with everything resolved:
 }
 ```
 
-Things worth noting:
+Worth noting:
 
-- Inheritance is flattened. Even though `chrome-148-windows` is internally based on `chrome-147-windows` which is based on `chrome-146-windows`, the describe output has no `based_on` field. Every value is emitted explicitly. You don't need to chase the chain.
-- `tls.client_hello` says `chrome-146-windows`. That's the underlying utls ClientHelloID we use. The TLS bytes haven't actually changed since Chrome 146 desktop, only the User-Agent and sec-ch-ua values have. This is correct.
-- All H2 SETTINGS values appear, even zero ones (`max_concurrent_streams: 0`, `max_frame_size: 0`). Zero here means "don't emit this SETTINGS entry on the wire", and that information is preserved through the round-trip.
-- The full RFC 7540 priority table is emitted under `http2.priority_table`. Chrome 147+ ships its real per-Sec-Fetch-Dest urgencies; presets that opt out (Safari, iOS Chrome, iOS Safari) omit this block.
+- Inheritance is flattened. Even though `chrome-148-windows` is internally based on `chrome-147-windows` which is based on `chrome-146-windows`, the describe output has no `based_on` field. Every value's emitted explicitly. You don't need to chase the chain.
+- `tls.client_hello` says `chrome-146-windows`. That's the underlying utls ClientHelloID we use. TLS bytes haven't actually changed since Chrome 146 desktop, only the User-Agent and sec-ch-ua values have. That's correct.
+- Every H2 SETTINGS value shows up, even the zero ones (`max_concurrent_streams: 0`, `max_frame_size: 0`). Zero means "don't emit this SETTINGS entry on the wire", and that info survives the round-trip.
+- The full RFC 7540 priority table lands under `http2.priority_table`. Chrome 147+ ships its real per-Sec-Fetch-Dest urgencies. Presets that opt out (Safari, iOS Chrome, iOS Safari) skip this block.
 
 For the full schema with every field documented, see the [JSON Preset Spec](../reference/json-preset-spec).
 
 ## Inheritance with `based_on`
 
-You don't have to dump and edit. You can write a thin patch JSON that just lists what you want to change, with `based_on` pointing at the parent:
+You don't have to dump and edit. You can write a thin patch JSON that lists only what you want to change, with `based_on` pointing at the parent:
 
 ```json
 {
@@ -256,18 +256,18 @@ You don't have to dump and edit. You can write a thin patch JSON that just lists
 }
 ```
 
-This is what our embedded `chrome-148-windows.json` does, it's a 28-line patch on top of `chrome-147-windows`. Inheritance is recursive and we have a loop guard, so cycles are caught at load time.
+That's what our embedded `chrome-148-windows.json` does, a 28-line patch on top of `chrome-147-windows`. Inheritance is recursive with a loop guard, so cycles get caught at load time.
 
 When to use which:
 
-- `based_on` patches are tiny and readable. Prefer for "I want N+1 of an existing browser version" cases.
-- Full describe → mutate → load is mandatory if you need to override a field that's normally inherited (like clearing a sec-ch-ua brand the parent set). Setting a field to its zero value in a `based_on` patch is the same as not setting it; you have to dump and edit instead.
+- `based_on` patches are tiny and readable. Prefer them for "I want N+1 of an existing browser version" cases.
+- Full describe, mutate, load is mandatory if you need to override a field that's normally inherited (like clearing a sec-ch-ua brand the parent set). Setting a field to its zero value in a `based_on` patch is the same as not setting it, so you have to dump and edit instead.
 
 ## Strict registration vs overwrite
 
-`load_preset_from_json` registers the preset by name and silently overwrites any existing custom registration with the same name. Built-in preset names are blocked, you can't shadow `chrome-latest`.
+`load_preset_from_json` registers the preset by name and silently overwrites any existing custom registration with the same name. Built-in names are blocked, you can't shadow `chrome-latest`.
 
-If you want hard collision errors instead of silent overwrites, the Go API exposes `RegisterStrict`:
+Want hard collision errors instead of silent overwrites? The Go API has `RegisterStrict`:
 
 ```go
 p, _ := fingerprint.BuildPreset(spec)
@@ -279,5 +279,5 @@ if err := fingerprint.RegisterStrict(p.Name, p); err != nil {
 Bindings (Python / Node / .NET) only expose the silent-overwrite path right now.
 
 :::tip
-This is how you support a Chrome version we haven't shipped yet. Take `chrome-latest` as the base, override the sec-ch-ua brand list and User-Agent, you've got `chrome-N+1` in five minutes. The TLS handshake stays correct because Chrome rarely changes the TLS layer between minor versions, and when it does we'll ship a new preset within a release cycle.
+This is how you support a Chrome version we haven't shipped yet. Take `chrome-latest` as the base, override the sec-ch-ua brand list and User-Agent, you've got `chrome-N+1` in five minutes. TLS handshake stays correct because Chrome rarely changes the TLS layer between minor versions, and when it does we'll ship a new preset within a release cycle.
 :::

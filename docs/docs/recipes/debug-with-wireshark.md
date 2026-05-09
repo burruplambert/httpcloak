@@ -8,36 +8,35 @@ import TabItem from '@theme/TabItem';
 
 # Debug With Wireshark
 
-When you genuinely need to see what httpcloak puts on the wire, dump TLS
-keys and decrypt in Wireshark. This is the lowest-level view you can get
-short of stepping through the library with a debugger.
+When you really need to see what httpcloak puts on the wire, dump TLS keys
+and decrypt in Wireshark. Lowest-level view you can get short of stepping
+through the library with a debugger.
 
 :::info
-If you're debugging fingerprinting issues, Wireshark + keylog is the ground
-truth. tls.peet.ws is convenient but it's a server-side reconstruction, not
-the actual wire bytes. They almost always agree, but when they don't,
-Wireshark wins.
+For fingerprinting issues, Wireshark plus keylog is the ground truth.
+tls.peet.ws is handy but it's a server-side reconstruction, not the actual
+wire bytes. They mostly agree. When they don't, Wireshark wins.
 :::
 
 ## What you'll see
 
 Once decrypted, you can read:
 
-- The full TLS ClientHello, with extension order, GREASE values, key
-  shares, the works.
+- The full TLS ClientHello with extension order, GREASE values, key shares,
+  the works.
 - Every HTTP/2 frame: SETTINGS, WINDOW_UPDATE, HEADERS, PRIORITY,
   PRIORITY_UPDATE.
 - HPACK-decoded headers (Wireshark does the HPACK decode for you).
 - Every QUIC frame for HTTP/3, including PRIORITY_UPDATE and STREAM frames.
 - Server response framing, server settings, connection-level windowing.
 
-For HTTP/2 fingerprint checks specifically: SETTINGS values, settings
-order, the first PRIORITY frame on a request stream, header order in HEADERS
-frames. All of it in plain bytes.
+For HTTP/2 fingerprint checks specifically: SETTINGS values, settings order,
+the first PRIORITY frame on a request stream, header order in HEADERS
+frames. All in plain bytes.
 
 ## Step 1: Dump TLS keys from your code
 
-Use `WithKeyLogFile` to write the SSLKEYLOGFILE format Wireshark expects.
+Use `WithKeyLogFile` to write the SSLKEYLOGFILE format Wireshark wants.
 
 <Tabs groupId="lang">
 <TabItem value="go" label="Go">
@@ -98,9 +97,9 @@ with httpcloak.Session("chrome-latest", key_log_file=keylog, timeout=30) as s:
 </TabItem>
 </Tabs>
 
-`WithKeyLogFile` overrides the global `SSLKEYLOGFILE` environment variable
-for this session. If you'd rather set it once for all sessions in the
-process, just export the env var before running:
+`WithKeyLogFile` overrides the global `SSLKEYLOGFILE` env var for this one
+session. Want to set it once for every session in the process? Export the
+env var before running:
 
 ```bash
 export SSLKEYLOGFILE=/tmp/sslkeys.log
@@ -121,9 +120,9 @@ CLIENT_TRAFFIC_SECRET_0 <client_random> <secret>
 SERVER_TRAFFIC_SECRET_0 <client_random> <secret>
 ```
 
-Four lines per TLS 1.3 connection. If you see fewer, the connection didn't
-complete. If you see zero, the file path is wrong or the session failed
-before reaching the application data stage.
+Four lines per TLS 1.3 connection. Fewer than that and the connection
+didn't complete. Zero lines and either the file path is wrong or the
+session died before hitting the application data stage.
 
 Quick sanity check:
 
@@ -140,14 +139,14 @@ SERVER_TRAFFIC_SECRET_0
 
 That's a healthy single-connection keylog.
 
-For QUIC / HTTP/3, you'll see the same four labels plus possibly
-`EARLY_TRAFFIC_SECRET` if 0-RTT was used. Wireshark handles QUIC and TLS
-keys from the same file since recent versions.
+For QUIC / HTTP/3, you'll see the same four labels plus maybe
+`EARLY_TRAFFIC_SECRET` if 0-RTT fired. Recent Wireshark versions read QUIC
+and TLS keys from the same file.
 
 ## Step 3: Capture traffic
 
-Start Wireshark BEFORE you run your program (otherwise you miss the
-ClientHello).
+Start Wireshark BEFORE you run your program. Otherwise you miss the
+ClientHello and the rest of the trace is uselessly opaque.
 
 Useful capture filters:
 
@@ -174,14 +173,14 @@ In Wireshark:
 2. **(Pre)-Master-Secret log filename** → `/tmp/sslkeys.log`.
 3. OK.
 
-Wireshark re-decodes the existing capture immediately. Any TLS connection
-whose `client_random` matches a line in the keylog gets fully decrypted.
+Wireshark re-decodes the capture right there. Any TLS connection whose
+`client_random` matches a line in the keylog gets fully decrypted.
 
-For QUIC, no extra setup needed. The same TLS keylog config works.
+QUIC needs zero extra setup. Same TLS keylog config covers it.
 
 ## Step 5: Useful display filters
 
-After decryption, here are the filters worth knowing:
+After decryption, the filters worth knowing:
 
 | Filter | Shows |
 |--------|-------|
@@ -205,8 +204,8 @@ Click the ClientHello, expand **Secure Sockets Layer** → **TLS** →
 
 - Extension order matching your preset's JA4 / peetprint.
 - GREASE extension at position 0 (Chrome-style presets only).
-- `key_share` containing the same curves as your preset's `key_share_curves`
-  list. For modern Chrome that's GREASE + X25519MLKEM768 + X25519.
+- `key_share` carrying the same curves as your preset's `key_share_curves`
+  list. Modern Chrome ships GREASE + X25519MLKEM768 + X25519.
 - ALPN listing `h2` and `http/1.1` (or just `h3` for QUIC).
 
 ### HTTP/2 SETTINGS
@@ -219,9 +218,9 @@ should match your preset's settings:
 - Setting 4 (INITIAL_WINDOW_SIZE): 6291456 for Chrome.
 - Setting 6 (MAX_HEADER_LIST_SIZE): 262144 for Chrome.
 
-These should appear in the order specified by your preset's
-`settings_order`. Wireshark shows the settings sequentially, so order is
-visible in the tree view.
+These should land in the order your preset's `settings_order` specifies.
+Wireshark shows them sequentially, so order is visible right in the tree
+view.
 
 ### HTTP/2 PRIORITY on first request stream
 
@@ -230,37 +229,37 @@ carries a PRIORITY flag (`0x20`). Expand **HyperText Transfer Protocol 2**
 → **Stream** → **Header**. Look for:
 
 - `Stream Dependency`: 0
-- `Weight`: 256 (Chrome) or whatever your preset specifies
+- `Weight`: 256 (Chrome) or whatever your preset says
 - `Exclusive Bit`: set
 
-If your `stream_priority_mode` is `chrome` and you're not seeing this
-priority on the first request, something's wrong.
+If `stream_priority_mode` is `chrome` and this priority isn't showing up on
+the first request, something's busted.
 
 ### HTTP/3 PRIORITY_UPDATE
 
-For HTTP/3, look for QUIC stream frames carrying H3 PRIORITY_UPDATE
-(frame type 0xf0700). These should reference the actual request stream ID,
-not stream 0. There was a regression in older versions where the request
-stream wasn't referenced correctly, verifying this in Wireshark is the
-direct way to confirm your install behaves.
+For HTTP/3, hunt for QUIC stream frames carrying H3 PRIORITY_UPDATE
+(frame type 0xf0700). They should reference the actual request stream ID,
+not stream 0. Older versions had a regression where the request stream
+wasn't referenced correctly. Wireshark is the most direct way to confirm
+your install actually behaves.
 
 ### HPACK / QPACK header order
 
 Click the HEADERS / QPACK encoder stream. Wireshark decodes the headers
 into a list. The order should match your preset's `hpack_header_order`
-(for H2) or QPACK ordering (for H3). Pseudo-headers come first,
-specifically in the order:
+(H2) or QPACK ordering (H3). Pseudo-headers come first, specifically in
+this order:
 
 ```
 :method  :authority  :scheme  :path
 ```
 
-That's the Chrome `pseudo_order`. Other orders are visible too, Safari
-puts `:scheme` before `:authority`, for instance.
+That's the Chrome `pseudo_order`. Other shapes are visible too. Safari, for
+instance, puts `:scheme` before `:authority`.
 
 ## tshark for CI
 
-If you want to assert these things in tests instead of eyeballing them:
+Want to assert these things in tests instead of eyeballing them:
 
 ```bash
 # Extract just the SETTINGS frames as JSON
@@ -272,27 +271,26 @@ tshark -r capture.pcapng -Y "tls.handshake.type == 1" \
   -T fields -e tls.handshake.extension.type
 ```
 
-You can wire those into a test harness. Capture a known-good run, compare
-extension types and order on every CI run.
+Wire those into a test harness, capture a known-good run, compare extension
+types and order on every CI run.
 
 ## Common gotchas
 
-**Old keylog file.** If you re-use a keylog from a previous run, Wireshark
-won't decrypt the new connections, different `client_random`. Always start
-with a fresh file or delete before each run.
+**Old keylog file.** Reusing a keylog from a previous run won't decrypt new
+connections because the `client_random` is different. Always start with a
+fresh file, or delete before each run.
 
-**Capture started after handshake.** If you start tshark / Wireshark
-mid-connection, you'll miss the ClientHello. The keys are still valid, but
-Wireshark needs the handshake bytes to associate keys with the connection.
+**Capture started after the handshake.** Start tshark / Wireshark
+mid-connection and you'll miss the ClientHello. The keys are still valid,
+but Wireshark needs the handshake bytes to tie keys to the connection.
 
-**HTTP/3 over TCP fallback.** If your H3 dial fails and the library falls
-back to H2, you'll see TCP traffic instead of UDP. That's not a bug, but
-it's worth knowing. Check the `Protocol` field of your response, `h3`
-means UDP, `h2` means TCP.
+**HTTP/3 falling back to TCP.** If H3 dial fails and the library falls back
+to H2, you'll see TCP instead of UDP. Not a bug, but worth knowing. Check
+the `Protocol` field of your response: `h3` means UDP, `h2` means TCP.
 
-**Network namespace mismatch.** If your code runs in a container or netns
-and tshark runs on the host, you won't see the traffic. Run tshark inside
-the same namespace.
+**Network namespace mismatch.** Code running inside a container or netns
+while tshark runs on the host? You won't see the traffic. Run tshark in the
+same namespace.
 
 ## Related
 

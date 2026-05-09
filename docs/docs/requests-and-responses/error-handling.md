@@ -7,11 +7,11 @@ sidebar_position: 6
 
 Errors come in two flavors and they're really not the same thing:
 
-1. **Network / protocol errors.** DNS failed, connection refused, TLS handshake blew up, the request timed out before a response. The request never made it, or it made it and the server never replied. These come back as Go `error` / Python exception / Node thrown error / .NET exception.
+1. **Network / protocol errors.** DNS failed, connection refused, TLS handshake blew up, the request timed out before a response. Either it never made it, or it made it and the server never replied. These come back as Go `error` / Python exception / Node thrown error / .NET exception.
 
-2. **Real responses with a non-2xx status.** The server received your request, processed it, decided it didn't like it, and sent back `404` or `500` or whatever. The HTTP exchange is complete. These come back as **normal Response objects**. You check `StatusCode`.
+2. **Real responses with a non-2xx status.** The server got your request, processed it, didn't like it, and sent back `404` or `500` or whatever. The HTTP exchange is done. These come back as **normal Response objects**. You check `StatusCode`.
 
-Mixing them up is the most common bug. A 500 is not a network error. The server told you no. The connection is fine.
+Mixing them up is the most common bug in this space. A 500 isn't a network error. The server told you no. The connection's fine.
 
 ## The split, with code
 
@@ -103,7 +103,7 @@ Things that come back as a real error (not a Response):
 dns_resolve nope.example: lookup nope.example: no such host
 ```
 
-In Go, this is wrapped around a `*net.DNSError`. Check `IsNotFound`, `IsTemporary`, `IsTimeout` on it.
+In Go, this wraps a `*net.DNSError`. Check `IsNotFound`, `IsTemporary`, `IsTimeout` on it.
 
 ```go
 var dnsErr *net.DNSError
@@ -121,7 +121,7 @@ In other bindings the message string contains `dns_resolve` or `lookup`.
 dial example.com: dial tcp 1.2.3.4:443: connect: connection refused
 ```
 
-Server isn't listening, or a firewall is dropping it. Same shape on all bindings.
+Server isn't listening, or a firewall's dropping it. Same shape across all bindings.
 
 ### TLS handshake failure
 
@@ -130,7 +130,7 @@ tls: handshake failure
 remote error: tls: protocol_version
 ```
 
-Could be cert mismatch, expired cert, the server only supports TLS 1.3 and your config disabled it, or an anti-bot system rejecting your fingerprint at TLS level. The error message will have a hint, but they're not always easy to read.
+Could be a cert mismatch, expired cert, the server only speaks TLS 1.3 and your config disabled it, or an anti-bot system rejecting your fingerprint at TLS level. The message usually has a hint, but they're not always easy to read.
 
 ### Timeout
 
@@ -139,7 +139,7 @@ context deadline exceeded
 i/o timeout
 ```
 
-The Go form: `errors.Is(err, context.DeadlineExceeded)` returns true when the request didn't finish before your context deadline. There's also a wrapped `*net.OpError` with `Timeout() == true` for raw socket timeouts.
+In Go: `errors.Is(err, context.DeadlineExceeded)` returns true when the request didn't finish before your context deadline. There's also a wrapped `*net.OpError` with `Timeout() == true` for raw socket timeouts.
 
 ```go
 ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -163,12 +163,12 @@ Same as timeout but voluntary. `errors.Is(err, context.Canceled)`.
 
 These all come back as a populated `Response` with a status code, **not** as an error:
 
-- `4xx`: Bad Request, Unauthorized, Forbidden, Not Found, Method Not Allowed, etc.
+- `4xx`: Bad Request, Unauthorized, Forbidden, Not Found, Method Not Allowed, the usual suspects.
 - `5xx`: Server errors, Bad Gateway, Service Unavailable, Gateway Timeout.
 - `3xx` redirects (when the lib stops following them, e.g. with `WithoutRedirects()`).
 - Empty bodies, weird Content-Types, malformed JSON in the body.
 
-The HTTP exchange completed. The server replied. Whether you treat it as a failure is your business logic, not a transport concern.
+The HTTP exchange completed. The server replied. Whether you treat it as a failure is business logic, not a transport concern.
 
 ## Retry guidance
 
@@ -188,7 +188,7 @@ Rough rules:
 | 5xx + POST/PATCH | Only if you're sure the server didn't already process it. POST is **not** idempotent. |
 | 429 Too Many Requests | Yes, but back off harder. Honor `Retry-After` if present. |
 
-The session has built-in retry support. Default is **off** (issue #57 changed the default from 3 to 0 because the old behavior silently retried POSTs on 5xx, breaking idempotency assumptions):
+The session has built-in retry support. Default is **off** (issue #57 flipped the default from 3 to 0, because the old behavior silently retried POSTs on 5xx and broke idempotency assumptions):
 
 ```go
 s := httpcloak.NewSession("chrome-latest",
@@ -202,7 +202,7 @@ Pass status codes you actually want to retry on. Don't blindly retry on 4xx.
 
 ## A timeout test
 
-The simplest way to verify your timeout handling is to hit `httpbin.org/delay/N` with a context shorter than N:
+Easiest way to verify your timeout handling: hit `httpbin.org/delay/N` with a context shorter than N.
 
 <Tabs groupId="lang">
 <TabItem value="go" label="Go">
@@ -265,7 +265,7 @@ try {
 
 ## Logging tip
 
-When debugging unknown failures in production, log three things:
+When debugging unknown failures in prod, log three things:
 
 1. The full error message (don't strip the wrap chain).
 2. The error's Go type (or Python class) so you can pattern-match later.

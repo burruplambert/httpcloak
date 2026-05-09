@@ -5,7 +5,7 @@ sidebar_position: 1
 
 # Go
 
-Go is the native API. Every other binding (Python, Node, .NET) calls into the cgo wrapper that wraps this exact code, so the Go surface is the most direct way to use the lib and usually the fastest. If your project is already in Go, use this. No FFI hops, no JSON marshalling between two languages, no native binary to ship.
+Go's the native API. Every other binding (Python, Node, .NET) calls into the cgo wrapper that wraps this exact code, so the Go surface is the most direct way in and usually the fastest. If your project's already in Go, just use this. No FFI hops, no JSON marshalling between two languages, no native binary to ship.
 
 ## Install
 
@@ -13,7 +13,7 @@ Go is the native API. Every other binding (Python, Node, .NET) calls into the cg
 go get github.com/sardanioss/httpcloak
 ```
 
-The module path is `github.com/sardanioss/httpcloak` and the public package name is `httpcloak`.
+Module path is `github.com/sardanioss/httpcloak`. Public package name is `httpcloak`.
 
 ## Quick start
 
@@ -50,19 +50,19 @@ func main() {
 }
 ```
 
-Three things to notice:
+Three things worth flagging:
 
-- `NewSession` takes a preset name string and a variadic list of `SessionOption` values. See the full preset catalog at [Presets](/fingerprinting/presets).
-- The `ctx context.Context` argument is always first. This is idiomatic Go and gives you cancellation and deadline plumbing for free.
-- `defer s.Close()` and `defer resp.Close()`. The session owns connections and a cookie jar. The response body is an `io.ReadCloser` that must be drained or closed.
+- `NewSession` takes a preset name string and a variadic list of `SessionOption` values. Full preset catalog at [Presets](/fingerprinting/presets).
+- `ctx context.Context` is always the first arg. Idiomatic Go, and you get cancellation and deadlines for free.
+- `defer s.Close()` and `defer resp.Close()`. The session owns connections and a cookie jar. The response body is an `io.ReadCloser` you must drain or close.
 
 ## Two API levels
 
-httpcloak ships two levels of API. Most users want the session level.
+httpcloak ships two API levels. Most folks want the session level.
 
 ### `Session` (recommended)
 
-Persistent. Holds cookies, TLS resumption tickets, ECH configs, the connection pool. Use this when you're hitting the same host multiple times, when you care about cookies, or when you want browser-style refresh / warmup behaviour.
+Persistent. Holds cookies, TLS resumption tickets, ECH configs, the connection pool. Reach for this when you're hitting the same host more than once, when you care about cookies, or when you want browser-style refresh / warmup behaviour.
 
 ```go
 s := httpcloak.NewSession("chrome-latest")
@@ -71,7 +71,7 @@ defer s.Close()
 
 ### `Client` (lower level)
 
-Stateless wrapper for one-off requests. No cookie jar. Each `Do()` builds a fresh request through the same transport stack. Use this when you genuinely don't need state between requests.
+Stateless wrapper for one-off requests. No cookie jar. Each `Do()` builds a fresh request through the same transport stack. Use this when you genuinely don't want state between requests.
 
 ```go
 c := httpcloak.New("chrome-latest", httpcloak.WithTimeout(15*time.Second))
@@ -80,7 +80,7 @@ defer c.Close()
 resp, err := c.Get(ctx, "https://example.com")
 ```
 
-The two surfaces are intentionally similar but have different option types: `Option` for `Client`, `SessionOption` for `Session`. Don't mix them.
+The two surfaces look similar on purpose, but the option types are different: `Option` for `Client`, `SessionOption` for `Session`. Don't mix them.
 
 ## Session methods
 
@@ -94,7 +94,7 @@ func LoadSession(path string) (*Session, error)
 func UnmarshalSession(data []byte) (*Session, error)
 ```
 
-`NewSession` is the normal entry point. `LoadSession` and `UnmarshalSession` rebuild a session from a file or JSON blob saved earlier, see [Session save & restore](/connection-lifecycle/session-save-restore).
+`NewSession` is the normal entry point. `LoadSession` and `UnmarshalSession` rebuild a session from a file or JSON blob you saved earlier, see [Session save & restore](/connection-lifecycle/session-save-restore).
 
 ### Core request
 
@@ -104,7 +104,7 @@ func (s *Session) DoWithBody(ctx context.Context, req *Request, bodyReader io.Re
 func (s *Session) Get(ctx context.Context, url string) (*Response, error)
 ```
 
-The Go session API is more sparse than the Python/Node ones on purpose. `Get` is the only one-call shortcut. For `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`, `OPTIONS`, build a `Request` struct and call `Do`:
+The Go session API is sparser than Python's or Node's, on purpose. `Get` is the only one-call shortcut. For `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`, `OPTIONS`, build a `Request` struct and call `Do`:
 
 ```go
 req := &httpcloak.Request{
@@ -116,7 +116,7 @@ req := &httpcloak.Request{
 resp, err := s.Do(ctx, req)
 ```
 
-`DoWithBody` takes the body separately as an `io.Reader`. Use it for streaming uploads where you don't want to buffer the body upfront.
+`DoWithBody` takes the body separately as an `io.Reader`. Reach for it when you're streaming an upload and don't want to buffer the body upfront.
 
 ### Streaming responses
 
@@ -126,9 +126,9 @@ func (s *Session) GetStream(ctx context.Context, url string) (*StreamResponse, e
 func (s *Session) GetStreamWithHeaders(ctx context.Context, url string, headers map[string][]string) (*StreamResponse, error)
 ```
 
-`StreamResponse` exposes `Read(p []byte) (int, error)`, `ReadChunk(size int) ([]byte, error)`, `ReadAll() ([]byte, error)`, and `Close() error`. Use `DoStream` for downloads where buffering the whole body in memory is a bad idea (videos, large JSON dumps, archives).
+`StreamResponse` exposes `Read(p []byte) (int, error)`, `ReadChunk(size int) ([]byte, error)`, `ReadAll() ([]byte, error)`, and `Close() error`. Use `DoStream` for downloads where buffering the whole body in memory is a bad idea: videos, big JSON dumps, archives.
 
-Streaming does not auto-follow redirects. If the response is a 3xx, you handle it manually.
+Streaming won't auto-follow redirects. If you get a 3xx back, you handle it manually.
 
 ### Lifecycle
 
@@ -140,11 +140,11 @@ func (s *Session) Warmup(ctx context.Context, url string) error
 func (s *Session) Fork(n int) []*Session
 ```
 
-- `Close()` releases the connection pool and the cookie jar. Always defer this.
-- `Refresh()` closes connections but keeps cookies and TLS tickets. Simulates a browser hitting F5.
-- `RefreshWithProtocol("h1" | "h2" | "h3" | "auto")` does a refresh and switches the wire protocol for next requests. Useful for warming TLS on H3 then serving H2 with resumption.
-- `Warmup(ctx, url)` does a real-browser-style page load: HTML first, then subresources with proper priorities, headers, and timing. Great before hitting an antibot endpoint.
-- `Fork(n)` makes `n` child sessions that share cookies and TLS resumption with the parent but have independent connections. Same browser, multiple tabs.
+- `Close()` releases the connection pool and the cookie jar. Always defer it.
+- `Refresh()` drops connections but keeps cookies and TLS tickets. Like a browser hitting F5.
+- `RefreshWithProtocol("h1" | "h2" | "h3" | "auto")` does a refresh and switches the wire protocol for next requests. Handy for warming TLS on H3 then serving H2 with resumption.
+- `Warmup(ctx, url)` does a real-browser-style page load: HTML first, then subresources with proper priorities, headers, and timing. Pop this before hitting an antibot endpoint.
+- `Fork(n)` makes `n` child sessions that share cookies and TLS resumption with the parent but get their own connections. Same browser, multiple tabs.
 
 ### Persistence
 
@@ -153,7 +153,7 @@ func (s *Session) Save(path string) error
 func (s *Session) Marshal() ([]byte, error)
 ```
 
-`Save` writes a JSON blob containing cookies, TLS session tickets, and ECH configs to disk. `Marshal` returns the same blob as bytes for stuffing into Redis or a database. Round-trip with `LoadSession` / `UnmarshalSession`.
+`Save` writes a JSON blob (cookies, TLS session tickets, ECH configs) to disk. `Marshal` returns the same blob as bytes if you'd rather stuff it into Redis or a database. Round-trip with `LoadSession` / `UnmarshalSession`.
 
 ### Cookie management
 
@@ -178,7 +178,7 @@ func (s *Session) GetTCPProxy() string
 func (s *Session) GetUDPProxy() string
 ```
 
-`SetProxy("")` switches the session back to direct. The split TCP/UDP proxies exist for cases where you want H1/H2 over an HTTP proxy and H3 over MASQUE. See [Proxies overview](/proxies/overview).
+`SetProxy("")` flips the session back to direct. The split TCP/UDP proxy methods exist for when you want H1/H2 over an HTTP proxy and H3 over MASQUE. See [Proxies overview](/proxies/overview).
 
 ### Header order
 
@@ -213,7 +213,7 @@ func (c *Client) PostMultipart(ctx context.Context, url string, fields []Multipa
 func (c *Client) Close()
 ```
 
-`Client` only takes `WithTimeout` and `WithProxy` as options. If you need more knobs, switch to `Session`.
+`Client` only takes `WithTimeout` and `WithProxy`. Need more knobs? Switch to `Session`.
 
 ## Request struct
 
@@ -228,9 +228,9 @@ type Request struct {
 }
 ```
 
-`Headers` is `map[string][]string` to match the stdlib `http.Header` shape and let you send the same header multiple times. Lowercase the keys to match the preset's order.
+`Headers` is `map[string][]string` to match the stdlib `http.Header` shape and let you send the same header more than once. Lowercase the keys so they line up with the preset's order.
 
-`TLSOnly` set to `&true` skips the preset's HTTP headers for this single request (TLS fingerprint still applied). `nil` means use the session's setting.
+`TLSOnly` set to `&true` skips the preset's HTTP headers for this single request (TLS fingerprint still applies). `nil` means use the session's setting.
 
 ## Response struct
 
@@ -273,11 +273,11 @@ if err != nil { return err }
 defer resp.Close()
 ```
 
-The session owns network resources. The response body is an `io.ReadCloser` you must close.
+The session owns network resources. The response body is an `io.ReadCloser` you have to close.
 
 ### Pass context
 
-Always thread a `context.Context` through. It's how cancellation, deadlines, and request-scoped values move around in Go. httpcloak honours `ctx.Done()` everywhere, at dial, at TLS handshake, at body reads.
+Always thread a `context.Context` through. That's how cancellation, deadlines, and request-scoped values move around in Go. httpcloak honours `ctx.Done()` everywhere: at dial, at TLS handshake, at body reads.
 
 ```go
 ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -305,15 +305,15 @@ httpcloak returns plain `error` values. Use `errors.Is` against `context.Deadlin
 
 ## Concurrency
 
-The session is safe for concurrent use. Internally it holds a `sync.RWMutex` around mutable state (cookies, header order, proxy switches), and the underlying transport pool handles concurrent dials.
+The session's safe for concurrent use. It holds a `sync.RWMutex` around mutable state (cookies, header order, proxy switches), and the underlying transport pool handles concurrent dials.
 
-What that means in practice:
+In practice:
 
 - One `*Session`, many goroutines making requests at once. Fine.
-- One `*Session`, one goroutine calling `SetProxy()` while another calls `Get()`. Also fine: the lock orders them.
-- Reading the `Response.Body` from multiple goroutines simultaneously. Don't. Each response is single-reader.
+- One `*Session`, one goroutine calling `SetProxy()` while another calls `Get()`. Also fine, the lock orders them.
+- Reading the same `Response.Body` from multiple goroutines at once. Don't. Each response is single-reader.
 
-If you want true parallelism with shared cookie state, use `Fork(n)` to get sibling sessions. Each fork has its own connection pool but inherits the parent's cookies and TLS tickets. That's the closest to "browser tabs" behaviour.
+If you want true parallelism with shared cookie state, use `Fork(n)` to get sibling sessions. Each fork has its own connection pool but inherits the parent's cookies and TLS tickets. That's the closest you'll get to "browser tabs" behaviour.
 
 ## Custom fingerprints
 
@@ -330,7 +330,7 @@ Setting `JA3` automatically flips the session into TLS-only mode (HTTP headers f
 
 ## What about HTTP/3?
 
-The same `Session.Get`, `Session.Do`, etc. The transport picks the protocol via Alt-Svc, ALPN, and a small race between H3 and H2 dials. Force a specific protocol with `WithForceHTTP1`, `WithForceHTTP2`, `WithForceHTTP3`. The `Response.Protocol` field tells you what was actually used.
+Same `Session.Get`, `Session.Do`, etc. The transport picks the protocol via Alt-Svc, ALPN, and a small race between H3 and H2 dials. Force a specific one with `WithForceHTTP1`, `WithForceHTTP2`, `WithForceHTTP3`. The `Response.Protocol` field tells you what actually went on the wire.
 
 ## See also
 

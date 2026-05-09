@@ -5,12 +5,12 @@ sidebar_position: 3
 
 # JSON Preset Spec
 
-The canonical JSON schema for presets. If you want to programmatically build a preset, this is the contract.
+The canonical JSON schema for presets. If you're building a preset programmatically, this is the contract.
 
-Source of truth: `fingerprint/custom_preset.go` (`PresetSpec` and friends). The schema is round-trip stable: `fingerprint.Describe(name)` produces JSON that `fingerprint.LoadPresetFromJSON` parses back into an identical preset.
+Source of truth: `fingerprint/custom_preset.go` (`PresetSpec` and friends). The schema is round-trip stable. `fingerprint.Describe(name)` spits out JSON that `fingerprint.LoadPresetFromJSON` parses straight back into an identical preset.
 
 :::note
-JSON does not allow comments. The `// ...` annotations in the snippets below are documentation only. Strip them before passing the JSON to the parser.
+JSON doesn't allow comments. The `// ...` annotations in the snippets below are docs only. Strip them before handing the JSON to the parser.
 :::
 
 ---
@@ -31,7 +31,7 @@ JSON does not allow comments. The `// ...` annotations in the snippets below are
 | `preset` | object | one of `preset` / `pool` | Single preset definition. |
 | `pool` | object | one of `preset` / `pool` | A pool of presets for round-robin or random rotation. |
 
-Exactly one of `preset` or `pool` must be set.
+Exactly one of `preset` or `pool` has to be set.
 
 ### Pool shape
 
@@ -53,7 +53,7 @@ Exactly one of `preset` or `pool` must be set.
 
 ## `preset` object
 
-The full set of fields a single preset can declare.
+Every field a single preset can declare.
 
 ```json
 {
@@ -79,7 +79,7 @@ The full set of fields a single preset can declare.
 | `tcp` | object | See [TCP section](#tcp-object). |
 | `protocols` | object | See [Protocols section](#protocols-object). |
 
-Any field omitted means "inherit from `based_on`" (or "leave at zero" if there's no parent).
+Omit a field and it inherits from `based_on`. If there's no parent, it stays at zero.
 
 ---
 
@@ -123,7 +123,7 @@ Any field omitted means "inherit from `based_on`" (or "leave at zero" if there's
 
 ### `ja3_extras` shape
 
-Same fields as the top-level shortcuts, just nested. Use this form when you want to keep the JA3 string and its extras grouped:
+Same fields as the top-level shortcuts, just nested. Use this when you want the JA3 string and its extras kept together:
 
 ```json
 "ja3_extras": {
@@ -139,7 +139,7 @@ Same fields as the top-level shortcuts, just nested. Use this form when you want
 
 ### TLS validation rules
 
-The build step rejects:
+The build step rejects these combos:
 
 - `ja3` and `client_hello` set in the same spec.
 - `ja3_extras` without `ja3`.
@@ -187,13 +187,13 @@ The build step rejects:
 
 `akamai` is a one-line shorthand: `SETTINGS|WINDOW_UPDATE|PRIORITY|PSEUDO_ORDER`. The parser splits it and applies the four parts.
 
-When both `akamai` and individual fields are set, the resolution order is:
+When both `akamai` and individual fields are set, here's the resolution order:
 
-1. Apply individual fields (`header_table_size`, `enable_push`, etc.) for slots the akamai shorthand does **not** touch.
-2. Apply `akamai` authoritatively for slots it explicitly specifies.
-3. Apply `settings` (the structured `[{id, value}]` list) last, overriding both.
+1. Apply individual fields (`header_table_size`, `enable_push`, etc.) for any slots the akamai shorthand does **not** touch.
+2. Apply `akamai` authoritatively for the slots it explicitly names.
+3. Apply `settings` (the structured `[{id, value}]` list) last. Overrides both.
 
-This means if your akamai is `1:65536` and you set `header_table_size: 99999`, the akamai value (65536) wins for slot 1. Slots not in akamai (like `max_concurrent_streams`) take the individual value.
+So if your akamai is `1:65536` and you also set `header_table_size: 99999`, the akamai value wins for slot 1. Slots not in akamai (like `max_concurrent_streams`) take the individual value.
 
 ### Settings IDs
 
@@ -218,7 +218,7 @@ This means if your akamai is `1:65536` and you set `header_table_size: 99999`, t
 
 ### `priority_table`
 
-Maps `sec-fetch-dest` values (`document`, `image`, `script`, `style`, `font`, etc.) to per-resource priority settings. When populated, the transport emits a per-request RFC 7540 stream weight (derived from `urgency`) and an RFC 9218 `priority:` header for each request based on its `sec-fetch-dest`.
+Maps `sec-fetch-dest` values (`document`, `image`, `script`, `style`, `font`, etc.) to per-resource priority settings. When populated, the transport emits a per-request RFC 7540 stream weight (derived from `urgency`) and an RFC 9218 `priority:` header on every request, keyed off its `sec-fetch-dest`.
 
 ```json
 "priority_table": {
@@ -234,7 +234,7 @@ Maps `sec-fetch-dest` values (`document`, `image`, `script`, `style`, `font`, et
 | `incremental` | bool | Whether the resource can be processed incrementally. |
 | `emit_header` | bool | When true, the transport emits a `priority:` header on the request. |
 
-When omitted, the preset's static `stream_weight` / `stream_exclusive` are used for every request (legacy single-weight behaviour).
+Omit it and you get the preset's static `stream_weight` / `stream_exclusive` on every request. That's the legacy single-weight behaviour.
 
 ---
 
@@ -285,7 +285,7 @@ When omitted, the preset's static `stream_weight` / `stream_exclusive` are used 
 | `quic_initial_stream_receive_window` | uint64 | `initial_max_stream_data_*`. iOS Safari uses 2 MiB; Chrome desktop uses different values. |
 | `quic_initial_connection_receive_window` | uint64 | `initial_max_data`. iOS Safari uses 16 MiB. |
 
-`nil` (omitted) means "use quic-go default": the library only sets these slots if the spec specifies them.
+Omit a field (nil) and you get the quic-go default. The library only sets a slot if the spec asks for it.
 
 ---
 
@@ -313,7 +313,7 @@ When omitted, the preset's static `stream_weight` / `stream_exclusive` are used 
 | `values` | object (string→string) | Header values keyed by lowercase header name. Merged with the inherited `values` from `based_on`. |
 | `order` | array of `{key, value}` | The exact header order on the wire. Lowercase keys. An empty `value` means "use the value from `values` or `user_agent`". |
 
-The order matters: HTTP/2 / HTTP/3 implementations don't enforce it on the receiving side, but bot detection products fingerprint it. Real Chrome and Firefox have very different orders.
+Order matters. HTTP/2 / HTTP/3 implementations don't enforce header order on the receiving side, but bot detection products absolutely fingerprint it. Real Chrome and real Firefox sit miles apart on this.
 
 ---
 
@@ -332,7 +332,7 @@ The order matters: HTTP/2 / HTTP/3 implementations don't enforce it on the recei
 
 `platform` is a shorthand that fills in the typical TTL / MSS / window combo for that OS. Individual fields override the platform default.
 
-These fields only matter for the few bot-management products that fingerprint the TCP/IP stack. Most don't.
+These only matter for the handful of bot-management products that fingerprint the TCP/IP stack. Most don't bother.
 
 ---
 
@@ -352,7 +352,7 @@ These fields only matter for the few bot-management products that fingerprint th
 
 ## Round-trip guarantee
 
-`Describe → LoadPresetFromJSON → BuildPreset → Describe` produces byte-identical JSON. We use this in CI to catch silent drift in the embedded presets.
+`Describe -> LoadPresetFromJSON -> BuildPreset -> Describe` produces byte-identical JSON. CI uses this to catch silent drift in the embedded presets.
 
 ```go
 import "github.com/sardanioss/httpcloak/fingerprint"
@@ -371,16 +371,16 @@ The verified spot-check (chrome-148-windows, firefox-148, safari-18-ios) shows z
 
 ## Inheritance and validation
 
-`based_on` resolves at build time. Inheritance loops are detected and reported as `based_on inheritance loop detected at "..."`. The chain terminates at a built-in (whose `based_on` is empty).
+`based_on` resolves at build time. Loops get detected and reported as `based_on inheritance loop detected at "..."`. The chain ends at a built-in (whose `based_on` is empty).
 
 When you call `BuildPreset(spec)`:
 
-1. If `based_on` is set, the parent preset is cloned (deep copy of headers, H2/H3 config, JA3 extras).
-2. Each non-empty section in the spec overlays on top.
+1. If `based_on` is set, the parent preset gets cloned (deep copy of headers, H2/H3 config, JA3 extras).
+2. Each non-empty section in your spec overlays on top.
 3. Validation runs: TLS rules, HPACK indexing policy values, stream priority mode values, QUIC transport param order values.
-4. The built `*Preset` is returned. Register it with `fingerprint.Register(name, preset)` to make it available to `NewSession(name)`.
+4. The built `*Preset` comes back. Register it with `fingerprint.Register(name, preset)` so `NewSession(name)` can find it.
 
-A spec with no `name` field is allowed: `BuildPreset` will return a `*Preset` with whatever name `based_on` had, and you can rename it before registering.
+A spec with no `name` is fine. `BuildPreset` returns a `*Preset` carrying whatever name `based_on` had, and you can rename before registering.
 
 ---
 
@@ -405,7 +405,7 @@ fingerprint.Register(preset.Name, preset)
 
 ## A complete minimal example
 
-A real preset that just bumps the User-Agent on top of `chrome-148-windows`:
+A real preset that just swaps the User-Agent on top of `chrome-148-windows`:
 
 ```json
 {
@@ -420,4 +420,4 @@ A real preset that just bumps the User-Agent on top of `chrome-148-windows`:
 }
 ```
 
-Everything else (TLS, HTTP/2, header order, HTTP/3, TCP) inherits from `chrome-148-windows`. This is exactly the pattern the embedded JSONs use to ship Chrome 147 and 148 without re-typing 5000 lines per version.
+Everything else (TLS, HTTP/2, header order, HTTP/3, TCP) inherits from `chrome-148-windows`. This is exactly the trick the embedded JSONs use to ship Chrome 147 and 148 without retyping 5000 lines per version.

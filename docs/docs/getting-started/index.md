@@ -5,10 +5,10 @@ sidebar_position: 1
 
 # Getting Started
 
-Send your first request, learn how presets work, and get a handle on the everyday options most people care about.
+Fire off your first request, see how presets work, and get a feel for the day-to-day knobs you'll actually touch.
 
 ## In this section
 
-- [First Request](./first-request): send your first request with the default Chrome preset
-- [Presets Explained](./presets-explained): what a preset is, what it ships with, how to pick one
+- [First Request](./first-request): your first call with the default Chrome preset
+- [Presets Explained](./presets-explained): what a preset bundles, how to pick one
 - [Common Options](./common-options): timeouts, redirects, retries, the boring but essential stuff

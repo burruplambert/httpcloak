@@ -5,7 +5,7 @@ sidebar_position: 1
 
 # Cookies & State
 
-How the session jar works, when to disable it, and how to hand it cookies for one-off requests.
+The session jar handles cookies for you. This section covers how it works, when you'd want to switch it off, and how to hand-roll a `Cookie` header for one-off calls.
 
 ## In this section
 

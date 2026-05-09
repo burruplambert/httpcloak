@@ -8,52 +8,50 @@ import TabItem from '@theme/TabItem';
 
 # Multi-Proxy Rotation With State
 
-Rotate through a pool of proxies while keeping the **same** TLS session state.
-Your fingerprint stays consistent across rotations, you don't burn through a
-fresh handshake every time you swap exits.
+Swap proxies without throwing away your TLS state. Same fingerprint across
+rotations, no fresh handshake every time you change exits.
 
 ## Why session continuity matters
 
-Most rotators throw away the entire client when they switch proxies. They spin
-up a new client, do a fresh TCP and TLS handshake, get a brand new session
-ticket, and start over. That's fine for low-effort targets, but it leaves a
-trail.
+Most rotators nuke the whole client when they swap proxies. New client, new
+TCP and TLS handshake, new session ticket, start over. Fine for soft targets.
+Leaves a trail everywhere else.
 
-What changes between two "fresh" handshakes:
+Here's what dies between two "fresh" handshakes:
 
-- **TLS extension order** can drift slightly because of GREASE rotation. Same
-  preset, same browser version, but bytes on the wire differ.
+- **TLS extension order** drifts a bit because of GREASE rotation. Same
+  preset, same browser version, but the bytes on the wire don't quite match.
 - **Session tickets** are gone. Returning visitors look very different from
-  first-time visitors to a server. If your scraper looks like a first-time
-  visitor 500 times in a row, that's a tell.
-- **ECH state** resets. If the target uses ECH, you re-fetch the config every
-  time.
-- **Cookie jar** resets unless you copy it across.
-- **Per-connection tracking** like CF's `__cf_bm` cookie ages oddly when you
-  hop hosts.
+  first-time visitors. Looking like a first-time visitor 500 times in a row
+  is a dead giveaway.
+- **ECH state** resets. If the target uses ECH, you re-fetch the config from
+  zero.
+- **Cookie jar** resets unless you copy it over.
+- **Per-connection tracking** like CF's `__cf_bm` cookie ages weirdly when
+  you hop hosts.
 
-Keeping ONE session and just swapping the proxy under it solves all of that.
-The handshake state, the tickets, the cookies, the ECH config, everything
-sticks. Only the IP changes.
+Keep ONE session and just swap the proxy under it. Handshake state, tickets,
+cookies, ECH, all sticks. Only the IP changes. Clean.
 
 :::tip
 Most residential proxy providers don't care about session continuity. But if
-you're hitting a target that does (Cloudflare, anything with session-tracking
-on top), this pattern saves you from looking like a fresh user every single
+you're hitting Cloudflare or anything with session tracking layered on top,
+this pattern keeps you from looking like a brand-new visitor every single
 request.
 :::
 
 ## The pattern
 
-1. Create one `Session` with your preset (e.g. `chrome-latest`).
+1. Spin up one `Session` with your preset (e.g. `chrome-latest`).
 2. For each request:
    - Pick a proxy from your pool.
-   - Call `session.SetTCPProxy(url)` (and `SetUDPProxy` if you're using H3).
+   - Call `session.SetTCPProxy(url)` (plus `SetUDPProxy` if you're on H3).
    - Send the request.
-3. Optionally call `session.Refresh()` to drop the live connections without
+3. Optional: call `session.Refresh()` to drop live connections without
    killing tickets or cookies. Next request gets 0-RTT on the new proxy.
 
-That's it. The session keeps every piece of state across rotations.
+That's the whole thing. The session keeps every piece of state across
+rotations.
 
 ## Full example: rotating through 3 proxies
 
@@ -145,7 +143,7 @@ with httpcloak.Session("chrome-latest", timeout=30) as s:
         s.refresh()
 ```
 
-See [/bindings/python](../bindings/python) for the full Python API.
+Full Python API lives at [/bindings/python](../bindings/python).
 
 </TabItem>
 </Tabs>
@@ -164,9 +162,9 @@ After `SetTCPProxy(newProxy)` (with or without `Refresh()`):
 | HTTP/3 connection | No (after Refresh) | Same |
 | TCP socket | No (after Refresh) | Reopens through new proxy |
 
-What does NOT survive: the live socket itself. That's the point. You want a
-new TCP connection through the new proxy IP, but you want to bring all the
-fingerprint and cookie state with you.
+The live socket is the only thing that dies, and that's the point. You want a
+new TCP connection through the new proxy IP, with all the fingerprint and
+cookie state riding along.
 
 ## Rotation strategies
 
@@ -180,8 +178,7 @@ Cheap, predictable, works for most cases.
 
 ### Sticky-by-host
 
-If your scraper hits multiple hosts and you want to keep one proxy per host,
-use a small map:
+Hitting multiple hosts and want one proxy per host? Use a small map:
 
 ```go
 hostProxy := map[string]string{}
@@ -196,15 +193,14 @@ for _, url := range urls {
 }
 ```
 
-Useful when servers correlate the IP a session originated from with later
-requests. If you start a CF challenge on IP A and finish it on IP B, that's
-suspicious.
+Handy when servers correlate the IP a session started on with later requests.
+Start a CF challenge on IP A, finish it on IP B, that's a red flag.
 
 ### Rotate-on-error
 
-Keep the same proxy until you get a 403 / 429 / connection error, then move
-on. Cheaper than rotating every request, and only burns through proxies when
-something goes wrong.
+Stick with the same proxy until you get a 403 / 429 / connection error, then
+move. Way cheaper than rotating every request, and you only burn proxies when
+something actually breaks.
 
 ```go
 err := doRequest(s)
@@ -216,20 +212,20 @@ if err != nil || isBadStatus(resp.StatusCode) {
 
 ## H3 / QUIC notes
 
-If you're using HTTP/3 through a MASQUE proxy, set the UDP proxy too:
+Running HTTP/3 through a MASQUE proxy? Set the UDP proxy too:
 
 ```go
 s.SetTCPProxy("http://user:pass@http-proxy:8080")
 s.SetUDPProxy("masque://user:pass@masque-proxy:443")
 ```
 
-Most providers only do TCP. If you call `SetTCPProxy` and leave `SetUDPProxy`
-empty, H3 falls back to direct UDP, which can leak your real IP. Either set
-both or force H1/H2 with `WithForceHTTP2()`.
+Most providers only do TCP. If you set `SetTCPProxy` and leave `SetUDPProxy`
+empty, H3 quietly falls back to direct UDP, which leaks your real IP. Either
+wire both up or force H1/H2 with `WithForceHTTP2()`.
 
 ## Combining with Save / LoadSession
 
-If your run takes hours and you want to survive a process restart:
+For runs that go for hours and need to survive a process restart:
 
 ```go
 // Periodically:
@@ -240,23 +236,23 @@ s, _ := httpcloak.LoadSession("/var/lib/scraper/state.json")
 s.SetTCPProxy(currentProxy)
 ```
 
-Saves the cookie jar, ticket cache, ECH state. Reloads as if you never
-stopped. See [Long-Running Scraper Patterns](./long-running-scraper-patterns)
-for the full pattern.
+Saves the cookie jar, ticket cache, ECH state. Reloads like you never
+stopped. The full pattern lives in
+[Long-Running Scraper Patterns](./long-running-scraper-patterns).
 
 ## Common mistakes
 
-**Creating a new session per proxy.** This throws away tickets, cookies,
-everything. The whole point of this recipe is one session, many proxies.
+**Spinning up a new session per proxy.** Trashes tickets, cookies, the lot.
+The whole point of this recipe is one session, many proxies.
 
-**Forgetting Refresh().** If you don't call `Refresh()` between requests, the
-existing TCP/TLS connection stays open through the OLD proxy, even though
-you set a new one. `SetTCPProxy` only affects the NEXT new connection. If
-you want the IP change to take effect immediately, call `Refresh()`.
+**Forgetting Refresh().** Skip `Refresh()` between requests and the existing
+TCP/TLS connection keeps chugging along through the OLD proxy, even after you
+set a new one. `SetTCPProxy` only kicks in on the NEXT new connection. Want
+the IP swap right now? Call `Refresh()`.
 
-**Mixing UDP and TCP proxies wrong.** H3 needs `SetUDPProxy`. H1/H2 needs
-`SetTCPProxy`. If you only set one and your protocol racing picks the other,
-you'll bypass the proxy without knowing.
+**Mixing UDP and TCP proxies.** H3 needs `SetUDPProxy`. H1/H2 needs
+`SetTCPProxy`. Set only one and let protocol racing pick the other, and
+you'll bypass the proxy without realising.
 
 ## Related
 

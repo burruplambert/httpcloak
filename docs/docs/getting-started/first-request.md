@@ -8,9 +8,9 @@ import TabItem from '@theme/TabItem';
 
 # First Request
 
-httpcloak is an HTTP client that puts the same bytes on the wire as a real browser. Same TLS ClientHello, same HTTP/2 SETTINGS frame, same header order, same priority frames. If a site fingerprints your client, httpcloak shows up looking like Chrome (or Firefox, or Safari) instead of Go's net/http or Python requests.
+httpcloak puts the same bytes on the wire as a real browser. Same TLS ClientHello, same HTTP/2 SETTINGS frame, same header order, same priority frames. If a site fingerprints your client, you show up looking like Chrome (or Firefox, or Safari) instead of Go's `net/http` or Python `requests`.
 
-This page is the four-line "does it work" check. Pick your language, copy the snippet, run it, you should get a 200 back from `tls.peet.ws/api/all` with a Chrome-shaped fingerprint in the response.
+This page is the four-line "does it work" check. Pick your language, copy the snippet, run it. You should get a 200 back from `tls.peet.ws/api/all` with a Chrome-shaped fingerprint in the response.
 
 ## The snippet
 
@@ -101,7 +101,7 @@ Console.WriteLine(r.Text);
 
 ## What you should see
 
-The full response is a chunky JSON blob with TLS, HTTP/2, and header data. Trimmed to the parts that matter:
+The full response is a chunky JSON blob with TLS, HTTP/2, and header data. Here's the trimmed version with the parts that actually matter:
 
 ```json
 {
@@ -118,18 +118,18 @@ The full response is a chunky JSON blob with TLS, HTTP/2, and header data. Trimm
 }
 ```
 
-A few things to notice:
+A few things worth flagging:
 
-- `http_version` is `h2`. Chrome speaks HTTP/2 by default to anything ALPN-capable, so we did too. HTTP/3 will kick in if the server advertises it via Alt-Svc. Force one with `WithForceHTTP2()` / `WithForceHTTP3()` if you want.
-- `ja4` is stable across runs for the same preset. `ja3_hash` is not, because Chrome shuffles GREASE extension values per ClientHello and that ends up in the JA3 string. JA4 strips GREASE. Use JA4 for matching, not JA3.
-- `akamai_fingerprint_hash` is the H2 SETTINGS + WINDOW_UPDATE + PRIORITY + pseudo-header-order combo. It should match what real Chrome 148 sends.
+- `http_version` is `h2`. Chrome speaks HTTP/2 by default to anything ALPN-capable, so you do too. HTTP/3 kicks in if the server advertises it via Alt-Svc. Pin one with `WithForceHTTP2()` or `WithForceHTTP3()` if you'd rather not let it negotiate.
+- `ja4` is stable across runs on the same preset. `ja3_hash` isn't, because Chrome shuffles GREASE extension values on every ClientHello and that bleeds into the JA3 string. JA4 strips GREASE. Match against JA4, ignore JA3.
+- `akamai_fingerprint_hash` rolls up H2 SETTINGS, WINDOW_UPDATE, PRIORITY, and pseudo-header order into one value. It should line up with what real Chrome 148 ships.
 
 :::tip tls.peet.ws is your friend
-Bookmark `tls.peet.ws/api/all`. Anytime you change a preset, add a custom JA3, or wonder why a target is still flagging you, hit this endpoint and diff the response against a real browser. Chrome being a lil bitch won't show you header order in DevTools, you can check tls.peet.ws/api/all for it.
+Bookmark `tls.peet.ws/api/all`. Anytime you tweak a preset, drop in a custom JA3, or wonder why a target's still flagging you, hit this endpoint and diff the response against a real browser. DevTools won't even show you the request header order, so this is the easiest source of truth.
 :::
 
 ## Where to next
 
-- [Presets Explained](./presets-explained) for what `chrome-latest` actually ships with and how to pick a different one.
+- [Presets Explained](./presets-explained) for what `chrome-latest` actually bundles and how to pick something else.
 - [Common Options](./common-options) for timeouts, retries, redirects, and the boring stuff every client has.
-- [Fingerprinting overview](/fingerprinting) once you want to start tweaking the wire bytes yourself.
+- [Fingerprinting overview](/fingerprinting) when you want to start hand-tuning the wire bytes.

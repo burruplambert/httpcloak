@@ -8,23 +8,23 @@ import TabItem from '@theme/TabItem';
 
 # Custom JA3
 
-`WithCustomFingerprint` accepts a raw JA3 string. The preset still picks the HTTP/2 SETTINGS, headers, and priority table, but the TLS ClientHello is rebuilt from the JA3 every connection.
+`WithCustomFingerprint` takes a raw JA3 string. The preset still drives HTTP/2 SETTINGS, headers, and the priority table, but the TLS ClientHello gets rebuilt from your JA3 on every connection.
 
 ## When to use this
 
-Use `WithCustomFingerprint` (JA3 only) when:
+Reach for `WithCustomFingerprint` (JA3 only) when:
 
-- You captured a JA3 from a real browser session and want to mirror exactly that ClientHello.
+- You captured a JA3 from a real browser session and want to mirror that ClientHello exactly.
 - You're testing what JA3 hashes look like for a given cipher / extension / curve permutation.
-- You only care about the TLS layer; the preset's headers and H2 are fine.
+- You only care about TLS, the preset's headers and H2 are fine.
 
-Use the [JSON Preset Builder](./json-preset-builder) instead when:
+Reach for the [JSON Preset Builder](./json-preset-builder) instead when:
 
 - You need to tweak HTTP/2 SETTINGS along with the JA3.
 - You want to change the User-Agent, sec-ch-ua list, or any other HTTP header.
 - You want the change saved as a named preset for reuse.
 
-The JA3 path is one line of code. The JSON builder is a few more, but worth it as soon as you need anything beyond TLS.
+JA3 is a one-liner. The JSON builder's a few more, but worth it the second you need anything beyond TLS.
 
 ## JA3 string format
 
@@ -32,25 +32,25 @@ The JA3 path is one line of code. The JSON builder is a few more, but worth it a
 TLSVersion,CipherSuites,Extensions,EllipticCurves,PointFormats
 ```
 
-Five comma-separated lists. Inside each list, values are dash-separated decimal IDs. Example for Chrome 148:
+Five comma-separated lists. Inside each list, values are dash-separated decimal IDs. Chrome 148 example:
 
 ```
 771,4865-4866-4867-49195-49199-49196-49200-52393-52392-49171-49172-156-157-47-53,0-23-65281-10-11-35-16-5-13-18-51-45-43-27-17513-21,29-23-24,0
 ```
 
-- `771`: TLS 1.2 protocol field (everything modern uses TLS 1.2 advertised, then upgrades to 1.3 inside extensions).
+- `771`: TLS 1.2 protocol field (everything modern advertises TLS 1.2, then upgrades to 1.3 inside extensions).
 - `4865-4866-...`: cipher suite IDs (`TLS_AES_128_GCM_SHA256` is 4865, etc).
-- `0-23-65281-...`: TLS extension IDs (0=server_name, 23=session_ticket, 65281=renegotiation_info, ...). The order here matters for the JA3 hash but real Chrome shuffles this list per connection.
+- `0-23-65281-...`: TLS extension IDs (0=server_name, 23=session_ticket, 65281=renegotiation_info, etc). Order matters for the JA3 hash, but real Chrome shuffles this list per connection.
 - `29-23-24`: supported groups / curves (29=x25519, 23=secp256r1, 24=secp384r1).
 - `0`: EC point formats (0=uncompressed).
 
 :::caution
-Chrome being a lil bitch won't show you header order, you can check tls.peet.ws/api/all for it. Same applies to TLS extensions: the live JA3 you see in DevTools won't match what hits the wire because Chrome shuffles. Capture from `tls.peet.ws` or a passive observer, not from devtools.
+DevTools straight-up won't show you what TLS extensions Chrome put on the wire, and the order it shows is a lie since Chrome shuffles per connection. Capture from `tls.peet.ws` or a passive observer if you want the truth.
 :::
 
 ## API
 
-`CustomFingerprint` carries the JA3 plus a few uTLS-level extras. Setting `JA3` automatically enables TLS-only mode, preset HTTP headers won't be applied, you supply your own per request.
+`CustomFingerprint` carries the JA3 plus a few uTLS-level extras. Setting `JA3` flips the session into TLS-only mode automatically. Preset HTTP headers stop being applied, so you supply your own per request.
 
 <Tabs groupId="lang">
 <TabItem value="go" label="Go">
@@ -149,7 +149,7 @@ Console.WriteLine(r.Text);
 
 ## Verification
 
-Send the request, read the response, look at `tls.ja3` and `tls.ja3_hash`. They should mirror the input exactly:
+Send the request, read the response, look at `tls.ja3` and `tls.ja3_hash`. They mirror your input exactly:
 
 ```text
 INPUT JA3:        771,4865-4866-4867-49195-49199-49196-49200-52393-52392-49171-49172-156-157-47-53,0-23-65281-10-11-35-16-5-13-18-51-45-43-27-17513-21,29-23-24,0
@@ -162,11 +162,11 @@ OUTPUT akamai:     1:65536;2:0;4:6291456;6:262144|15663105|0|m,a,s,p
 OUTPUT akamai_hash: 52d84b11737d980aef856699f885ca86
 ```
 
-The `ja3` reflected back is byte-identical to the input. `ja3_hash` is a stable MD5 of that string, so it's stable across runs (unlike preset Chrome where extensions shuffle). `ja4` differs from the underlying `chrome-148-windows` (`d8a2da3f94cd` vs `f37e75b10bcc`) because we used a different extension list, that's expected and shows our override took effect.
+The reflected `ja3` is byte-identical to the input. `ja3_hash` is a stable MD5 of that string, so it stays stable across runs (unlike preset Chrome where extensions shuffle). `ja4` differs from the underlying `chrome-148-windows` (`d8a2da3f94cd` vs `f37e75b10bcc`) because we used a different extension list. That's expected and proves the override took effect.
 
 ## TLS-only mode is automatic
 
-When you set `JA3`, httpcloak switches the session into TLS-only mode. The preset's HTTP headers are dropped, the preset's `User-Agent` is dropped, and you have to set everything per-request:
+Setting `JA3` flips the session into TLS-only mode. The preset's HTTP headers go away, the preset's `User-Agent` goes away, and you set everything per request:
 
 <Tabs groupId="lang">
 <TabItem value="go" label="Go">
@@ -201,10 +201,10 @@ r = s.get(
 </TabItem>
 </Tabs>
 
-If you want JA3 override **and** preset headers, use the JSON Preset Builder approach instead. Describe the preset, override `tls.ja3` in the JSON, leave `headers` alone, register, send.
+Want JA3 override **and** preset headers? Use the JSON Preset Builder approach instead. Describe the preset, override `tls.ja3` in the JSON, leave `headers` alone, register, send.
 
 ## Limitations
 
-- JA3 is deprecated for a reason. Modern anti-bot stacks key on JA4 / peetprint / akamai. Mirroring a Chrome JA3 string but inheriting Chrome's H2 SETTINGS gets you the right JA4 / peetprint / akamai too: that's the case shown above. But if your JA3 says one browser and your H2 says another, you're inconsistent and detectable.
-- Setting `JA3` clears the preset's `client_hello` ID. The session will rebuild a ClientHello from the JA3 string every connection. uTLS handles this: it's lossy compared to a real browser ClientHelloID (the JA3 doesn't capture extension data like ALPS, key share groups, application-settings) so the resulting handshake is close-but-not-identical to a real Chrome handshake. For full byte-exact Chrome bytes, use a preset.
-- The `extras` (ALPN, SignatureAlgorithms, CertCompression, PermuteExtensions) are uTLS-specific knobs that supplement the JA3. They don't appear in the JA3 string itself but they do appear on the wire.
+- JA3 is deprecated for a reason. Modern anti-bot stacks key on JA4 / peetprint / akamai. Mirroring a Chrome JA3 while inheriting Chrome's H2 SETTINGS gets you the right JA4 / peetprint / akamai too, that's the case shown above. But if your JA3 says one browser and your H2 says another, you're inconsistent and easy to flag.
+- Setting `JA3` clears the preset's `client_hello` ID. The session rebuilds a ClientHello from the JA3 every connection. uTLS handles it, but it's lossy compared to a real browser ClientHelloID. JA3 doesn't capture extension data like ALPS, key share groups, application-settings, so the resulting handshake is close-but-not-identical to real Chrome. For byte-exact Chrome bytes, use a preset.
+- The `extras` (ALPN, SignatureAlgorithms, CertCompression, PermuteExtensions) are uTLS-specific knobs that ride alongside the JA3. They don't show up inside the JA3 string itself, but they do hit the wire.

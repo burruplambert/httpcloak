@@ -5,7 +5,7 @@ sidebar_position: 1
 
 # Reference
 
-The full surface. Every option, every preset, the JSON spec, and a top-down architecture map.
+Everything in one place. Every option, every preset, the JSON schema, and a top-down map of how the library hangs together.
 
 ## In this section
 

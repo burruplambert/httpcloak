@@ -5,7 +5,7 @@ sidebar_position: 1
 
 # Connection Lifecycle
 
-Refresh, warmup, switch protocols, save and resume. Everything about how a session lives over time.
+How a session lives over time. Refresh it, warm it up, switch protocols, save it for later. All here.
 
 ## In this section
 

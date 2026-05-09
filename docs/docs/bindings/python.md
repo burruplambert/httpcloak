@@ -5,7 +5,7 @@ sidebar_position: 2
 
 # Python
 
-The Python binding is a Pythonic wrapper around the cgo shared library. Same C ABI as the Node and .NET bindings underneath, but the surface area looks like the `requests` library: `Session`, `.get()`, `.post()`, `.json()`, kwargs everywhere, `with`-statements for cleanup.
+The Python binding's a Pythonic wrapper around the cgo shared library. Same C ABI as the Node and .NET bindings underneath, but the surface looks like the `requests` lib: `Session`, `.get()`, `.post()`, `.json()`, kwargs everywhere, `with`-statements for cleanup.
 
 If you've used `requests`, you'll be at home in five minutes.
 
@@ -15,9 +15,9 @@ If you've used `requests`, you'll be at home in five minutes.
 pip install httpcloak
 ```
 
-The wheel ships the prebuilt shared library for your platform. Linux x86_64 / arm64, macOS x86_64 / arm64, Windows x86_64 are covered. Python 3.8 and up.
+The wheel ships the prebuilt shared library for your platform. Linux x86_64 / arm64, macOS x86_64 / arm64, Windows x86_64 are all covered. Python 3.8 and up.
 
-If pip's resolver picks the right wheel you're done. If you're on something unusual you'll need to build from source, see the GitHub README for that.
+If pip's resolver picks the right wheel, you're done. If you're on something unusual you'll have to build from source, see the GitHub README for that.
 
 ## Quick start
 
@@ -30,11 +30,11 @@ with httpcloak.Session(preset="chrome-146") as s:
     print(r.json()["user_agent"])
 ```
 
-The `with` block makes sure the session closes cleanly even if you raise. Same as a `requests.Session()` but with the TLS fingerprint baked in.
+The `with` block makes sure the session closes cleanly even if you raise. Same vibe as a `requests.Session()`, just with the TLS fingerprint baked in.
 
 ## Module-level shortcuts
 
-For one-off requests there are top-level functions that mirror `requests`:
+For one-off requests, there are top-level functions that mirror `requests`:
 
 ```python
 import httpcloak
@@ -61,7 +61,7 @@ httpcloak.configure(
 r = httpcloak.get("https://example.com")  # uses the configured defaults
 ```
 
-For anything beyond a few requests, use an explicit `Session`. The default-session path exists mainly for porting `requests`-style scripts quickly.
+For anything beyond a few requests, use an explicit `Session`. The default-session path's mostly there for porting `requests`-style scripts in a hurry.
 
 ## `Session`
 
@@ -124,7 +124,7 @@ session.options(url, ...) -> Response
 session.request(method, url, data=None, json=None, ...) -> Response
 ```
 
-Pass `stream=True` to get a `StreamResponse` instead. Pass `json={...}` and the body is JSON-encoded with `Content-Type: application/json`. Pass `data={...}` for form encoding. Pass `files={...}` for multipart uploads.
+Pass `stream=True` to get a `StreamResponse` instead. Pass `json={...}` and the body's JSON-encoded with `Content-Type: application/json` set. Pass `data={...}` for form encoding. Pass `files={...}` for multipart uploads.
 
 ### Streaming methods
 
@@ -137,7 +137,7 @@ session.delete_stream(url, ...) -> StreamResponse
 session.request_stream(method, url, ...) -> StreamResponse
 ```
 
-`StreamResponse` supports `iter_content(chunk_size=8192)`, `iter_lines()`, `content`, `text`, `json()`, and the `with`-block protocol. It's a 1:1 match for `requests`'s streaming API.
+`StreamResponse` supports `iter_content(chunk_size=8192)`, `iter_lines()`, `content`, `text`, `json()`, and the `with`-block protocol. 1:1 match for `requests`'s streaming API.
 
 ```python
 with session.get("https://example.com/big.zip", stream=True) as r:
@@ -155,7 +155,7 @@ session.request_fast(method, url, ...) -> FastResponse
 session.put_fast(...) / delete_fast(...) / patch_fast(...) -> FastResponse
 ```
 
-`FastResponse` skips a few allocations and exposes `.content` as a `memoryview` instead of `bytes`. Use this when you're downloading huge bodies and want zero-copy access. Read the docstring before relying on the buffer, it can be reused on later requests, so copy with `bytes(r.content)` if you need to keep it around.
+`FastResponse` skips a few allocations and exposes `.content` as a `memoryview` instead of `bytes`. Reach for it when you're pulling huge bodies and want zero-copy access. Read the docstring before relying on the buffer, it can be reused on later requests, so copy with `bytes(r.content)` if you need to hold onto it.
 
 ### Lifecycle
 
@@ -166,7 +166,7 @@ session.warmup(url: str, timeout: Optional[int] = None)
 session.fork(n: int = 1) -> List[Session]
 ```
 
-`refresh()` mirrors a browser F5, keeps cookies and TLS tickets, drops connections. Pass `switch_protocol="h2"` to also flip to a different wire protocol. `warmup()` simulates a real page load. `fork(n)` returns `n` sibling sessions that share cookies and TLS state but have their own connection pools.
+`refresh()` mirrors a browser F5: keeps cookies and TLS tickets, drops connections. Pass `switch_protocol="h2"` to also flip the wire protocol. `warmup()` simulates a real page load. `fork(n)` returns `n` sibling sessions that share cookies and TLS state but get their own connection pools.
 
 ### Persistence
 
@@ -177,7 +177,7 @@ Session.load(path: str) -> Session
 Session.unmarshal(data: str) -> Session
 ```
 
-`save` writes a JSON file with cookies, TLS tickets, and ECH configs. `marshal` gives you the same blob as a string for storing in Redis or a database. `Session.load` and `Session.unmarshal` are classmethods.
+`save` writes a JSON file with cookies, TLS tickets, and ECH configs. `marshal` hands you the same blob as a string, perfect for stashing in Redis or a database. `Session.load` and `Session.unmarshal` are classmethods.
 
 ### Cookie management
 
@@ -193,7 +193,7 @@ session.delete_cookie(name, domain="")
 session.clear_cookies()
 ```
 
-The `_detailed` variants return full `Cookie` objects with `domain`, `path`, `expires`, `max_age`, `secure`, `http_only`, `same_site`. The flat-dict variants will eventually return the detailed shape too, that's why they're marked deprecated. Migrate when you can.
+The `_detailed` variants return full `Cookie` objects with `domain`, `path`, `expires`, `max_age`, `secure`, `http_only`, `same_site`. The flat-dict variants will eventually return the detailed shape too, that's why they're tagged deprecated. Migrate when you can.
 
 ### Proxy management
 
@@ -206,7 +206,7 @@ session.get_tcp_proxy() -> str
 session.get_udp_proxy() -> str
 ```
 
-Empty string switches back to direct.
+Empty string flips back to direct.
 
 ### Header order
 
@@ -225,10 +225,10 @@ session.auth                 # tuple for default basic auth
 
 ## Pythonic conventions
 
-- Snake_case names everywhere. `get_cookies`, `set_proxy`, `clear_cookies`, never `getCookies`.
-- Kwargs over positional args once you're past `url`. `session.get("...", headers=..., timeout=...)` reads better than positional params.
+- snake_case names everywhere. `get_cookies`, `set_proxy`, `clear_cookies`, never `getCookies`.
+- Kwargs over positional once you're past `url`. `session.get("...", headers=..., timeout=...)` reads way better than positional params.
 - Context managers. `with httpcloak.Session(...) as s:` and `with session.get(url, stream=True) as r:` both work.
-- Exceptions. Errors raise `httpcloak.HTTPCloakError`. `r.raise_for_status()` raises on `>= 400` status codes, same as `requests`.
+- Exceptions. Errors raise `httpcloak.HTTPCloakError`. `r.raise_for_status()` raises on `>= 400`, same as `requests`.
 - `r.json()` parses, `r.text` gives a `str`, `r.content` (and `r.body`) gives `bytes`.
 
 ## `Response`
@@ -256,9 +256,9 @@ r.raise_for_status()
 
 ## Concurrency
 
-The session is thread-safe for concurrent requests. The Go transport pool underneath handles parallel dials, and the Python wrapper holds the GIL only briefly when entering the C call.
+The session's thread-safe for concurrent requests. The Go transport pool underneath handles parallel dials, and the Python wrapper holds the GIL only briefly when entering the C call.
 
-For asyncio: there isn't a native async surface yet on the public API. The library does have an internal async callback manager, but most users run httpcloak in a `concurrent.futures.ThreadPoolExecutor` or `asyncio.to_thread` and that performs fine because the request is mostly waiting on cgo, releasing the GIL.
+For asyncio: there's no native async surface on the public API yet. The lib has an internal async callback manager, but most folks run httpcloak in a `concurrent.futures.ThreadPoolExecutor` or `asyncio.to_thread` and that performs fine, since the request is mostly waiting on cgo with the GIL released.
 
 ```python
 import asyncio
@@ -310,7 +310,7 @@ httpcloak.set_ech_dns_servers([...])
 httpcloak.get_ech_dns_servers()
 ```
 
-`LocalProxy` runs an HTTP proxy server that applies the fingerprint to any HTTP client pointing at it. `PresetPool` and the JSON loaders are covered in [JSON preset builder](/fingerprinting/json-preset-builder). `SessionCacheBackend` plugs into [Session save and restore](/connection-lifecycle/session-save-restore).
+`LocalProxy` runs an HTTP proxy server that applies the fingerprint to whatever HTTP client you point at it. `PresetPool` and the JSON loaders are covered in [JSON preset builder](/fingerprinting/json-preset-builder). `SessionCacheBackend` plugs into [Session save and restore](/connection-lifecycle/session-save-restore).
 
 ## See also
 

@@ -8,23 +8,23 @@ import TabItem from '@theme/TabItem';
 
 # Presets
 
-A preset is a full bundle of fingerprint state for one specific browser version on one specific platform. It packs:
+A preset is the whole fingerprint bundle for one browser version on one platform. It packs:
 
 - TLS ClientHello (cipher list, extension list, supported groups, signature algorithms, ALPN, cert compression).
 - HTTP/2 SETTINGS values, WINDOW_UPDATE, pseudo-header order.
-- Default HTTP headers in the exact order Chrome / Firefox / Safari sends them.
+- Default HTTP headers in the exact order Chrome / Firefox / Safari ships them.
 - RFC 7540 stream priorities and the RFC 9218 priority table per Sec-Fetch-Dest.
 - HTTP/3 / QUIC transport parameters (only on presets that support h3).
-- TCP/IP fingerprint hints (TTL, MSS, window size: for OS-level matching).
+- TCP/IP fingerprint hints (TTL, MSS, window size, for OS-level matching).
 
-You pick a preset by name, send a request, that's it. The wire bytes match the real browser.
+Pick one by name, send a request, done. The wire bytes match the real browser.
 
 ## Picking the right preset
 
-- **Default to `chrome-latest`.** This is what works against the widest range of targets. It auto-tracks the most recent Chrome version we've shipped support for.
-- **Use `android-chrome-latest` if your target needs a mobile UA.** Mobile traffic gets different scoring on most anti-bot stacks. The TLS handshake is identical to desktop Chrome but the User-Agent and `sec-ch-ua-mobile: ?1` flag the mobile path.
-- **Use `ios-safari-18` or `safari-18-ios` if you specifically need an iPhone fingerprint.** Different cipher list, different pseudo-header order, no RFC 7540 priorities, smaller QUIC stream window. Targets that profile iOS users will catch a Chrome preset pretending to be an iPhone in seconds.
-- **Use `firefox-148` if a target only allows Firefox.** Different cipher list, different SETTINGS layout (smaller initial window, smaller max frame size), different pseudo-header order (`m,p,a,s` instead of Chrome's `m,a,s,p`).
+- **Default to `chrome-latest`.** Works against the widest range of targets. Auto-tracks the newest Chrome we've shipped.
+- **Reach for `android-chrome-latest` if you need a mobile UA.** Mobile traffic gets scored differently on most anti-bot stacks. TLS handshake's identical to desktop Chrome, but the User-Agent and `sec-ch-ua-mobile: ?1` flag the mobile path.
+- **Use `ios-safari-18` (or `safari-18-ios`) if you need an iPhone fingerprint.** Different cipher list, different pseudo-header order, no RFC 7540 priorities, smaller QUIC stream window. Targets that profile iOS users will spot a Chrome preset pretending to be an iPhone in seconds.
+- **Pick `firefox-148` if the target only accepts Firefox.** Different cipher list, different SETTINGS layout (smaller initial window, smaller max frame size), different pseudo-header order (`m,p,a,s` vs Chrome's `m,a,s,p`).
 
 ## Available preset families
 
@@ -38,7 +38,7 @@ Versions 133, 141, 143, 144, 145, 146, 147, 148. Each version has per-OS variant
 | Android | `chrome-148-android` (alias: `android-chrome-148`) |
 | iOS     | `chrome-148-ios` (alias: `ios-chrome-148`) |
 
-The bare `chrome-148` resolves to the host OS at runtime via `runtime.GOOS`. So on a Linux server, `chrome-148` returns `chrome-148-linux`. If you want a deterministic platform UA regardless of where the code runs, use the explicit variant.
+Bare `chrome-148` resolves to the host OS at runtime via `runtime.GOOS`. So on a Linux box, `chrome-148` gives you `chrome-148-linux`. Want the same platform UA no matter where the code runs? Use the explicit variant.
 
 ### Chrome -latest aliases
 
@@ -53,11 +53,11 @@ chrome-latest-android  → chrome-148-android
 chrome-latest-ios      → chrome-148-ios
 ```
 
-When we ship Chrome 149, those aliases bump in lockstep. Code that uses `chrome-latest` keeps working. Code that pinned `chrome-148-windows` keeps the exact same fingerprint.
+When Chrome 149 ships, those aliases bump in lockstep. Code on `chrome-latest` keeps rolling. Code that pinned `chrome-148-windows` stays on the same fingerprint.
 
 ### Firefox
 
-`firefox-133`, `firefox-148`, `firefox-latest`. No per-OS variants, Firefox doesn't include enough OS info in its fingerprint to make per-OS variants useful. Doesn't support h3 (Firefox has its own h3 quirks we haven't built out yet).
+`firefox-133`, `firefox-148`, `firefox-latest`. No per-OS variants, Firefox doesn't bake enough OS info into its fingerprint for that to matter. No h3 yet either, Firefox has its own h3 quirks we haven't built out.
 
 ### Safari
 
@@ -67,11 +67,11 @@ When we ship Chrome 149, those aliases bump in lockstep. Code that uses `chrome-
 | `safari-17-ios` (`ios-safari-17`) | iPhone Safari 17, h2 only |
 | `safari-18-ios` (`ios-safari-18`, `safari-latest-ios`) | iPhone Safari 18, supports h3 |
 
-Safari has `NoRFC7540Priorities=true`, meaning the H2 PRIORITY frame is never emitted. RFC 9218 priority headers handle the priority signal instead. This is the single biggest tell that distinguishes a Safari fingerprint from a Chrome one at the H2 layer, even though both ALPN as h2.
+Safari sets `NoRFC7540Priorities=true`, so it never emits the H2 PRIORITY frame. RFC 9218 priority headers carry the signal instead. That's the single biggest tell that splits a Safari fingerprint from a Chrome one at the H2 layer, even though both ALPN as h2.
 
 ### Backwards-compat aliases
 
-We also accept the older `<os>-<browser>-<version>` naming for users on older docs:
+The older `<os>-<browser>-<version>` naming still works for folks on older docs:
 
 ```
 ios-chrome-148        → chrome-148-ios
@@ -83,7 +83,7 @@ Both forms resolve to the same preset.
 
 ## Inheritance: how a new Chrome version ships in 30 seconds
 
-Each Chrome minor bump is usually pure UA + sec-ch-ua delta. The TLS fingerprint, H2 SETTINGS, header order, priority table, all the same as the previous version. So we don't ship Chrome 148 as a from-scratch Go file. We ship it as a JSON delta over Chrome 147:
+Each Chrome minor bump is usually pure UA + sec-ch-ua delta. TLS fingerprint, H2 SETTINGS, header order, priority table, all the same as the version before. So Chrome 148 isn't a from-scratch Go file. It's a JSON delta over Chrome 147:
 
 ```json
 {
@@ -106,13 +106,13 @@ Each Chrome minor bump is usually pure UA + sec-ch-ua delta. The TLS fingerprint
 }
 ```
 
-That's the whole patch. The TLS bytes come from chrome-147-windows (which itself inherits TLS bytes from chrome-146-windows because nothing changed in 147). The H2 SETTINGS, priority table, everything else, all inherited.
+That's the whole patch. TLS bytes come from chrome-147-windows (which itself inherits TLS bytes from chrome-146-windows because nothing changed in 147). H2 SETTINGS, priority table, everything else, all inherited.
 
 You can do the same. Pick a preset, dump it, change three fields, register the result. See [JSON Preset Builder](./json-preset-builder).
 
 ## Verification
 
-Hit `tls.peet.ws/api/all` with each preset and you get the matching JA4 / Akamai hash:
+Hit `tls.peet.ws/api/all` with each preset and you'll see the matching JA4 / Akamai hash:
 
 <Tabs groupId="lang">
 <TabItem value="go" label="Go">
@@ -198,15 +198,15 @@ chrome-148-ios       ja4=t13d2013h2_a09f3c656075_7f0f34a4126d  peetprint_hash=62
 
 Things to spot:
 
-- All Chrome desktop variants share the same JA4 / peetprint / akamai hash. The TLS handshake is genuinely identical across Windows / Linux / macOS Chrome. Only the User-Agent and the `sec-ch-ua-platform` header tell you which OS you're on.
-- Android Chrome shares the same fingerprint as desktop Chrome too. Same TLS, same H2. The only difference at the wire level is the UA string (Mobile Safari/537.36) and `sec-ch-ua-mobile: ?1`.
-- Chrome on iOS is identified at the wire level as Safari, because iOS WebKit forces every browser to use the system networking stack. So `chrome-148-ios` shares its TLS handshake and JA4 hash with `safari-18-ios`. They differ only on the H2 SETTINGS values (chrome-148-ios advertises a different settings order: `2,3,4,9` vs Safari's `2,4,3,5,9`) and on the User-Agent header.
-- Firefox and Safari each have their own JA4 / peetprint / akamai. Different cipher list, different SETTINGS, different pseudo-header order.
+- Every Chrome desktop variant lands on the same JA4 / peetprint / akamai. The TLS handshake is genuinely identical across Windows / Linux / macOS Chrome. Only the User-Agent and `sec-ch-ua-platform` header tell you which OS you're on.
+- Android Chrome shares the same fingerprint as desktop Chrome too. Same TLS, same H2. The wire-level difference is the UA string (Mobile Safari/537.36) and `sec-ch-ua-mobile: ?1`.
+- Chrome on iOS shows up as Safari at the wire level, because iOS WebKit forces every browser onto the system networking stack. So `chrome-148-ios` shares its TLS handshake and JA4 hash with `safari-18-ios`. They split only on H2 SETTINGS values (chrome-148-ios advertises `2,3,4,9` vs Safari's `2,4,3,5,9`) and the User-Agent.
+- Firefox and Safari each get their own JA4 / peetprint / akamai. Different cipher list, different SETTINGS, different pseudo-header order.
 
 :::tip
-The bare `ja3_hash` field will not be stable for Chrome presets across runs. Chrome shuffles its TLS extension order on every connection, so the raw JA3 string changes and so does its MD5 hash. JA4 sorts the extension list before hashing, which is why it's stable. Always verify against `ja4` and `peetprint_hash`, never against `ja3_hash`.
+The bare `ja3_hash` field won't be stable for Chrome presets across runs. Chrome shuffles its TLS extension order on every connection, so the raw JA3 string changes and the MD5 changes with it. JA4 sorts the extension list before hashing, that's why it's stable. Always verify against `ja4` and `peetprint_hash`, never `ja3_hash`.
 :::
 
 ## Full preset catalog
 
-There are 69 preset names (counting -latest aliases and the old `<os>-<browser>` naming). For the exhaustive table with version numbers, supported protocols, and platform tags, see the [Presets reference](../reference/presets).
+69 preset names total (counting -latest aliases and the old `<os>-<browser>` naming). For the exhaustive table with version numbers, supported protocols, and platform tags, see the [Presets reference](../reference/presets).

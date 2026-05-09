@@ -8,7 +8,7 @@ import TabItem from '@theme/TabItem';
 
 # Akamai Shorthand
 
-The Akamai HTTP/2 fingerprint is a compact string that fully describes how a client opens an H2 connection. It's the H2 equivalent of a JA3 string. Anti-bot vendors hash it and check the hash against a known-browser allowlist, same playbook as JA3.
+The Akamai HTTP/2 fingerprint is a compact string that captures how a client opens an H2 connection. It's the H2 equivalent of a JA3. Anti-bot vendors hash it and check against a known-browser allowlist, same playbook as JA3.
 
 ## Format
 
@@ -50,15 +50,15 @@ Semicolon-separated `id:value` pairs from the SETTINGS frame. Standard H2 IDs:
 | 6 | MAX_HEADER_LIST_SIZE | Chrome 262144, others omit |
 | 9 | NO_RFC7540_PRIORITIES | Safari 1, others omit |
 
-The order of pairs in the string matches the wire-frame order. For Chrome that's `1, 2, 4, 6`. Firefox is `1, 2, 4, 5`. Safari is `2, 4, 3, 5, 9`. iOS Chrome differs slightly: `2, 3, 4, 9`. Match the order or the akamai hash won't match.
+Pair order in the string matches wire-frame order. Chrome ships `1, 2, 4, 6`. Firefox: `1, 2, 4, 5`. Safari: `2, 4, 3, 5, 9`. iOS Chrome's slightly different: `2, 3, 4, 9`. Match the order or your akamai hash won't.
 
 ### WINDOW_UPDATE
 
-The connection-level WINDOW_UPDATE increment sent immediately after SETTINGS. Chrome 148 sends 15663105. Firefox 148 sends 12517377. Safari 18 sends 10485760.
+The connection-level WINDOW_UPDATE increment sent right after SETTINGS. Chrome 148: 15663105. Firefox 148: 12517377. Safari 18: 10485760.
 
 ### PRIORITY
 
-The H2 PRIORITY frame value. `0` means no PRIORITY frame is sent (which is what Chrome / Firefox / Safari all do as of 2026, they signal priority via the priority HTTP header instead). Older Chrome versions sent a stream weight here.
+The H2 PRIORITY frame value. `0` means no PRIORITY frame goes out, which is what Chrome / Firefox / Safari all do as of 2026. They signal priority via the priority HTTP header instead. Older Chrome versions used to send a stream weight here.
 
 ### PSEUDO_HEADER_ORDER
 
@@ -69,21 +69,21 @@ Comma-separated single-char identifiers for the order of pseudo-headers in the f
 - `s` = `:scheme`
 - `p` = `:path`
 
-Chrome: `m,a,s,p`. Firefox: `m,p,a,s`. Safari: `m,s,p,a`. iOS Chrome: `m,s,a,p`. Each browser is different and the akamai hash captures it.
+Chrome: `m,a,s,p`. Firefox: `m,p,a,s`. Safari: `m,s,p,a`. iOS Chrome: `m,s,a,p`. Every browser's different and the akamai hash captures it.
 
 ## When to override
 
 Use the akamai shorthand override when you want to keep the preset's TLS handshake but tweak the H2 fingerprint. Common cases:
 
-- A target rejects the default Chrome H2 settings but accepts a slightly larger initial window.
+- A target rejects the default Chrome H2 settings but takes a slightly larger initial window.
 - You captured an akamai string from a real browser and want to mirror it exactly.
-- You're trying to mimic a Chrome version we haven't shipped yet that bumped a single SETTINGS value.
+- You're spoofing a Chrome version we haven't shipped yet that bumped a single SETTINGS value.
 
-When you need anything beyond H2 SETTINGS, like overriding the priority table, the HPACK header order, or per-request priorities, the [JSON Preset Builder](./json-preset-builder) is the right path.
+Need anything beyond H2 SETTINGS, like overriding the priority table, the HPACK header order, or per-request priorities? Hop to the [JSON Preset Builder](./json-preset-builder).
 
 ## API
 
-`WithCustomFingerprint` takes both a JA3 and an akamai string. You can set just one, just the other, or both.
+`WithCustomFingerprint` accepts a JA3 and an akamai string. Set one, the other, or both.
 
 <Tabs groupId="lang">
 <TabItem value="go" label="Go">
@@ -164,25 +164,25 @@ Console.WriteLine(r.Text);
 
 ## How shorthand interacts with the preset
 
-When you set `Akamai`, the parser fills in only the slots present in your string. Slots you don't mention keep the preset's value.
+When you set `Akamai`, the parser fills in only the slots that appear in your string. Slots you skip keep the preset's value.
 
 - SETTINGS pairs you list overwrite the preset's same-ID values.
 - SETTINGS IDs you don't list keep the preset's value.
-- A non-empty `WINDOW_UPDATE` overrides; empty keeps the preset.
-- A non-zero `PRIORITY` weight enables the H2 PRIORITY frame; zero disables it.
-- A non-empty pseudo-header order overrides; empty keeps the preset's.
+- A non-empty `WINDOW_UPDATE` overrides, empty keeps the preset.
+- A non-zero `PRIORITY` weight enables the H2 PRIORITY frame, zero disables it.
+- A non-empty pseudo-header order overrides, empty keeps the preset's.
 
-This means you can write a minimal patch and the rest of the H2 state stays correct:
+So you can write a minimal patch and the rest of the H2 state stays correct:
 
 ```
 1::|||
 ```
 
-That's a valid akamai string that says "set HEADER_TABLE_SIZE to its default but don't change anything else". In practice you want at least three or four fields to be useful.
+That's a valid akamai string that says "set HEADER_TABLE_SIZE to its default, leave everything else alone". In practice you'll want three or four fields for it to be useful.
 
 ## Verifying
 
-Send a request through the override, read `tls.peet.ws`'s `http2.akamai_fingerprint` field. It should match what you sent:
+Send a request through the override, read `tls.peet.ws`'s `http2.akamai_fingerprint` field. It matches what you sent:
 
 ```text
 input akamai:           1:65536;2:0;4:8388608;6:262144|15663105|0|m,a,s,p
@@ -190,8 +190,8 @@ output akamai (peet):   1:65536;2:0;4:8388608;6:262144|15663105|0|m,a,s,p
 output akamai_hash:     <stable MD5 over the string>
 ```
 
-If the reflected akamai string doesn't match exactly, the parser dropped a field. Most common cause: typo in the SETTINGS pair list (`1:65536;2:0` is fine, `1=65536,2=0` is not, the parser expects colon-separated pairs joined by semicolons).
+If the reflected akamai string doesn't match exactly, the parser dropped a field. Most common cause: typo in the SETTINGS pair list. `1:65536;2:0` is fine, `1=65536,2=0` is not. The parser expects colon-separated pairs joined by semicolons.
 
 :::warning
-The `akamai_fingerprint_hash` is an MD5 of the akamai string with sorted SETTINGS keys. Two strings that differ only in SETTINGS order produce the same hash. So `1:65536;4:6291456` and `4:6291456;1:65536` hash identically even though they're different strings. The wire-level SETTINGS frame order matters for some H2 fingerprinters that go beyond the basic akamai hash; those care about the unsorted string. Always send fields in the order the real browser does.
+`akamai_fingerprint_hash` is an MD5 of the akamai string with sorted SETTINGS keys. Two strings that differ only in SETTINGS order produce the same hash. So `1:65536;4:6291456` and `4:6291456;1:65536` hash identically even though the strings differ. Wire-level SETTINGS frame order still matters for the H2 fingerprinters that look past the basic akamai hash, those care about the unsorted string. Always send fields in the order the real browser does.
 :::
