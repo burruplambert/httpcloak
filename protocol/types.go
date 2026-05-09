@@ -210,6 +210,14 @@ type SessionConfig struct {
 	// with TLS session resumption.
 	SwitchProtocol string `json:"switchProtocol,omitempty"`
 
+	// WithoutCookieJar disables the session's internal cookie jar entirely.
+	// When true, Set-Cookie headers from responses are NOT stored in the jar
+	// and the jar's contents are NOT injected as Cookie headers on subsequent
+	// requests. Cookie management is left fully to the caller via per-request
+	// headers — useful when an application maintains its own jar (database,
+	// shared cache) and wants the lib to be byte-transparent.
+	WithoutCookieJar bool `json:"withoutCookieJar,omitempty"`
+
 	// Default authentication (can be overridden per-request)
 	Auth *AuthConfig `json:"auth,omitempty"`
 }

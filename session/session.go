@@ -299,16 +299,20 @@ func (s *Session) requestWithRedirects(ctx context.Context, req *transport.Reque
 	}
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
-		// Build Cookie header fresh each attempt from original + session cookies
-		sessionCookies := s.cookies.BuildCookieHeader(requestHost, requestPath, requestSecure)
-		if sessionCookies != "" {
-			if origCookie != "" {
-				req.Headers["Cookie"] = []string{origCookie + "; " + sessionCookies}
-			} else {
-				req.Headers["Cookie"] = []string{sessionCookies}
+		// Build Cookie header fresh each attempt from original + session cookies.
+		// Skip the jar lookup entirely when WithoutCookieJar — caller-provided
+		// Cookie headers still pass through unchanged.
+		if !s.Config.WithoutCookieJar {
+			sessionCookies := s.cookies.BuildCookieHeader(requestHost, requestPath, requestSecure)
+			if sessionCookies != "" {
+				if origCookie != "" {
+					req.Headers["Cookie"] = []string{origCookie + "; " + sessionCookies}
+				} else {
+					req.Headers["Cookie"] = []string{sessionCookies}
+				}
+			} else if origCookie != "" {
+				req.Headers["Cookie"] = []string{origCookie}
 			}
-		} else if origCookie != "" {
-			req.Headers["Cookie"] = []string{origCookie}
 		}
 
 		// Apply high-entropy client hints if the host requested them via Accept-CH
@@ -322,9 +326,12 @@ func (s *Session) requestWithRedirects(ctx context.Context, req *transport.Reque
 		}
 
 		// Extract cookies from EVERY response (even 429s, 500s, etc.)
-		// This mimics browser behavior where cookies are stored regardless of status
+		// This mimics browser behavior where cookies are stored regardless of status.
+		// Skip when WithoutCookieJar — caller manages cookies externally.
 		if resp != nil {
-			s.extractCookies(resp.Headers, req.URL)
+			if !s.Config.WithoutCookieJar {
+				s.extractCookies(resp.Headers, req.URL)
+			}
 			// Also parse Accept-CH from intermediate responses
 			s.parseAcceptCH(host, resp.Headers)
 		}
@@ -371,7 +378,9 @@ func (s *Session) requestWithRedirects(ctx context.Context, req *transport.Reque
 	}
 
 	// Extract cookies from final response (in case we didn't retry or it's a success)
-	s.extractCookies(resp.Headers, req.URL)
+	if !s.Config.WithoutCookieJar {
+		s.extractCookies(resp.Headers, req.URL)
+	}
 
 	// Parse Accept-CH header to store requested client hints for this host
 	s.parseAcceptCH(host, resp.Headers)
@@ -1369,17 +1378,20 @@ func (s *Session) RequestStream(ctx context.Context, req *transport.Request) (*S
 		req.Headers = make(map[string][]string)
 	}
 
-	// Add session cookies to request headers using proper domain/path matching
-	requestHost := extractHost(req.URL)
-	requestPath := extractPath(req.URL)
-	requestSecure := isSecureURL(req.URL)
-	sessionCookies := s.cookies.BuildCookieHeader(requestHost, requestPath, requestSecure)
-	if sessionCookies != "" {
-		existingCookies := req.Headers["Cookie"]
-		if len(existingCookies) > 0 && existingCookies[0] != "" {
-			req.Headers["Cookie"] = []string{existingCookies[0] + "; " + sessionCookies}
-		} else {
-			req.Headers["Cookie"] = []string{sessionCookies}
+	// Add session cookies to request headers using proper domain/path matching.
+	// Skip when WithoutCookieJar — caller-provided Cookie headers still pass through.
+	if !s.Config.WithoutCookieJar {
+		requestHost := extractHost(req.URL)
+		requestPath := extractPath(req.URL)
+		requestSecure := isSecureURL(req.URL)
+		sessionCookies := s.cookies.BuildCookieHeader(requestHost, requestPath, requestSecure)
+		if sessionCookies != "" {
+			existingCookies := req.Headers["Cookie"]
+			if len(existingCookies) > 0 && existingCookies[0] != "" {
+				req.Headers["Cookie"] = []string{existingCookies[0] + "; " + sessionCookies}
+			} else {
+				req.Headers["Cookie"] = []string{sessionCookies}
+			}
 		}
 	}
 	s.mu.Unlock()
@@ -1390,8 +1402,10 @@ func (s *Session) RequestStream(ctx context.Context, req *transport.Request) (*S
 		return nil, err
 	}
 
-	// Extract cookies from response
-	s.extractCookies(resp.Headers, req.URL)
+	// Extract cookies from response — skip when WithoutCookieJar.
+	if !s.Config.WithoutCookieJar {
+		s.extractCookies(resp.Headers, req.URL)
+	}
 
 	return resp, nil
 }

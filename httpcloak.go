@@ -377,6 +377,7 @@ type sessionConfig struct {
 	disableECH            bool   // Disable ECH lookup for faster first request
 	enableSpeculativeTLS bool   // Enable speculative TLS optimization for proxy connections
 	switchProtocol        string // Protocol to switch to after Refresh() (e.g. "h1", "h2", "h3")
+	withoutCookieJar      bool   // Disable internal cookie jar entirely (caller manages cookies via headers)
 
 	// Distributed session cache
 	sessionCacheBackend       transport.SessionCacheBackend
@@ -568,6 +569,24 @@ func WithSwitchProtocol(protocol string) SessionOption {
 	}
 }
 
+// WithoutCookieJar disables the session's internal cookie jar entirely.
+// When set, Set-Cookie headers from responses are NOT stored and the jar's
+// contents are NOT injected as Cookie headers on subsequent requests —
+// cookie management is left fully to the caller via per-request headers.
+//
+// Useful when an application maintains its own cookie store (database,
+// shared cache across sessions) and wants the lib to be byte-transparent
+// about cookies. Combine with the regular `headers={"Cookie": "..."}`
+// kwarg to inject your own jar's contents per request.
+//
+// Caller-provided Cookie headers always pass through regardless of this
+// option — only the auto-injection from the internal jar is suppressed.
+func WithoutCookieJar() SessionOption {
+	return func(c *sessionConfig) {
+		c.withoutCookieJar = true
+	}
+}
+
 // WithConnectTo sets a host mapping for domain fronting.
 // Requests to requestHost will connect to connectHost instead.
 // The TLS SNI and Host header will still use requestHost.
@@ -727,6 +746,7 @@ func NewSession(preset string, opts ...SessionOption) *Session {
 		DisableECH:            cfg.disableECH,
 		EnableSpeculativeTLS: cfg.enableSpeculativeTLS,
 		SwitchProtocol:        cfg.switchProtocol,
+		WithoutCookieJar:      cfg.withoutCookieJar,
 	}
 
 	// Retry configuration
