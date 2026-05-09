@@ -1361,6 +1361,7 @@ class Session {
       keyLogFile = null,
       enableSpeculativeTls = false,
       switchProtocol = null,
+      withoutCookieJar = false,
       ja3 = null,
       akamai = null,
       extraFp = null,
@@ -1434,6 +1435,9 @@ class Session {
     }
     if (switchProtocol) {
       config.switch_protocol = switchProtocol;
+    }
+    if (withoutCookieJar) {
+      config.without_cookie_jar = true;
     }
     if (ja3) {
       config.ja3 = ja3;

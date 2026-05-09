@@ -241,6 +241,8 @@ export interface SessionOptions {
   enableSpeculativeTls?: boolean;
   /** Protocol to switch to after Refresh() (e.g., "h1", "h2", "h3") */
   switchProtocol?: string;
+  /** Disable internal cookie jar entirely — caller manages cookies via per-request headers (default: false) */
+  withoutCookieJar?: boolean;
   /** Custom JA3 fingerprint string (e.g., "771,4865-4866-4867-...,0-23-65281-...,29-23-24,0") */
   ja3?: string;
   /** Custom Akamai HTTP/2 fingerprint string (e.g., "1:65536;2:0;4:6291456;6:262144|15663105|0|m,a,s,p") */
