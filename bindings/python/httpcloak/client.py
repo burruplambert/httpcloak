@@ -1511,6 +1511,7 @@ class Session:
         key_log_file: Optional[str] = None,
         enable_speculative_tls: bool = False,
         switch_protocol: Optional[str] = None,
+        without_cookie_jar: bool = False,
         ja3: Optional[str] = None,
         akamai: Optional[str] = None,
         extra_fp: Optional[Dict[str, any]] = None,
@@ -1564,6 +1565,8 @@ class Session:
             config["enable_speculative_tls"] = True
         if switch_protocol:
             config["switch_protocol"] = switch_protocol
+        if without_cookie_jar:
+            config["without_cookie_jar"] = True
         if ja3:
             config["ja3"] = ja3
         if akamai:
