@@ -7,10 +7,6 @@ const config: Config = {
   tagline: 'A Go HTTP client with browser-grade TLS, HTTP/2, and HTTP/3 fingerprinting',
   favicon: 'img/favicon.ico',
 
-  future: {
-    v4: true,
-  },
-
   url: 'https://httpcloak.dev',
   baseUrl: '/',
 
