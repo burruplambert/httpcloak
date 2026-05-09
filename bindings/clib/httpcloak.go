@@ -310,6 +310,7 @@ type SessionConfig struct {
 	DisableECH            bool              `json:"disable_ech,omitempty"`             // Disable ECH lookup for faster first request
 	EnableSpeculativeTLS bool              `json:"enable_speculative_tls,omitempty"` // Enable speculative TLS optimization for proxy connections
 	SwitchProtocol        string            `json:"switch_protocol,omitempty"`         // Protocol to switch to after Refresh()
+	WithoutCookieJar      bool              `json:"without_cookie_jar,omitempty"`      // Disable internal cookie jar (caller manages cookies via headers)
 	JA3               string                 `json:"ja3,omitempty"`                    // Custom JA3 fingerprint string
 	Akamai            string                 `json:"akamai,omitempty"`                 // Custom Akamai HTTP/2 fingerprint string
 	ExtraFP           map[string]interface{} `json:"extra_fp,omitempty"`               // Extra fingerprint options
@@ -1072,6 +1073,11 @@ func httpcloak_session_new(configJSON *C.char) C.int64_t {
 	// Handle switch protocol
 	if config.SwitchProtocol != "" {
 		opts = append(opts, httpcloak.WithSwitchProtocol(config.SwitchProtocol))
+	}
+
+	// Handle cookie jar disable (caller manages cookies via headers)
+	if config.WithoutCookieJar {
+		opts = append(opts, httpcloak.WithoutCookieJar())
 	}
 
 	// Handle custom fingerprint (JA3 / Akamai / extra_fp)
