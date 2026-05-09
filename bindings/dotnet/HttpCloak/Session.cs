@@ -170,6 +170,7 @@ public sealed class Session : IDisposable
     /// <param name="tlsOnly">TLS-only mode: use TLS fingerprint but skip preset HTTP headers (default: false)</param>
     /// <param name="quicIdleTimeout">QUIC idle timeout in seconds (default: 30). Set higher for long-lived HTTP/3 connections.</param>
     /// <param name="switchProtocol">Protocol to switch to after Refresh(): "h1", "h2", "h3" (default: null, no switch)</param>
+    /// <param name="withoutCookieJar">Disable internal cookie jar entirely — caller manages cookies via per-request headers (default: false)</param>
     /// <param name="tcpTtl">TCP/IP TTL override: 128=Windows, 64=Linux/macOS (default: null, no spoofing)</param>
     /// <param name="tcpMss">TCP Maximum Segment Size override: typically 1460 (default: null)</param>
     /// <param name="tcpWindowSize">TCP Window Size override: 64240=Windows, 65535=Linux/macOS (default: null)</param>
@@ -199,6 +200,7 @@ public sealed class Session : IDisposable
         string? keyLogFile = null,
         bool enableSpeculativeTls = false,
         string? switchProtocol = null,
+        bool withoutCookieJar = false,
         string? ja3 = null,
         string? akamai = null,
         Dictionary<string, object>? extraFp = null,
@@ -234,6 +236,7 @@ public sealed class Session : IDisposable
             KeyLogFile = keyLogFile,
             EnableSpeculativeTls = enableSpeculativeTls,
             SwitchProtocol = switchProtocol,
+            WithoutCookieJar = withoutCookieJar,
             Ja3 = ja3,
             Akamai = akamai,
             ExtraFp = extraFp,
@@ -2774,6 +2777,10 @@ internal class SessionConfig
     [JsonPropertyName("switch_protocol")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? SwitchProtocol { get; set; }
+
+    [JsonPropertyName("without_cookie_jar")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool WithoutCookieJar { get; set; }
 
     [JsonPropertyName("ja3")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
