@@ -1,0 +1,224 @@
+---
+title: Hooks
+sidebar_position: 7
+---
+
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+# Hooks
+
+Hooks are middleware. PreRequest fires right before a request hits the wire, PostResponse fires right after the response lands. Use them to mutate, log, transform, or kill a request at the gate. Same idea as Express middleware or `requests.Session.hooks`, just with httpcloak's types.
+
+Two slots:
+
+- **PreRequest**: gets the outgoing request. Mutate headers, attach a request ID, or return an error to abort.
+- **PostResponse**: gets the parsed response. Inspect status, pull a token out of a header, log timing.
+
+## PreRequestHook
+
+```go
+type PreRequestHook func(req *http.Request) error
+```
+
+You get the actual `*http.Request` (the `sardanioss/http` one) right before the transport ships it. Anything you change lands on the wire: headers, URL, method, body. Return a non-nil error and the whole request gets cancelled before a single byte goes out. The error bubbles back to the caller wrapped as `pre-request hook failed: <your err>`.
+
+What you'll typically do here:
+
+- Inject a correlation header like `X-Request-ID` or a tracing span ID
+- Refresh a bearer token if it's near expiry
+- Block the request based on a URL allowlist (return an error)
+- Log the outbound URL and method for telemetry
+
+## PostResponseHook
+
+```go
+type PostResponseHook func(resp *Response) error
+```
+
+Fires once the response is fully built (status, headers, body buffered or streaming). You can read `resp.StatusCode`, `resp.Headers`, `resp.Timing`, `resp.Protocol`, the lot. Returning an error here is purely advisory. Hooks are observability, not control flow, so the response still flows back to the caller untouched. If you want to fail loud on a 5xx, do it in your call site, not the hook.
+
+What you'll typically do here:
+
+- Log status + timing for every response
+- Extract a `X-Auth-Token` from response headers and stash it
+- Warn or page on 4xx / 5xx clusters
+- Buffer the body for a debug capture (call `resp.Bytes()` inside the hook)
+
+## Order and chaining
+
+Hooks fire in the order you registered them. Add three PreRequest hooks and they run 1, 2, 3 every request. PreRequest hooks short-circuit on the first error, so if hook 2 returns an error, hook 3 never fires and the request never goes out.
+
+Same deal for PostResponse, except errors don't stop anything. Each hook runs to completion regardless.
+
+## Wiping hooks
+
+`ClearHooks()` drops everything. Useful between test cases when you want a clean slate.
+
+```go
+c.ClearHooks()
+```
+
+There's also `c.Hooks().ClearPreRequest()` and `c.Hooks().ClearPostResponse()` if you only want to nuke one side.
+
+## Example: log every URL, warn on errors
+
+<Tabs groupId="lang">
+<TabItem value="go" label="Go">
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+
+    http "github.com/sardanioss/http"
+    "github.com/sardanioss/httpcloak/client"
+)
+
+func main() {
+    c := client.NewClient("chrome-latest")
+    defer c.Close()
+
+    c.OnPreRequest(func(req *http.Request) error {
+        fmt.Printf("[pre] %s %s\n", req.Method, req.URL)
+        req.Header.Set("X-Request-ID", "abc-123")
+        return nil
+    })
+
+    c.OnPostResponse(func(resp *client.Response) error {
+        if resp.StatusCode >= 400 {
+            fmt.Printf("[post] WARN %d %s\n", resp.StatusCode, resp.FinalURL)
+        } else {
+            fmt.Printf("[post] ok   %d %s\n", resp.StatusCode, resp.FinalURL)
+        }
+        return nil
+    })
+
+    resp, _ := c.Get(context.Background(), "https://httpbin.org/get", nil)
+    resp.Close()
+
+    resp, _ = c.Get(context.Background(), "https://httpbin.org/status/418", nil)
+    resp.Close()
+}
+```
+
+</TabItem>
+<TabItem value="python" label="Python">
+
+```python
+import httpcloak
+
+c = httpcloak.Client(preset="chrome-latest")
+
+def on_pre(req):
+    print(f"[pre] {req.method} {req.url}")
+    req.headers["X-Request-ID"] = "abc-123"
+
+def on_post(resp):
+    tag = "WARN" if resp.status_code >= 400 else "ok  "
+    print(f"[post] {tag} {resp.status_code} {resp.final_url}")
+
+c.on_pre_request(on_pre)
+c.on_post_response(on_post)
+
+c.get("https://httpbin.org/get")
+c.get("https://httpbin.org/status/418")
+```
+
+</TabItem>
+<TabItem value="nodejs" label="Node.js">
+
+```js
+const { Client } = require("httpcloak");
+
+const c = new Client({ preset: "chrome-latest" });
+
+c.onPreRequest((req) => {
+  console.log(`[pre] ${req.method} ${req.url}`);
+  req.headers["X-Request-ID"] = "abc-123";
+});
+
+c.onPostResponse((resp) => {
+  const tag = resp.statusCode >= 400 ? "WARN" : "ok  ";
+  console.log(`[post] ${tag} ${resp.statusCode} ${resp.finalUrl}`);
+});
+
+await c.get("https://httpbin.org/get");
+await c.get("https://httpbin.org/status/418");
+```
+
+</TabItem>
+<TabItem value="dotnet" label=".NET">
+
+```csharp
+using HttpCloak;
+
+using var c = new Client(preset: "chrome-latest");
+
+c.OnPreRequest(req => {
+    Console.WriteLine($"[pre] {req.Method} {req.Url}");
+    req.Headers["X-Request-ID"] = "abc-123";
+});
+
+c.OnPostResponse(resp => {
+    var tag = resp.StatusCode >= 400 ? "WARN" : "ok  ";
+    Console.WriteLine($"[post] {tag} {resp.StatusCode} {resp.FinalUrl}");
+});
+
+await c.GetAsync("https://httpbin.org/get");
+await c.GetAsync("https://httpbin.org/status/418");
+```
+
+</TabItem>
+</Tabs>
+
+What you'll see on stdout:
+
+```text
+[pre] GET https://httpbin.org/get
+[post] ok   200 https://httpbin.org/get
+[pre] GET https://httpbin.org/status/418
+[post] WARN 418 https://httpbin.org/status/418
+```
+
+Two requests, four hook fires. The pre hook stamped both with `X-Request-ID: abc-123`, the post hook flagged the teapot.
+
+:::warning
+Hooks run on the request's hot path, synchronously, every single request. A hook that does network I/O or grabs a contended mutex tanks throughput. If your hook needs to hit a database or push to a queue, do it on a background goroutine / async task and return immediately. Heavy hooks turn a 50ms request into a 500ms one and you'll spend an afternoon wondering why.
+:::
+
+## Pulling a token out of a response
+
+Quick pattern. Server sets `X-Auth-Token` on login. Stash it from a hook so the rest of your code can grab it without parsing every response by hand.
+
+```go
+var token string
+
+c.OnPostResponse(func(resp *client.Response) error {
+    if t := resp.GetHeader("X-Auth-Token"); t != "" {
+        token = t
+    }
+    return nil
+})
+```
+
+`GetHeader` is case-insensitive so you don't have to worry about whether the server sent `X-Auth-Token` or `x-auth-token`.
+
+## Blocking a request at the gate
+
+Return an error from PreRequest and the request never goes out. Handy for kill-switches or allowlists.
+
+```go
+allowed := map[string]bool{"api.example.com": true}
+
+c.OnPreRequest(func(req *http.Request) error {
+    if !allowed[req.URL.Host] {
+        return fmt.Errorf("host %q not on allowlist", req.URL.Host)
+    }
+    return nil
+})
+```
+
+The caller sees `pre-request hook failed: host "evil.example.com" not on allowlist` and zero bytes hit the wire.

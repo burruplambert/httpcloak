@@ -60,6 +60,7 @@ const sidebars: SidebarsConfig = {
         'connection-lifecycle/warmup',
         'connection-lifecycle/protocol-switching',
         'connection-lifecycle/session-save-restore',
+        'connection-lifecycle/fork',
       ],
     },
     {
@@ -82,6 +83,7 @@ const sidebars: SidebarsConfig = {
         'advanced-tls/speculative-tls',
         'advanced-tls/tls-keylog',
         'advanced-tls/domain-fronting',
+        'advanced-tls/cert-pinning',
       ],
     },
     {
@@ -94,6 +96,8 @@ const sidebars: SidebarsConfig = {
         'requests-and-responses/form-data-and-multipart',
         'requests-and-responses/streaming-responses',
         'requests-and-responses/error-handling',
+        'requests-and-responses/auth',
+        'requests-and-responses/hooks',
       ],
     },
     {
@@ -127,6 +131,7 @@ const sidebars: SidebarsConfig = {
         'recipes/build-custom-chrome-from-tls-peet',
         'recipes/long-running-scraper-patterns',
         'recipes/debug-with-wireshark',
+        'recipes/local-proxy-server',
       ],
     },
     'changelog',
