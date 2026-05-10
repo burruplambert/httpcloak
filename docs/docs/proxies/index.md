@@ -5,7 +5,7 @@ sidebar_position: 1
 
 # Proxies
 
-httpcloak speaks HTTP CONNECT, SOCKS5, SOCKS5 with UDP, and MASQUE. Pick whichever one your upstream actually offers and your protocol mix needs.
+httpcloak speaks HTTP CONNECT, SOCKS5, SOCKS5 with UDP, and MASQUE. Pick whichever one your upstream offers and your protocol mix needs.
 
 ## In this section
 

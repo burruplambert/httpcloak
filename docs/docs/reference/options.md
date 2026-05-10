@@ -5,24 +5,21 @@ sidebar_position: 1
 
 # Options
 
-Every option you can pass to `httpcloak.New(...)` and `httpcloak.NewSession(...)`, all in one place. Lookup-style. For the reasoning behind each one, follow the link to the topic page.
+Every option you can pass to `httpcloak.New(...)` and `httpcloak.NewSession(...)`, in one flat list. The topic pages (Proxies, Fingerprinting, Sessions) cover the reasoning; this page is the lookup table.
 
 :::info
 Flat reference. For why each option exists and when to reach for it, see the topic sections (Proxies, Fingerprinting, Sessions, etc.).
 :::
 
-Two surfaces:
+There are two construction surfaces. `httpcloak.New(preset, ...Option)` returns a stateless `*Client` and takes a small set of options. `httpcloak.NewSession(preset, ...SessionOption)` returns a stateful `*Session` that owns cookies, TLS resumption tickets, and header memory; that's where most of the surface lives.
 
-- **`httpcloak.New(preset, ...Option)`** gives you a stateless `*Client`. Few options.
-- **`httpcloak.NewSession(preset, ...SessionOption)`** gives you a stateful `*Session` (cookies, TLS resumption, header memory). All the juicy options live here.
-
-New here? Start with `NewSession`. `New` is for one-shot scripts.
+If you're new, start with `NewSession`. `New` is the right call for one-shot scripts where state across requests doesn't matter.
 
 ---
 
 ## Client options (`httpcloak.New`)
 
-The stateless `Client`. Two options, by design.
+The stateless `Client` exposes two options. Anything that needs state lives on `NewSession`.
 
 | Signature | Default | What it does |
 |---|---|---|
@@ -33,11 +30,11 @@ The stateless `Client`. Two options, by design.
 
 ## Session options (`httpcloak.NewSession`)
 
-The full surface, grouped by category. Every option constructor returns a `SessionOption`.
+The full session surface, grouped by category. Every constructor returns a `SessionOption`.
 
 ### Lifecycle and cookies
 
-Session-level state: the cookie jar, header memory, what protocol you flip to after `Refresh()`.
+Session-level state. The cookie jar, header memory, and the protocol the session flips to after `Refresh()`.
 
 | Signature | Default | What it does |
 |---|---|---|
@@ -47,7 +44,7 @@ Session-level state: the cookie jar, header memory, what protocol you flip to af
 
 ### Network, proxies, local binding
 
-How connections get made: proxy routing, IP family preference, source IP.
+How outbound connections are made. Proxy routing, IP family preference, source-IP binding.
 
 | Signature | Default | What it does |
 |---|---|---|
@@ -62,7 +59,7 @@ How connections get made: proxy routing, IP family preference, source IP.
 
 ### Protocol forcing
 
-Lock or unlock specific HTTP versions.
+Pin or disable specific HTTP versions.
 
 | Signature | Default | What it does |
 |---|---|---|
@@ -107,7 +104,7 @@ Lock or unlock specific HTTP versions.
 
 ### Custom fingerprint struct (`CustomFingerprint`)
 
-The struct you hand to `WithCustomFingerprint`. Lives in the root package.
+The value passed to `WithCustomFingerprint`. Defined in the root package.
 
 | Field | Type | Notes |
 |---|---|---|
@@ -122,7 +119,7 @@ The struct you hand to `WithCustomFingerprint`. Lives in the root package.
 
 ## Per-request options
 
-The `Request` struct carries per-call overrides. These don't go through `SessionOption`:
+Fields on the `Request` struct override session-level settings for a single call. These don't go through `SessionOption`.
 
 | Field | Type | What it does |
 |---|---|---|
@@ -137,7 +134,7 @@ The `Request` struct carries per-call overrides. These don't go through `Session
 
 ## Session methods (mutators after construction)
 
-Not `SessionOption` constructors. These live on `*Session` and you call them after `NewSession` hands you one.
+Methods on `*Session` itself, called after `NewSession` returns. These aren't `SessionOption` constructors and can't be passed at build time.
 
 | Method | What it does |
 |---|---|
@@ -158,7 +155,7 @@ Not `SessionOption` constructors. These live on `*Session` and you call them aft
 | `Marshal() ([]byte, error)` | Persist cookies + TLS sessions to bytes. |
 | `Close()` | Release everything. Always defer this. |
 
-Cookie API:
+Cookie methods on `*Session`:
 
 | Method | What it does |
 |---|---|
@@ -168,7 +165,7 @@ Cookie API:
 | `DeleteCookie(name, domain string)` | Delete by name. Empty domain wipes from every domain. |
 | `ClearCookies()` | Wipe the jar. |
 
-Loaders. Package-level, not methods:
+Package-level loaders, not methods on `*Session`:
 
 | Function | What it does |
 |---|---|
@@ -180,7 +177,7 @@ Loaders. Package-level, not methods:
 
 ## Top-level helpers
 
-Not options. Just useful symbols in the root package.
+Symbols in the root package that aren't options. Request and response types, multipart helpers, body readers.
 
 | Symbol | What it does |
 |---|---|
@@ -194,6 +191,8 @@ Not options. Just useful symbols in the root package.
 ---
 
 ## Defaults at a glance
+
+The values you get when no option is set.
 
 | Setting | Default |
 |---|---|
@@ -210,4 +209,4 @@ Not options. Just useful symbols in the root package.
 | Local IP bind | none (OS-chosen) |
 | IPv4/IPv6 preference | racing (Happy Eyeballs) |
 
-If a default isn't what you expected, file an issue with the preset name and a `tls.peet.ws/api/all` capture.
+If a default doesn't match what you expected, file an issue with the preset name and a `tls.peet.ws/api/all` capture.

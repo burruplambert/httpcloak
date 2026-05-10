@@ -5,7 +5,7 @@ sidebar_position: 1
 
 # Requests & Responses
 
-Headers, bodies, streaming, errors. The day-to-day stuff you'll actually touch.
+This section covers headers, bodies, streaming, errors, and the auth helpers. The day-to-day surface area you touch on every request.
 
 ## In this section
 

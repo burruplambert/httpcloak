@@ -5,13 +5,13 @@ sidebar_position: 5
 
 # Domain Fronting
 
-Domain fronting is the trick where the SNI in your TLS handshake points at one host (call it host A, the "front") and the `Host:` header inside the encrypted HTTP request points at a different host (host B, the real target). The CDN edge sees host A in the ClientHello, terminates TLS, then routes the inner request based on the Host header to host B's backend.
+Domain fronting is the technique where the SNI in the TLS handshake points at one host (host A, the "front") and the `Host:` header inside the encrypted HTTP request points at a different host (host B, the real target). The CDN edge sees host A in the ClientHello, terminates TLS, then routes the inner request based on the Host header to host B's backend.
 
 Historical use cases:
 
-- Reaching a CDN-fronted service when host A is on a non-blocked domain and host B's the actual target.
+- Reaching a CDN-fronted service when host A is on a non-blocked domain and host B is the actual target.
 - Censorship circumvention. Block host B at the network layer, and the SNI for host A still goes through cleanly.
-- Internal routing where the public DNS for B doesn't exist but B's reachable as a virtual host on A's edge.
+- Internal routing where the public DNS for B doesn't exist but B is reachable as a virtual host on A's edge.
 
 :::warning
 Domain fronting is deeply CDN-specific. Cloudflare blocks it. AWS CloudFront blocks it. Fastly blocks it on most plans. Some Azure Front Door and GCP Load Balancer setups still allow it. Read your CDN provider's policy before relying on this in production.
@@ -19,19 +19,19 @@ Domain fronting is deeply CDN-specific. Cloudflare blocks it. AWS CloudFront blo
 
 ## Two related primitives in httpcloak
 
-httpcloak hands you two things that look similar but solve different problems.
+httpcloak exposes two primitives that look similar but solve different problems.
 
 ### `WithConnectTo(requestHost, connectHost)`, IP-level rerouting
 
 This maps a request hostname to a different TCP-connect target. The TLS SNI and the Host header both stay as `requestHost`. Only the IP the lib dials changes.
 
-Think curl's `--resolve` flag, or manually editing `/etc/hosts`. You're saying "when I ask for host A, open the TCP socket to host B's IP, but otherwise pretend nothing changed". Useful for hitting a specific CDN edge node, testing a new origin, or pinning to a known-good IP.
+Think curl's `--resolve` flag, or manually editing `/etc/hosts`: when the request asks for host A, the TCP socket opens to host B's IP, but everything else stays as if nothing changed. Useful for hitting a specific CDN edge node, testing a new origin, or pinning to a known-good IP.
 
 ### Per-request `Host` header, classic SNI != Host fronting
 
-For real domain fronting (SNI=A, Host=B), set the `Host` header explicitly on the request. The URL you pass picks the TCP dial target and the SNI. The Host header you set is what the CDN edge sees inside the decrypted HTTP request.
+For real domain fronting (SNI=A, Host=B), set the `Host` header explicitly on the request. The URL passed to the request picks the TCP dial target and the SNI. The Host header is what the CDN edge sees inside the decrypted HTTP request.
 
-Both can be combined. Dial a specific CDN IP via `WithConnectTo`, terminate TLS with SNI = a "safe" front domain, and send `Host: real-target.example.com` in the encrypted request.
+The two compose. Dial a specific CDN IP via `WithConnectTo`, terminate TLS with SNI = a "safe" front domain, and send `Host: real-target.example.com` in the encrypted request.
 
 ## Classic fronting setup
 
@@ -126,7 +126,7 @@ What goes on the wire:
 
 ## IP-level rerouting (the WithConnectTo path)
 
-Different goal, often confused with the above. `WithConnectTo` pins the TCP target while keeping SNI and Host the same as the request URL.
+`WithConnectTo` solves a different problem and is often confused with classic fronting. It pins the TCP target while keeping SNI and Host the same as the request URL.
 
 <Tabs groupId="lang">
 <TabItem value="go" label="Go">
@@ -184,34 +184,34 @@ Console.WriteLine(r.StatusCode);
 </TabItem>
 </Tabs>
 
-This only succeeds if the IP you're connecting to actually serves a cert matching the SNI in the handshake. With most public sites, dialing example.org's IP and asking for SNI = example.com will trip cert validation. It works when the front and the target share a wildcard cert or a SAN list.
+This path only succeeds when the IP being connected to serves a cert matching the SNI in the handshake. On most public sites, dialing example.org's IP and asking for SNI = example.com will trip cert validation. It works when the front and the target share a wildcard cert or a SAN list.
 
 ## What works on which CDN
 
 Reality as of recent testing:
 
-- **Cloudflare**: classic SNI != Host fronting blocked at the edge. The edge checks SNI against the Host header and rejects mismatches. ECH-aware fronting via the Cloudflare ECH endpoint is a different beast and does work, see [ECH](./ech) and `WithECHFrom`.
+- **Cloudflare**: classic SNI != Host fronting blocked at the edge. The edge checks SNI against the Host header and rejects mismatches. ECH-aware fronting via the Cloudflare ECH endpoint is a separate path that does work, see [ECH](./ech) and `WithECHFrom`.
 - **AWS CloudFront**: blocked since 2018. The edge requires SNI match.
 - **Fastly**: blocked on most public plans. Some enterprise SKUs permit it.
 - **Azure Front Door**: SNI != Host still works on standard tiers in many regions. Verify with your tenant.
 - **GCP HTTPS LB / Cloud CDN**: works on classic load balancers in some configs. The newer global LBs are stricter.
-- **Older / smaller CDN-like setups (Akamai aside)**: case by case. Test before you assume.
+- **Older / smaller CDN-like setups (Akamai aside)**: case by case. Test before assuming.
 
-If your front and target are different services on the *same* origin (one ALB, one set of certs, multiple vhosts), fronting works out of the box because there's no edge inspection layer rejecting the mismatch. That's the most reliable use case today.
+When the front and target are different services on the *same* origin (one ALB, one set of certs, multiple vhosts), fronting works out of the box because there's no edge inspection layer rejecting the mismatch. That's the most reliable use case today.
 
 ## When fronting fails
 
-You'll see one of:
+The visible failure modes:
 
-- TLS handshake error: cert doesn't cover the front SNI on the edge node you reached.
+- TLS handshake error: the edge cert doesn't cover the front SNI on the node that was reached.
 - 421 Misdirected Request: the edge accepted TLS but rejected the Host header because the connection wasn't authorized for that vhost.
 - 403 / 421 from the CDN with a vendor-specific error page: most CDNs that block fronting return an explicit error.
 - Empty 200 with a "blocked by security policy" body: rare, mostly on enterprise CDN tiers with deep inspection.
 
-If you hit any of these, the CDN's enforcing SNI=Host. There's no client-side trick to get around it. The block's at the edge.
+Any of these mean the CDN is enforcing SNI=Host. There's no client-side trick to get around it. The block is at the edge.
 
 ## ECH as a modern alternative
 
 ECH (covered in [ECH](./ech)) is the spec-blessed successor to domain fronting. Instead of hoping a CDN doesn't check, ECH wraps the inner ClientHello (and so the inner SNI) in a second encrypted handshake. The outer SNI is the ECH provider's name, the real target is invisible to the network. CDN providers explicitly support this, so it doesn't break their AUP.
 
-If your goal is "hide the SNI from middleboxes", reach for ECH. If your goal is "reach a backend the network thinks I shouldn't", domain fronting is the older, riskier, increasingly rare path.
+For "hide the SNI from middleboxes", reach for ECH. For "reach a backend the network thinks I shouldn't", domain fronting is the older, riskier, increasingly rare path.

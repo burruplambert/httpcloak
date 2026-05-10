@@ -8,21 +8,21 @@ import TabItem from '@theme/TabItem';
 
 # HTTP/3 (QUIC)
 
-H3 is H2 semantics riding on QUIC, which is TLS 1.3 plus a streaming transport built on UDP. The framing looks like H2 (streams, frames, HPACK-shaped header compression via QPACK), but the transport underneath is a different beast. No TCP, no head-of-line blocking when one stream's packet drops, faster cold start with 0-RTT, and connection migration when your IP shifts.
+H3 is H2 semantics riding on QUIC, which is TLS 1.3 plus a streaming transport built on UDP. The framing looks like H2 (streams, frames, HPACK-shaped header compression via QPACK), but the transport underneath is a different beast. No TCP, no head-of-line blocking when one stream's packet drops, faster cold start with 0-RTT, and connection migration when the client IP shifts.
 
 httpcloak speaks H3 when the target advertises it (Alt-Svc on a previous H2 response, or a DNS HTTPS record) or when you force it.
 
 ## httpcloak's H3 stack
 
-The H3 transport rides `sardanioss/quic-go`, a fork of upstream `quic-go` with the fingerprinting hooks we need plus our own bug fixes. Currently pinned at v1.2.25 (the bump that shipped the PRIORITY_UPDATE fix below).
+The H3 transport rides `sardanioss/quic-go`, a fork of upstream `quic-go` with our own fingerprinting hooks and bug fixes on top. Currently pinned at v1.2.25, the bump that shipped the PRIORITY_UPDATE fix described below.
 
-What our fork adds on top of upstream:
+The fork adds the following on top of upstream:
 
-- Configurable QUIC transport parameters in the INITIAL packet (idle timeout, max UDP payload, initial max data, initial max streams, etc).
+- Configurable QUIC transport parameters in the INITIAL packet (idle timeout, max UDP payload, initial max data, initial max streams, and so on).
 - Configurable QUIC version order in the INITIAL packet's version-negotiation list.
 - HTTP/3 SETTINGS frame values that line up with the H2 preset.
 - HTTP/3 PRIORITY_UPDATE frames on the control stream, with the prioritized stream ID and priority field value matching real Chrome.
-- 0-RTT session resumption that actually preserves the early-data flag across reconnects.
+- 0-RTT session resumption that preserves the early-data flag across reconnects.
 
 The transport lives in `transport/http3_transport.go` and uses `http3.Transport` from the fork.
 
@@ -33,25 +33,25 @@ The H3 ALPN ID is `h3`. The lib gets there one of two ways:
 - **Alt-Svc**. The H2 response carried `alt-svc: h3=":443"; ma=86400`. The lib remembers that for the cache window, and the next request to that host can race H3 against H2. See [auto-negotiation](./auto-negotiation).
 - **DNS HTTPS RR**. The HTTPS DNS record (RFC 9460) advertises ALPN values directly. If the resolver returns one with `h3` in it, the lib can try H3 on the first request without needing a previous H2 hit. Whether HTTPS RR fires depends on your DNS config (see `dns/`).
 
-Force H3 on a host that doesn't actually serve it and you'll hit a QUIC handshake timeout. Default budget is around 5 seconds before the lib bails.
+Forcing H3 on a host that doesn't actually serve it ends in a QUIC handshake timeout. The default budget is around 5 seconds before the lib bails.
 
 ## 0-RTT resumption
 
-If the lib has a TLS session ticket from a previous successful handshake to the same host, it can attach the first request as 0-RTT data on the same UDP packet as the QUIC INITIAL. Saves a full round trip on the cold path.
+A TLS session ticket from a previous successful handshake to the same host lets the lib attach the first request as 0-RTT data on the same UDP packet as the QUIC INITIAL. Saves a full round trip on the cold path.
 
-The ticket cache is per-session by default. Want it to survive process restarts? Plug in a `SessionCacheBackend` via `WithSessionCache(...)`.
+The ticket cache is per-session by default. Plug in a `SessionCacheBackend` via `WithSessionCache(...)` to keep tickets across process restarts.
 
-0-RTT comes with the usual replay caveat. The server decides what's safe (RFC 9001 says only idempotent methods should ride 0-RTT). httpcloak just sends what you hand it, so make sure your first request after a fresh session is a `GET` or some other safe method.
+0-RTT comes with the usual replay caveat. The server decides what's safe (RFC 9001 says only idempotent methods should ride 0-RTT). httpcloak sends what you hand it, so the first request after a fresh session should be a `GET` or some other safe method.
 
 ## What gets fingerprinted at H3
 
 Stacked from packet level up:
 
-1. **QUIC INITIAL packet**. The first UDP packet carries the QUIC version, version-negotiation list, source/destination connection IDs, and the TLS 1.3 ClientHello inside the CRYPTO frame. The transport parameters in the ClientHello extension are part of the fingerprint too.
+1. **QUIC INITIAL packet**. The first UDP packet carries the QUIC version, version-negotiation list, source and destination connection IDs, and the TLS 1.3 ClientHello inside the CRYPTO frame. The transport parameters in the ClientHello extension are part of the fingerprint too.
 2. **TLS 1.3 ClientHello**. Same uTLS-backed handshake as H2, with `h3` in ALPN.
 3. **HTTP/3 SETTINGS frame**. Same role as H2 SETTINGS but different setting IDs. Sent on the control stream (stream ID 2 from client).
 4. **PRIORITY_UPDATE frames**. RFC 9218 priority signaling at the H3 layer. Real Chrome emits one PRIORITY_UPDATE on the control stream per request, referencing the request's actual stream ID.
-5. **Pseudo-header order, header order, QPACK encoding**. Same surface as H2, just encoded with QPACK instead of HPACK.
+5. **Pseudo-header order, header order, QPACK encoding**. Same surface as H2, encoded with QPACK instead of HPACK.
 
 The H3 fingerprint at `tls.peet.ws/api/all` lands as `h3_text` and `h3_hash`. It rolls up SETTINGS values, the PRIORITY_UPDATE wire bytes, QPACK literal hints, and the pseudo-header order.
 
@@ -64,7 +64,7 @@ Before 1.6.6:
 - The PRIORITY_UPDATE frame's `prioritized_stream_id` was hardcoded to `0`.
 - The priority field value was hardcoded to `"u=0, i"`.
 
-Real Chrome never emits PRIORITY_UPDATE for stream 0. Chrome's 0-RTT probe burns that bidi ID, so the first real request lands on stream 4. Fingerprinters that parsed RFC 9218 silently dropped our PRIORITY_UPDATE as malformed, and the diff against real Chrome failed.
+Real Chrome never emits PRIORITY_UPDATE for stream 0. Chrome's 0-RTT probe burns that bidi ID, so the first real request lands on stream 4. Fingerprinters parsing RFC 9218 silently dropped our PRIORITY_UPDATE as malformed, and the diff against real Chrome failed.
 
 After 1.6.6:
 
@@ -76,7 +76,7 @@ Net wire change: `h3_text` now contains the visible `|984832|` token between `GR
 
 ## Code: force H3 and verify
 
-`tls.peet.ws` advertises `h3` in Alt-Svc, but its UDP/443 port is closed in practice. Use a host that actually serves H3, like `www.cloudflare.com`, when you want a live H3 check.
+`tls.peet.ws` advertises `h3` in Alt-Svc, but its UDP/443 port is closed in practice. A host that actually serves H3, like `www.cloudflare.com`, is the right target for a live H3 check.
 
 <Tabs groupId="lang">
 <TabItem value="go" label="Go">
@@ -169,18 +169,18 @@ For an H3 host that returns the full peet-style fingerprint payload, swap in you
 
 ## H3 over proxies: read this before debugging
 
-A lot of SOCKS5 proxies don't support `UDP_ASSOCIATE`, the SOCKS5 verb for tunneling UDP. Without it, H3 over SOCKS5 just doesn't work because QUIC needs UDP end to end. Plain HTTP `CONNECT` proxies are TCP-only by definition, so they can't carry H3 either.
+A lot of SOCKS5 proxies don't support `UDP_ASSOCIATE`, the SOCKS5 verb for tunneling UDP. Without it, H3 over SOCKS5 doesn't work because QUIC needs UDP end to end. Plain HTTP `CONNECT` proxies are TCP-only by definition, so they can't carry H3 either.
 
 :::warning H3 needs a UDP-capable proxy
-For H3 over a proxy you need either a SOCKS5 server that supports `UDP_ASSOCIATE` ([SOCKS5 UDP](/proxies/socks5-udp)) or a MASQUE proxy ([MASQUE](/proxies/masque)). HTTP `CONNECT` won't work because it doesn't carry UDP. Stuck on a TCP-only proxy and want H3-shaped fingerprints? You can't have them. Move to MASQUE or accept H2 as your wire.
+H3 over a proxy needs either a SOCKS5 server that supports `UDP_ASSOCIATE` ([SOCKS5 UDP](/proxies/socks5-udp)) or a MASQUE proxy ([MASQUE](/proxies/masque)). HTTP `CONNECT` won't work because it doesn't carry UDP. On a TCP-only proxy, H3-shaped fingerprints aren't reachable. Move to MASQUE or accept H2 as the wire.
 :::
 
-If the lib spots that the configured proxy can't carry UDP, forced-H3 requests fail fast with `HTTP/3 requires a SOCKS5 or MASQUE proxy (current proxy does not support UDP)`. Auto-negotiation just falls back to H2/H1 silently in that case.
+When the lib spots that the configured proxy can't carry UDP, forced-H3 requests fail fast with `HTTP/3 requires a SOCKS5 or MASQUE proxy (current proxy does not support UDP)`. Auto-negotiation falls back to H2 or H1 silently in that case.
 
 ## Knobs you might want
 
-- `WithQuicIdleTimeout(d)` overrides the QUIC idle timeout. Default's conservative.
-- `WithKeyLogFile(path)` writes TLS keys for Wireshark decryption. Works for H3 too, both the QUIC handshake and the inner application data.
+- `WithQuicIdleTimeout(d)` overrides the QUIC idle timeout. The default is conservative.
+- `WithKeyLogFile(path)` writes TLS keys for Wireshark decryption. Works on H3 too, both the QUIC handshake and the inner application data.
 - `WithSessionCache(...)` plugs in a persistent ticket store so 0-RTT survives process restarts.
 
 ## Switching mid-session
@@ -195,4 +195,4 @@ sess.RefreshWithProtocol("h3")
 sess.Get(ctx, "https://www.cloudflare.com/")   // forced H3 from here
 ```
 
-`RefreshWithProtocol("h3")` refuses if the active preset doesn't support H3 (some legacy presets are H2-only on purpose).
+`RefreshWithProtocol("h3")` refuses when the active preset doesn't support H3 (some legacy presets are H2-only on purpose).

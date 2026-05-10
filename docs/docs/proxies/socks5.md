@@ -7,10 +7,10 @@ sidebar_position: 4
 
 SOCKS5 is the residential-proxy workhorse. The client connects to the SOCKS5 server, runs a short version + auth handshake, asks the server to CONNECT to the target host, and from there the socket is a TCP tunnel. httpcloak runs its real TLS handshake through that tunnel.
 
-It's basically the SOCKS5 cousin of HTTP CONNECT, just with a binary handshake and an auth scheme that does username/password as a proper sub-protocol.
+It's the SOCKS5 cousin of HTTP CONNECT, with a binary handshake instead of a text one and an auth scheme that handles username/password as a proper sub-protocol.
 
 :::info
-SOCKS5 is the residential workhorse. Most providers (BrightData, Smartproxy, Oxylabs, SOAX, IPRoyal etc) ship SOCKS5 endpoints by default. If you bought "rotating residential proxies" from someone in the last few years, what they handed you was almost certainly SOCKS5.
+Most residential providers (BrightData, Smartproxy, Oxylabs, SOAX, IPRoyal, etc) ship SOCKS5 endpoints by default. If you bought "rotating residential proxies" from someone in the last few years, what they handed you was almost certainly SOCKS5.
 :::
 
 ## URL shapes
@@ -111,7 +111,7 @@ httpcloak negotiates the auth method based on what's in the URL.
 - No `user:pass` in the URL: client offers `0x00` (NO AUTHENTICATION REQUIRED) only. If the proxy demands auth it'll fail the handshake.
 - `user:pass` in the URL: client offers both no-auth and `0x02` (USERNAME/PASSWORD, RFC 1929). Server picks one. If it picks username/password, httpcloak runs the sub-negotiation.
 
-So an authenticated URL works fine against an open proxy too, the server just picks no-auth and the credentials sit unused. URL-encode special characters in the password the same way you'd do it for HTTP CONNECT:
+An authenticated URL works fine against an open proxy too, the server just picks no-auth and the credentials sit unused. URL-encode special characters in the password the same way you'd do it for HTTP CONNECT:
 
 ```
 socks5://user:p%40ss%21@proxy.example.com:1080
@@ -123,11 +123,11 @@ GSSAPI (auth method `0x01`) isn't supported. If your provider needs it, raise an
 
 `socks5h://` is a curl-ism that means "delegate DNS to the proxy". httpcloak treats both schemes identically because it always sends hostname targets as a SOCKS5 domain ATYP, which is exactly the "DNS-at-proxy" behavior. The scheme suffix is accepted but doesn't change anything you'd notice on the wire.
 
-If you really want to force client-side DNS for the target, you'd resolve the hostname yourself before building the URL. Usually not what you want with residential providers, since the proxy's DNS view is part of why you're using it.
+To force client-side DNS for the target, resolve the hostname yourself before building the URL. Usually not what you want with residential providers, since the proxy's DNS view is part of why you're using it.
 
 ## H3 through SOCKS5
 
-A vanilla `WithSessionTCPProxy("socks5://...")` only routes TCP. H3 (QUIC over UDP) will dial direct to the target. If you want H3 through the SOCKS5 server too, the server needs to support UDP ASSOCIATE and you have to wire a UDP proxy. See [SOCKS5 UDP](./socks5-udp).
+A vanilla `WithSessionTCPProxy("socks5://...")` only routes TCP. H3 (QUIC over UDP) will dial direct to the target. To send H3 through the SOCKS5 server too, the server needs to support UDP ASSOCIATE and a UDP proxy needs to be wired up. See [SOCKS5 UDP](./socks5-udp).
 
 ## Common errors
 

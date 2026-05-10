@@ -5,7 +5,7 @@ sidebar_position: 1
 
 # Bindings
 
-Same lib, four languages. Go's the native one. The rest call into a cgo-built shared library, so you're getting the exact same wire behaviour everywhere.
+httpcloak ships in four languages. Go is the native implementation. Python, Node.js, and .NET each call into the same cgo-built shared library, so the wire behaviour matches across all four surfaces.
 
 ## In this section
 

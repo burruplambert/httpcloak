@@ -5,32 +5,32 @@ sidebar_position: 5
 
 # Fork (Sibling Sessions)
 
-`Fork(n)` hands you N sibling sessions that share cookies and TLS state with the parent but get their own connection pools. Use it when you want a pack of workers hitting a site in parallel under one logged-in identity, without all of them fighting over the same sockets.
+`Fork(n)` returns N sibling sessions that share cookies and TLS state with the parent but get their own connection pools. The use case is fanning out work in parallel under one logged-in identity without every worker fighting over the same sockets.
 
-Picture it as N browser tabs from the same browser window. Same login. Same cookie jar. Same fingerprint. But each tab opens its own TCP and QUIC connections, so they're not blocking each other.
+The model is N browser tabs from the same browser window. Same login, same cookie jar, same fingerprint. Each tab opens its own TCP and QUIC connections, so a slow request on one tab doesn't queue requests on the others.
 
 ## What's shared
 
-Forked siblings share the live state that defines who you are:
+Forked siblings share the live state that defines the identity:
 
-- **Cookie jar.** Same pointer. A `Set-Cookie` from any sibling lands in the jar that all siblings (and the parent) read from. Login on the parent, fork, every child is logged in.
-- **TLS resumption tickets.** The H1, H2 and H3 session caches are shared. First handshake on a fresh fork resumes from a ticket the parent already cached, so it goes 0-RTT.
+- **Cookie jar.** Same pointer. A `Set-Cookie` from any sibling lands in the jar that every sibling (and the parent) reads from. Log in on the parent, fork, every child is logged in.
+- **TLS resumption tickets.** The H1, H2 and H3 session caches are shared. The first handshake on a fresh fork resumes from a ticket the parent already cached, so it lands on the 0-RTT path.
 - **ECH config cache.** Same encrypted-ClientHello blobs, no re-discovery needed.
-- **Custom fingerprint state.** Custom JA3, custom H2 settings, custom pseudo-header order, custom TCP fingerprint, header order. The whole fingerprint surface copies over on fork.
+- **Custom fingerprint state.** Custom JA3, custom H2 settings, custom pseudo-header order, custom TCP fingerprint, header order. The full fingerprint surface copies over on fork.
 - **Cache validators.** ETag and Last-Modified entries snapshot at fork time so siblings start with believable conditional-request headers.
 
 ## What's NOT shared
 
 Each fork gets its own:
 
-- **Connection pool.** Brand new transport. New TCP sockets, new QUIC connections. Siblings don't queue behind each other.
+- **Connection pool.** Fresh transport, new TCP sockets, new QUIC connections. Siblings don't queue behind each other.
 - **In-flight requests.** A request on one fork can't block or cancel a request on another.
-- **Idle timer and stats.** `LastUsed`, `RequestCount`, idle close timers are per-fork.
-- **Key log writer.** Forks don't get the parent's TLS keylog, so they can't double-close it. Set up your own if you need one per fork.
+- **Idle timer and stats.** `LastUsed`, `RequestCount` and idle close timers are per-fork.
+- **Key log writer.** Forks don't inherit the parent's TLS keylog, so they can't double-close it. Set up a keylog per fork if needed.
 
 ## Common pattern: warm up, log in, fork, scrape
 
-The typical flow is: hit the home page on the parent so cookies and tickets land, log in, fork into N workers, hand each worker a slice of URLs.
+The typical flow is hit the home page on the parent so cookies and tickets land, log in, fork into N workers, hand each worker a slice of URLs.
 
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
@@ -177,18 +177,18 @@ await Task.WhenAll(forks.Select((fs, idx) => Task.Run(() => {
 </TabItem>
 </Tabs>
 
-What you'll see: every fork ships requests with the same logged-in cookies, every fork resumes TLS from the parent's tickets, and they all carry an identical JA4 because the fingerprint state copied over. Verified locally with three forks against `tls.peet.ws`, all three returned `t13d1517h2_8daaf6152771_b6f405a00624`.
+Every fork ships requests with the same logged-in cookies, every fork resumes TLS from the parent's tickets, and they all carry an identical JA4 because the fingerprint state copied at fork time. Verified locally with three forks against `tls.peet.ws`, all three returned `t13d1517h2_8daaf6152771_b6f405a00624`.
 
 ## Lifecycle
 
-Forks are independent siblings, not children with a leash to the parent.
+Forks are independent siblings, not children attached to the parent's lifecycle.
 
 - Closing the parent doesn't close the forks. They keep working.
-- Closing a fork doesn't affect siblings. The shared cookie jar stays alive as long as anyone holds a reference.
-- A `Set-Cookie` on any sibling propagates to every other sibling and the parent, instantly. Same pointer.
-- Fingerprint state copies once at fork time. If you mutate the parent's header order after forking, the existing forks won't see the change. New forks made after the mutation will.
+- Closing a fork doesn't affect its siblings. The shared cookie jar stays alive as long as any sibling or the parent holds a reference.
+- A `Set-Cookie` on any sibling propagates to every other sibling and the parent immediately. Same pointer.
+- Fingerprint state copies once at fork time. Mutating the parent's header order after forking has no effect on existing forks; new forks made after the mutation pick up the new state.
 
-If you want a fork to have its own cookie jar, you don't fork. Build a fresh `NewSession` instead.
+For a fork that should hold its own cookie jar, the right answer isn't a fork. Build a fresh `NewSession`.
 
 ## Fork vs LoadSession
 
@@ -203,15 +203,15 @@ Both clone session state, but they solve different problems:
 | Connection pools | Independent per fork | New session, fresh pool |
 | Use when | Parallel workers in one binary | Persisting login across restarts |
 
-Fork is for live fan-out. LoadSession is for resuming yesterday's session. They don't compete, and you'll often use both: load a saved session at startup, fork it for parallel work, save the parent again at shutdown.
+Fork is for live fan-out. LoadSession is for resuming yesterday's session. They don't compete, and the two are often used together: load a saved session at startup, fork it for parallel work, save the parent again at shutdown.
 
 :::tip
-Pick a fork count your network can actually feed. 10-50 is the typical sweet spot. Going past that and you're just building a queue: every fork is racing for the same NIC, same DNS resolver, same upstream socket budget. You'll burn CPU rebuilding TLS handshakes you can't ship fast enough. If the target's running per-IP rate limits, more forks won't help anyway, you'll need real proxies behind each fork.
+Pick a fork count the network can actually feed. 10-50 is the typical sweet spot. Past that, the forks queue against shared resources: same NIC, same DNS resolver, same upstream socket budget. CPU goes into rebuilding TLS handshakes that can't ship fast enough. If the target enforces per-IP rate limits, more forks don't help anyway; that's the cue to put real proxies behind each fork.
 :::
 
 ## Test it yourself
 
-The test below confirms forks share TLS state. Three forks hit `tls.peet.ws/api/all` in parallel, and you should see all three return 200 with the same JA4 hash. If the JA4 differs across forks, fingerprint state didn't copy and that's a bug.
+The test below confirms forks share TLS state. Three forks hit `tls.peet.ws/api/all` in parallel, and all three should return 200 with the same JA4 hash. A JA4 mismatch across forks means the fingerprint state didn't copy, which is a bug.
 
 ```go
 package main
@@ -272,4 +272,4 @@ fork[1] status=200 ja4=t13d1517h2_8daaf6152771_b6f405a00624
 fork[2] status=200 ja4=t13d1517h2_8daaf6152771_b6f405a00624
 ```
 
-Same JA4 across all three. That's proof the TLS fingerprint state actually shares, not just the cookie jar.
+Same JA4 across all three. That's proof TLS fingerprint state shares on fork, not just the cookie jar.

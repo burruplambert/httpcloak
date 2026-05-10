@@ -5,9 +5,7 @@ sidebar_position: 2
 
 # Cookie Jar
 
-The cookie jar is on by default. It stores `Set-Cookie` values, replays them on matching follow-up requests, just like a browser tab does.
-
-You don't have to flip anything on. It's already running.
+Every `Session` carries an in-memory cookie jar that stores `Set-Cookie` values from responses and attaches the matching ones to the next request, the same way a browser tab does. The jar is on by default and there's nothing to wire up; constructing the session is enough.
 
 ## What gets stored
 
@@ -21,7 +19,7 @@ When a response comes back with `Set-Cookie` headers, httpcloak parses each one 
 - `httpOnly`
 - `sameSite`
 
-The jar also tracks creation time so cookies with longer paths and older creation timestamps come first when building the `Cookie` header. That's the RFC 6265 sort order browsers use.
+The jar also records the creation time of each cookie. When it builds a `Cookie` header, longer paths and older creation timestamps come first, which is the RFC 6265 sort order real browsers use.
 
 ## When the jar sends what
 
@@ -32,19 +30,19 @@ On the next request, the jar walks its stored cookies and picks the ones that ma
 - the request **scheme** (secure cookies only ride HTTPS)
 - the **expiry** (anything past its expiry gets skipped)
 
-The matches get glued together into a single `Cookie:` header and sent.
+The matches get joined into a single `Cookie:` header and attached to the outgoing request.
 
-See [Domain and Path Matching](./domain-and-path-matching) for the full rules and the gotchas.
+See [Domain and Path Matching](./domain-and-path-matching) for the full set of rules and the edge cases that catch most callers out.
 
 ## Lifecycle
 
-Cookies live in memory for as long as the `Session` lives. Close the session and the jar goes with it.
+Cookies live in memory for as long as the `Session` lives. Closing the session drops the jar with it.
 
-If you want cookies to survive across processes, use `Save()` and `LoadSession()`. They serialize the jar (along with TLS resumption tickets and a few other bits) to a file you can reload later. See [Session save & restore](/connection-lifecycle/session-save-restore) for the full flow.
+To persist cookies across processes, use `Save()` and `LoadSession()`. The pair serialize the jar (along with TLS resumption tickets and a handful of other state) to a file that can be reloaded later. See [Session save & restore](/connection-lifecycle/session-save-restore) for the full flow.
 
 ## Quick example
 
-The example below sets a cookie via `httpbin.org/cookies/set`, then reads `httpbin.org/cookies` to show the jar replayed it on the second request.
+The example below sets a cookie via `httpbin.org/cookies/set`, then reads `httpbin.org/cookies` on the same session to confirm the jar replayed it on the second request.
 
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
@@ -129,25 +127,25 @@ Console.WriteLine(r.Text);
 
 ## Inspecting the jar
 
-The session exposes the current jar contents so you can poke at it:
+The session exposes the jar's contents through four methods:
 
-- `GetCookies()` returns the full list with domain, path, expiry, flags
+- `GetCookies()` returns the full list with domain, path, expiry, and flags
 - `SetCookie(...)` adds or updates a cookie programmatically
-- `DeleteCookie(name, domain)` removes one (pass empty domain to wipe across all domains)
+- `DeleteCookie(name, domain)` removes one (pass an empty domain to wipe matches across every domain)
 - `ClearCookies()` empties the jar
 
-Handy for tests, debugging, or when you want to seed the jar before the first request.
+These are useful for tests, debugging, and seeding the jar before the first request goes out.
 
 :::info DoStream parity
-`DoStream()` also pulls cookies out of streamed responses (fixed in 1.6.6). Older versions you'll find in tutorials online didn't, so if you copy old code, double-check the version. Streaming and non-streaming requests now feed the same jar.
+`DoStream()` pulls cookies out of streamed responses too, since 1.6.6. Older versions you'll find in tutorials online didn't, so if you copy code from one of those, check the version first. Streaming and non-streaming requests now feed the same jar.
 :::
 
 ## What the jar does NOT do
 
-- It doesn't enforce `__Host-` and `__Secure-` cookie name prefixes with the strict RFC checks. The flags (`Secure`, host-only) are still respected, but the prefix rules aren't enforced separately.
-- It doesn't do anything with `SameSite` other than store it. There's no cross-site request tracking, so cookies always go out on requests you make.
-- It doesn't garbage-collect expired cookies on every read. They get filtered at send time and during `ClearExpired()`. If you keep a long-lived session and want a clean snapshot, call `ClearExpired()` yourself.
+- It doesn't enforce `__Host-` and `__Secure-` cookie name prefixes with the strict RFC checks. The underlying flags (`Secure`, host-only) are still respected, but the prefix rules themselves aren't enforced separately.
+- It stores `SameSite` but doesn't act on it. There's no cross-site request tracking inside httpcloak, so cookies always go out on requests you initiate.
+- It doesn't garbage-collect expired cookies on every read. They get filtered at send time and during `ClearExpired()`. On a long-lived session where you want a clean snapshot, call `ClearExpired()` yourself.
 
 ## When you don't want the jar
 
-If you'd rather drive cookies yourself, drop the jar entirely with `WithoutCookieJar()`. See [Disabling the Cookie Jar](./disabling-cookie-jar).
+To drive cookies yourself, switch the jar off with `WithoutCookieJar()`. See [Disabling the Cookie Jar](./disabling-cookie-jar).

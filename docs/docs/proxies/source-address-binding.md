@@ -5,10 +5,10 @@ sidebar_position: 7
 
 # Source Address Binding
 
-Sometimes you need every outgoing socket to leave from a specific local IP. Reasons:
+Source address binding pins every outgoing socket to a specific local IP. The reasons it comes up:
 
 - Your machine has multiple public IPs and you want to pick one.
-- You've got a routed IPv6 prefix (`/64` or wider) and want to rotate source IPs per request out of a huge pool.
+- A routed IPv6 prefix (`/64` or wider) is available and you want to rotate source IPs per request out of a huge pool.
 - Audit / compliance requires a known egress IP.
 - You're testing IPv6 behavior on a dual-stack box.
 
@@ -30,7 +30,7 @@ ip := pickRandomFromPool() // returns net.IP
 httpcloak.WithLocalAddrIP(ip)
 ```
 
-There's also `WithSessionPreferIPv4()`, which is unrelated to local binding but commonly comes up next to it. It opts the dialer out of Happy Eyeballs and forces v4 lookups. Use it on networks where IPv6 is half-broken.
+A related option, `WithSessionPreferIPv4()`, isn't about local binding but commonly comes up next to it. It opts the dialer out of Happy Eyeballs and forces v4 lookups. Use it on networks where IPv6 is half-broken.
 
 ## What it does at the socket layer
 
@@ -42,7 +42,7 @@ On Linux, httpcloak also calls `setsockopt(IP_FREEBIND)` and `setsockopt(IPV6_FR
 
 By default a Linux box won't let you bind to an IP that isn't configured on any of its interfaces. You'd get `EADDRNOTAVAIL`. `IP_FREEBIND` (and the IPv6 equivalent) skip that check. The kernel trusts that you know what you're doing.
 
-This is the magic that makes IPv6 prefix rotation cheap. Your hoster routes a `/64` (or `/56`, or `/48`) to your box. You don't have to configure 18 quintillion addresses on the interface. You just bind to whichever address you want from the prefix and `IP_FREEBIND` lets the bind succeed. Outgoing packets carry that source address, return packets get routed back because the upstream router knows the prefix is yours. Pretty slick.
+This is what makes IPv6 prefix rotation cheap. Your hoster routes a `/64` (or `/56`, or `/48`) to your box. You don't have to configure 18 quintillion addresses on the interface. You just bind to whichever address you want from the prefix and `IP_FREEBIND` lets the bind succeed. Outgoing packets carry that source address, return packets get routed back because the upstream router knows the prefix is yours. Pretty slick.
 
 httpcloak applies `FREEBIND` unconditionally on Linux. Failures get silently ignored. If the kernel rejects it, the bind would have worked anyway because the address was locally configured, and we don't want to fail the simple case.
 
@@ -162,7 +162,7 @@ resp, _ := s.Get(ctx, "https://httpbin.org/ip")
 // returns the random v6 address you picked
 ```
 
-You'd run that for each fresh request (a new session per IP, or pool the sessions by IP). The session itself caches one local address for its lifetime. Rotation happens at session-construction time.
+Run that for each fresh request (a new session per IP, or pool the sessions by IP). The session itself caches one local address for its lifetime. Rotation happens at session-construction time.
 
 ### Combined with a proxy
 
@@ -175,4 +175,4 @@ s := httpcloak.NewSession("chrome-latest",
 )
 ```
 
-This makes sense when your machine has multiple egress IPs and you want the SOCKS5 control connection to leave from a known one (routing, firewall ACLs, etc).
+This pattern fits when your machine has multiple egress IPs and you want the SOCKS5 control connection to leave from a known one (routing, firewall ACLs, etc).

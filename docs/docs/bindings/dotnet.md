@@ -5,7 +5,7 @@ sidebar_position: 4
 
 # .NET
 
-The .NET binding wraps the cgo shared library through P/Invoke. Same C ABI as the Node and Python bindings underneath, surface area styled like .NET: PascalCase, `Async` suffixes for `Task<T>` returns, `IDisposable` for resource cleanup, `using` declarations.
+The .NET binding wraps the cgo shared library through P/Invoke. The C ABI underneath is the same one Node and Python ride on, while the surface follows .NET conventions: PascalCase names, `Async` suffixes on `Task<T>` returns, `IDisposable` for resource cleanup, `using` declarations for scope-bound disposal.
 
 ## Install
 
@@ -13,9 +13,9 @@ The .NET binding wraps the cgo shared library through P/Invoke. Same C ABI as th
 dotnet add package HttpCloak
 ```
 
-The NuGet package ships native binaries for `linux-x64`, `linux-arm64`, `osx-x64`, `osx-arm64`, `win-x64` under the standard `runtimes/` layout. .NET picks the right one based on RID at build time, no extra configuration.
+The NuGet package ships native binaries for `linux-x64`, `linux-arm64`, `osx-x64`, `osx-arm64`, `win-x64` under the standard `runtimes/` layout. .NET picks the right one based on RID at build time, with no extra configuration needed.
 
-Target frameworks: `net6.0`, `net7.0`, `net8.0`, `net9.0`, `net10.0`. Use the latest LTS (`net8.0` at the time of writing) unless you've got a reason not to.
+Target frameworks: `net6.0`, `net7.0`, `net8.0`, `net9.0`, `net10.0`. The latest LTS (`net8.0` at the time of writing) is the default choice unless something specific blocks it.
 
 ## Quick start
 
@@ -29,7 +29,7 @@ Console.WriteLine($"Protocol: {r.Protocol}");
 Console.WriteLine($"Body length: {r.Text.Length}");
 ```
 
-The `using` declaration disposes the session when the enclosing scope ends. The session implements `IDisposable`, so always pair `new Session(...)` with `using`.
+The `using` declaration disposes the session when the enclosing scope ends. `Session` implements `IDisposable`, so every `new Session(...)` should pair with a `using`.
 
 ## `Session`
 
@@ -72,7 +72,7 @@ public Session(
 )
 ```
 
-Use named arguments at call sites. Positional gets messy fast with this many parameters.
+Use named arguments at call sites. Positional form gets messy fast with this many parameters.
 
 Full description per option: [Options reference](/reference/options).
 
@@ -95,7 +95,7 @@ Task<Response> OptionsAsync(string url, ...);
 Task<Response> RequestAsync(string method, string url, string? body = null, ...);
 ```
 
-Common kwargs across all of them: `headers`, `parameters`, `cookies`, `auth`, `timeout`, `cancellationToken`, `fetchMode`. The JSON variants serialize `data` to JSON and add `Content-Type: application/json`.
+Common kwargs across all of them: `headers`, `parameters`, `cookies`, `auth`, `timeout`, `cancellationToken`, `fetchMode`. The JSON variants serialise `data` to JSON and add `Content-Type: application/json`.
 
 ```csharp
 var r = await s.PostJsonAsync("https://httpbin.org/post", new { hello = "world" });
@@ -129,7 +129,7 @@ Response RequestBinary(string method, string url, byte[] body, ...);
 Response RequestStream(string method, string url, Stream bodyStream, ...);
 ```
 
-The `Stream` overloads are for streaming uploads when you don't want to materialise the body in memory. Common case: uploading a big file from disk.
+The `Stream` overloads cover streaming uploads where the body shouldn't get materialised in memory. The common case is uploading a big file from disk.
 
 ### Streaming responses
 
@@ -139,7 +139,7 @@ StreamResponse PostStream(string url, string? body = null, ...);
 StreamResponse RequestStream(string method, string url, string? body = null, ...);
 ```
 
-`StreamResponse` exposes a `Stream`-like API and `IDisposable`. Wrap it in a `using` block when you consume it.
+`StreamResponse` exposes a `Stream`-like API and implements `IDisposable`. Wrap it in a `using` block at the consumption site.
 
 ### Fast path
 
@@ -152,7 +152,7 @@ FastResponse DeleteFast(string url, ...);
 FastResponse PatchFast(string url, byte[]? body = null, ...);
 ```
 
-`FastResponse` skips a few allocations and exposes `Body` as a `byte[]` from a pooled buffer. Dispose it (or call `Release()`) when you're done so the buffer returns to the pool.
+`FastResponse` skips a few allocations and exposes `Body` as a `byte[]` from a pooled buffer. Dispose it (or call `Release()`) when done with the response so the buffer returns to the pool.
 
 ### Lifecycle
 
@@ -163,7 +163,7 @@ void Warmup(string url, long timeoutMs = 0);
 Session[] Fork(int n = 1);
 ```
 
-`Refresh` keeps cookies and TLS tickets while dropping connections. `Warmup` does a real-browser-style page load. `Fork(n)` returns sibling sessions sharing cookies and TLS state.
+`Refresh` keeps cookies and TLS tickets while dropping connections. `Warmup` runs a browser-style page load. `Fork(n)` returns sibling sessions sharing cookies and TLS state.
 
 ### Persistence
 
@@ -174,7 +174,7 @@ static Session Load(string path);
 static Session Unmarshal(string data);
 ```
 
-`Marshal` returns a JSON string. Save it to Redis, a database, wherever, then `Unmarshal` to rebuild.
+`Marshal` returns a JSON string. Save it to Redis, a database, or any string-shaped store, then call `Unmarshal` to rebuild.
 
 ### Cookies
 
@@ -192,7 +192,7 @@ void DeleteCookie(string name, string domain = "");
 void ClearCookies();
 ```
 
-The deprecated variants currently return shape-compatible data. They'll switch to the detailed shape in a future major. Migrate to `*Detailed` when convenient.
+The deprecated variants currently return shape-compatible data. They'll switch to the detailed shape in a future major. Migrating to `*Detailed` now keeps the call sites stable across that change.
 
 ### Proxy management
 
@@ -254,15 +254,15 @@ public sealed class Response
 ## Conventions
 
 - PascalCase everywhere. `GetCookies`, `SetProxy`, `ClearCookies`.
-- `Async` suffix for `Task<T>` returns.
-- `CancellationToken` parameter on all `*Async` methods. Use it.
+- `Async` suffix on `Task<T>` returns.
+- `CancellationToken` parameter on all `*Async` methods. Wire it up at the call site.
 - `IDisposable` on `Session`, `StreamResponse`, `FastResponse`, `LocalProxy`. Pair every `new` with `using`.
 - Errors throw `HttpCloakException`.
-- Nullable annotations are on. `string?` means it can be null, `string` means it can't.
+- Nullable annotations are on. `string?` allows null, `string` doesn't.
 
 ## Concurrency
 
-`Session` is safe for concurrent use. Multiple `Task`s can call request methods on the same session at once, the underlying transport handles parallel dials.
+`Session` is safe for concurrent use. Multiple `Task`s can call request methods on the same session at once, and the underlying transport handles parallel dials.
 
 ```csharp
 using var s = new Session(preset: "chrome-146");
@@ -270,7 +270,7 @@ var tasks = urls.Select(u => s.GetAsync(u));
 var responses = await Task.WhenAll(tasks);
 ```
 
-For browser-tab-style parallelism with shared cookies, use `Fork(n)`. Each fork has its own connection pool but inherits cookies and TLS resumption tickets from the parent.
+For browser-tab-style parallelism with shared cookies, use `Fork(n)`. Each fork gets its own connection pool while inheriting cookies and TLS resumption tickets from the parent.
 
 ## Custom fingerprints
 
@@ -298,15 +298,15 @@ HttpCloak.StreamResponse
 HttpCloak.FastResponse
 ```
 
-`LocalProxy` runs a local HTTP proxy server that applies the fingerprint to whatever HTTP client points at it. `PresetPool` and JSON loading are covered in [JSON preset builder](/fingerprinting/json-preset-builder). `SessionCacheBackend` plugs into [Session save and restore](/connection-lifecycle/session-save-restore).
+`LocalProxy` runs a local HTTP proxy server that applies the fingerprint to any HTTP client pointed at it. `PresetPool` and JSON loading are covered in [JSON preset builder](/fingerprinting/json-preset-builder). `SessionCacheBackend` plugs into [Session save and restore](/connection-lifecycle/session-save-restore).
 
 ## P/Invoke pitfalls
 
-The native lib's a cgo shared library. A few things to keep in mind:
+The native lib is a cgo shared library. A few things to keep in mind:
 
-- The lib's loaded once per process. Loading it from multiple `AppDomain`s isn't supported.
-- The lib calls back into managed code for the distributed session cache. Pin the delegates the way `SessionCacheBackend` already does, don't roll your own without reading that source.
-- `Native.cs` exposes the raw P/Invoke surface but is internal. You should never need to touch it from app code, the `Session` / `LocalProxy` / `PresetPool` classes wrap everything.
+- The lib loads once per process. Loading it from multiple `AppDomain`s isn't supported.
+- The lib calls back into managed code for the distributed session cache. Pin the delegates the way `SessionCacheBackend` already does, instead of rolling a custom version without reading that source.
+- `Native.cs` exposes the raw P/Invoke surface but is internal. App code should never need to touch it; the `Session` / `LocalProxy` / `PresetPool` classes wrap everything.
 
 ## See also
 

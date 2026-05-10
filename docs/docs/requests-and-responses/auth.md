@@ -8,13 +8,13 @@ import TabItem from '@theme/TabItem';
 
 # Authentication
 
-You can hand-roll an `Authorization` header just fine. But for anything more interesting than a static value, the auth helpers carry their weight: they know the wire format, they keep the header at the right offset Chrome would put it, and Digest actually does the challenge-response loop for you. Three flavors ship: Basic, Bearer, and Digest.
+A static `Authorization` header you can hand-roll. For anything more involved than that, the auth helpers carry their weight: they know the wire format, they keep the header at the offset Chrome would emit it from, and Digest runs the challenge-response loop for you. Three flavors ship: Basic, Bearer, and Digest.
 
-The Authorization header is also one of those headers fingerprinters watch for ordering drift. Build it through the helpers and it lands in the slot the preset reserved, not bolted onto the end like an afterthought.
+The Authorization header is one fingerprinters watch for ordering drift. Going through the helpers lands it in the slot the preset reserved, not bolted onto the end after the rest of the headers.
 
 ## The Auth interface
 
-Every helper satisfies the same tiny interface:
+Every helper satisfies the same small interface:
 
 ```go
 type Auth interface {
@@ -23,11 +23,11 @@ type Auth interface {
 }
 ```
 
-`Apply` writes the Authorization header onto the outgoing request. `HandleChallenge` is the second-pass hook: when the server hits you with a 401, the client calls `HandleChallenge` so the auth scheme can read `WWW-Authenticate`, work out what to send back, and tell the client whether to retry. Basic and Bearer don't have a challenge dance, so their `HandleChallenge` always returns `false`. Digest does the whole nonce-and-cnonce thing.
+`Apply` writes the Authorization header onto the outgoing request. `HandleChallenge` is the second-pass hook: when the server returns a 401, the client calls `HandleChallenge` so the auth scheme can read `WWW-Authenticate`, compute what to send back, and tell the client whether to retry. Basic and Bearer don't have a challenge dance, so their `HandleChallenge` always returns `false`. Digest runs the full nonce/cnonce exchange.
 
 ## Basic
 
-Username and password, base64-encoded, slapped behind `Basic `. That's it.
+Username and password, base64-encoded, prefixed with `Basic `. That's the entire scheme.
 
 ```go
 auth := client.NewBasicAuth("user", "passwd")
@@ -35,7 +35,7 @@ auth := client.NewBasicAuth("user", "passwd")
 c.SetBasicAuth("user", "passwd")
 ```
 
-`SetBasicAuth` is the shortcut: it builds a `BasicAuth` and parks it on the client so every request from that point gets the header. `NewBasicAuth` returns the value if you'd rather scope it per-request via `Request.Auth`.
+`SetBasicAuth` is the shortcut. It builds a `BasicAuth` and parks it on the client so every request from that point gets the header. `NewBasicAuth` returns the value when you want to scope it per-request via `Request.Auth`.
 
 ## Bearer
 
@@ -48,12 +48,12 @@ c.SetBearerAuth("eyJhbGc...")
 ```
 
 :::tip
-Tokens expire. If yours rotates (OAuth refresh, short-lived JWTs, signed STS creds), don't bake the token into the client at construction. Wrap your refresh logic and call `SetBearerAuth` again whenever the token rolls. Or, if requests come from different identities, skip the session setter entirely and stamp `Request.Auth = client.NewBearerAuth(token)` on each call so a stale token never leaks into the wrong request.
+Tokens expire. For rotating tokens (OAuth refresh, short-lived JWTs, signed STS creds), don't bake the token into the client at construction. Wrap your refresh logic and call `SetBearerAuth` again whenever the token rolls. Or, when requests come from different identities, skip the session setter entirely and stamp `Request.Auth = client.NewBearerAuth(token)` on each call so a stale token never leaks into the wrong request.
 :::
 
 ## Digest
 
-Digest is the picky one. The server hands you a `WWW-Authenticate: Digest realm=..., nonce=..., qop=...` on the first 401. You hash username + password + realm into HA1, hash method + URI into HA2, then hash those together with the nonce, a counter, and a cnonce you generate. That hash goes back as the `Authorization: Digest response="..."`. The client does the second leg automatically:
+Digest is the picky one. The server hands you a `WWW-Authenticate: Digest realm=..., nonce=..., qop=...` on the first 401. The scheme hashes username + password + realm into HA1, hashes method + URI into HA2, then hashes those together with the nonce, a counter, and a cnonce you generate. That hash goes back as `Authorization: Digest response="..."`. The client runs the second leg automatically:
 
 ```go
 auth := client.NewDigestAuth("user", "passwd")
@@ -72,7 +72,7 @@ The nonce-counter (`nc`) increments on every reuse, so the same `DigestAuth` val
 
 ## Custom schemes via SetAuth
 
-If your target speaks something weird (HMAC-SHA256 signed requests, AWS SigV4, a custom token-and-timestamp scheme), implement the `Auth` interface yourself and hand it to `SetAuth`:
+For a target that speaks something less standard (HMAC-SHA256 signed requests, AWS SigV4, a custom token-and-timestamp scheme), implement the `Auth` interface yourself and hand it to `SetAuth`:
 
 ```go
 type myAuth struct { secret string }
@@ -90,11 +90,11 @@ func (a *myAuth) HandleChallenge(resp *http.Response, req *http.Request) (bool, 
 c.SetAuth(&myAuth{secret: "..."})
 ```
 
-`Apply` runs once per request right before send. If your signature depends on the body, hash it from the request before Apply returns. If it depends on a timestamp, generate a fresh one each call.
+`Apply` runs once per request right before send. If the signature depends on the body, hash it from the request before Apply returns. If it depends on a timestamp, generate a fresh one each call.
 
 ## Try it: Basic auth against httpbin
 
-httpbin's `/basic-auth/user/passwd` endpoint returns 401 without credentials and 200 with the right ones. Quick way to confirm the helper's actually wiring the header.
+httpbin's `/basic-auth/user/passwd` endpoint returns 401 without credentials and 200 with the right ones. A quick way to confirm the helper is wiring the header.
 
 <Tabs groupId="lang">
 <TabItem value="go" label="Go">
@@ -216,9 +216,9 @@ with-auth: 200
 
 Two scopes, same idea as headers.
 
-**Session-level** (the `Set*Auth` family on the client) parks an Auth on the client. Every request from that point on gets it applied automatically. Good for "this whole script is one identity" situations.
+Session-level (the `Set*Auth` family on the client) parks an Auth on the client. Every request from that point gets it applied automatically. The fit is "this whole script is one identity".
 
-**Per-request** (the `Auth` field on `Request`) overrides the session-level Auth for one call. If you set both, the request-level wins. Use it when one client juggles multiple identities, or when most of your traffic is anonymous and only a few endpoints need credentials.
+Per-request (the `Auth` field on `Request`) overrides the session-level Auth for one call. When both are set, the request-level wins. The fit is one client juggling multiple identities, or mostly anonymous traffic with a handful of endpoints that need credentials.
 
 ```go
 // session default
@@ -232,4 +232,4 @@ resp, _ := c.Do(ctx, &client.Request{
 })
 ```
 
-One safety bit baked into the redirect handler: if a redirect crosses origins, the client drops `Authorization` (and `Proxy-Authorization`) before following. Same rule for HTTPS to HTTP downgrades. Real browsers do this and so does httpcloak, so credentials don't leak to whatever domain the response decided to bounce you to.
+One safety bit lives in the redirect handler: a redirect that crosses origins drops `Authorization` and `Proxy-Authorization` before following. The same rule applies to HTTPS-to-HTTP downgrades. Browsers behave the same way, and httpcloak matches that, so credentials don't leak to whatever domain the response bounces to.

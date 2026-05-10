@@ -5,7 +5,7 @@ sidebar_position: 1
 
 # Advanced TLS
 
-The deeper TLS knobs. ECH, speculative CONNECT, keylogging for Wireshark, and domain fronting. You won't reach for these every day, but when you need them, you really need them.
+This section covers the deeper TLS knobs in httpcloak: ECH, speculative CONNECT, keylogging for Wireshark, domain fronting, and certificate pinning. Most sessions never touch any of these. The ones that do tend to need them sharply, so each chapter is self-contained.
 
 ## In this section
 

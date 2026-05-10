@@ -8,40 +8,31 @@ import TabItem from '@theme/TabItem';
 
 # Long-Running Scraper Patterns
 
-Scrapers that run for days hit two ugly problems:
+A long-running scraper is one that holds a `Session` open for hours or days and reuses it across many requests. Two problems show up at that timescale:
 
-1. **Connections age out.** Servers and load balancers close idle keep-alive
-   connections. Some kill them mid-use. Your nice TLS tickets and 0-RTT
-   setup get tossed.
-2. **Session fingerprints get tracked.** A scraper that never refreshes its
-   TCP connection looks nothing like a real browser. Real browsers cycle
-   connections constantly.
+1. **Connections age out.** Servers and load balancers close idle keep-alive connections, and some kill them mid-flight. The TLS tickets and 0-RTT setup that came with the original handshake get dropped along with them.
+2. **Session fingerprints get tracked.** A scraper that holds one TCP connection open for hours does not look like a browser. Real browsers cycle connections constantly as tabs open, close, and time out.
 
-The fix is a handful of patterns: periodic `Refresh()`, `Warmup()` at
-startup, careful cookie handling, Save/Load across process restarts.
+The patterns in this recipe handle both: periodic `Refresh()` to mirror browser connection cycling, `Warmup()` at startup, deliberate cookie strategy, and Save/Load across process restarts.
 
 ## Pattern 1: Periodic Refresh
 
-Real browsers don't sit on TCP connections for hours. Keepalives time out,
-users open new tabs, life happens. Your scraper should mimic that.
+Browsers do not sit on TCP connections for hours. Keepalives expire, tabs close, the user navigates away, and the connection drops. A scraper should mirror that rhythm.
 
 `session.Refresh()` drops every live connection but keeps:
 
-- TLS session tickets (next handshake is 0-RTT)
+- TLS session tickets (the next handshake is 0-RTT)
 - Cookies
 - ECH config
 - Preset plus any custom fingerprint overrides
 
-Next request opens a fresh TCP socket but resumes TLS instantly with the
-same cookies. From the server's POV that's a returning visitor with a
-slightly older session, which is exactly what real browsers look like.
+The next request opens a fresh TCP socket and resumes TLS instantly with the same cookies. From the server's view that looks like a returning visitor with a slightly older session, which is what real browsers look like.
 
 :::warning
-Don't refresh after every request. That kills the point of session
-continuity. Slow cadence, minutes not seconds.
+Don't refresh after every request. That defeats session continuity. The cadence is minutes, not seconds.
 :::
 
-A solid default is every 2-5 minutes:
+A reasonable default is every two to five minutes:
 
 <Tabs groupId="lang">
 <TabItem value="go" label="Go">
@@ -113,25 +104,19 @@ with httpcloak.Session("chrome-latest", timeout=30) as s:
 </TabItem>
 </Tabs>
 
-How fast is too fast? If your scraper sends one request every 30 seconds,
-refreshing every 30 seconds means a fresh TCP/TLS handshake on every single
-request. Even with 0-RTT that's wasted RTT. Refresh during idle gaps, not in
-front of every request.
+A scraper sending one request every 30 seconds and refreshing on the same cadence pays for a fresh TCP and TLS handshake on every request. Even with 0-RTT that is wasted RTT. The right place for a refresh is an idle gap, not the start of every request.
 
 ## Pattern 2: Warmup at startup
 
-`Warmup(ctx, url)` mimics a real browser page load. Fetches the page HTML,
-parses it, then pulls the obvious subresources (CSS, JS, fonts) with
-realistic headers, priorities, and timing.
+`Warmup(ctx, url)` mimics a real browser page load. It fetches the page HTML, parses it, and pulls the obvious subresources (CSS, JS, fonts) with realistic headers, priorities, and request ordering.
 
-Once warmup runs, the session has:
+After warmup runs, the session holds:
 
 - TLS session tickets for the target's edge servers
 - Cookies set by the page and its subresources (analytics, CDN cookies)
 - Cache headers (ETag, Last-Modified) ready for follow-up requests
 
-So your first "real" scrape request looks like the second navigation inside
-an already-open tab, which is way less suspicious than a cold first hit.
+The first scrape request after warmup looks like a second navigation inside an open tab rather than a cold first hit, which is a much weaker signal for bot detection to grab onto.
 
 ```go
 s := httpcloak.NewSession("chrome-latest")
@@ -151,26 +136,21 @@ if err := s.Warmup(ctx, "https://example.com"); err != nil {
 scrapeLoop(ctx, s)
 ```
 
-Warmup is opportunistic. Home page fails or hits a challenge? Log it and
-keep going. The scrape loop should handle that case on its own.
+Warmup is opportunistic. If the home page fails or hits a challenge, log it and keep going. The scrape loop should handle missing warmup state on its own.
 
 :::tip
-Got a heavy login flow? Do an authenticated warmup once per process: log in,
-navigate, save with `Save()`. Later runs just `LoadSession()` from disk and
-start scraping right away, no re-login dance.
+For a target with a heavy login flow, do the authenticated warmup once per process: log in, navigate, save with `Save()`. Subsequent runs call `LoadSession()` and start scraping immediately without re-running the login dance.
 :::
 
 ## Pattern 3: Cookie strategy
 
-By default, sessions ship with a cookie jar. One jar per session, shared
-across every request that goes through it.
+Sessions ship with a cookie jar by default: one jar per session, shared across every request the session sends.
 
-Three patterns, depending on what you're scraping:
+Three patterns cover almost every use case:
 
 ### One session, one target
 
-The default. Shared cookie jar, every request through the same session sees
-the same cookies.
+The default. A shared cookie jar means every request through the session sees the same cookies.
 
 ```go
 s := httpcloak.NewSession("chrome-latest")
@@ -179,8 +159,7 @@ s := httpcloak.NewSession("chrome-latest")
 
 ### N sessions, N targets (jar isolation)
 
-Hitting N different targets? You almost always want one session per target.
-Cookies stay scoped, no leaks across hosts:
+For a scraper hitting several different targets, one session per target is almost always the right shape. Cookies stay scoped to the right host and there's no risk of jar entries leaking between unrelated sites.
 
 ```go
 sessions := map[string]*httpcloak.Session{
@@ -197,14 +176,11 @@ defer func() {
 // Route each request to the right session by host.
 ```
 
-Bonus: each session warms up independently against its own target, and you
-Save/Load each one separately.
+Side benefit: each session warms up independently against its own target, and Save/Load works per-session.
 
 ### Manual cookie management
 
-Got weird requirements? Sharing one cookie across multiple sessions, A/B
-testing two cookie sets against the same site, that kind of thing. Use
-`WithoutCookieJar()` and set the `Cookie` header yourself on every request:
+Some setups need cookie state managed outside the jar: sharing one cookie across multiple sessions, A/B testing two cookie sets against the same site, or driving session state from an external store. For those, use `WithoutCookieJar()` and set the `Cookie` header by hand on each request:
 
 ```go
 s := httpcloak.NewSession("chrome-latest", httpcloak.WithoutCookieJar())
@@ -219,14 +195,11 @@ req := &httpcloak.Request{
 resp, _ := s.Do(ctx, req)
 ```
 
-You lose automatic cookie tracking. Set-Cookie response headers are now
-your problem to parse. Most scrapers should NOT go this route.
+The trade-off is automatic cookie tracking. Set-Cookie response headers are now the caller's responsibility to parse and persist. Most scrapers should stay on the default jar.
 
 ## Pattern 4: Save / LoadSession across restarts
 
-Scraper runs for hours and might crash or restart? Save state to disk
-periodically. On startup, load it. Crashes survive without losing warmed-up
-tickets, ECH config, or cookies.
+For a scraper that runs for hours and may crash or restart, persisting state to disk turns a process bounce into a non-event. Save periodically, and load on startup. Warmed-up tickets, ECH config, and cookies all survive.
 
 ```go
 const stateFile = "/var/lib/scraper/state.json"
@@ -270,8 +243,7 @@ func main() {
 }
 ```
 
-Don't want a file? Use `Marshal()` / `UnmarshalSession()` to serialise to
-bytes (e.g. stash it in Redis):
+For setups where a file is not the right place, `Marshal()` and `UnmarshalSession()` serialise to bytes (Redis, S3, anywhere else):
 
 ```go
 data, _ := s.Marshal()
@@ -284,7 +256,7 @@ s, _ := httpcloak.UnmarshalSession(data)
 
 ## Putting it together
 
-The full long-running pattern in pseudocode shape:
+The full long-running pattern, in pseudocode shape:
 
 ```go
 func main() {
@@ -338,25 +310,18 @@ func loadOrCreate(path string) *httpcloak.Session {
 }
 ```
 
-Tune cadences to your target. Faster scrapers want longer refresh intervals
-(don't cycle TCP under sub-second request load). Slower scrapers running
-once a minute can refresh every 5-10 minutes no problem.
+Tune the cadences to the target. A scraper hammering one host per second wants longer refresh intervals so it doesn't cycle TCP under load. A scraper running once a minute can refresh every five to ten minutes without any downside.
 
 ## Things to NOT do
 
-- **Don't refresh on every request.** You're tossing the connection benefit
-  you just paid for.
-- **Don't save state on every request.** Disk IO will dominate. Every few
-  minutes is plenty.
-- **Don't share one session across very different targets.** Cookies leak
-  across hosts in the jar. One session per target is safer.
-- **Don't forget `resp.Close()`.** Body leaks tie up connection resources,
-  which makes Refresh way less effective.
+- **Don't refresh on every request.** That throws away the connection benefit you just paid the handshake for.
+- **Don't save state on every request.** Disk IO ends up dominating. Every few minutes is plenty.
+- **Don't share one session across very different targets.** Cookies in the jar are scoped per-host, but session-level state (TLS tickets, ECH config) crosses targets. One session per target keeps everything tidy.
+- **Don't forget `resp.Close()`.** Body leaks tie up connection resources and make `Refresh()` less effective, since the connection it would have dropped is still bound to a leaked body.
 
 ## Forking sessions for parallel scrapes
 
-Want N parallel workers all hitting the same target with the same warm
-session state? Use `Fork(n)`:
+For N parallel workers hitting the same target with shared warm state, use `Fork(n)`:
 
 ```go
 s := httpcloak.NewSession("chrome-latest")
@@ -376,9 +341,7 @@ wg.Wait()
 s.Close()
 ```
 
-Each forked session shares the cookie jar and the TLS ticket cache (so all
-8 workers get 0-RTT on the first request) but keeps its own connection
-state. Basically 8 browser tabs sharing one profile.
+Each forked session shares the cookie jar and the TLS ticket cache, so all 8 workers get 0-RTT on their first request, but each keeps its own connection state. The shape is 8 browser tabs sharing one profile.
 
 ## Related
 

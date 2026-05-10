@@ -5,15 +5,15 @@ sidebar_position: 1
 
 # Refresh
 
-`Refresh()` drops every live connection on a session and keeps the rest of your state. Cookies stay in the jar. TLS tickets stay cached. ECH config doesn't move. The preset name and any fingerprint overrides you set are still there. Only the wires get pulled.
+`Refresh()` closes every live connection on a session and leaves the rest of the state alone. Cookies stay in the jar. TLS tickets stay cached. ECH config holds. The preset name and any fingerprint overrides remain in place. Only the open sockets go.
 
-Think of it as a browser tab reload. The next request opens fresh TCP or QUIC sockets, the TLS handshake reuses a stored ticket so it goes 0-RTT, and the cookie header on the new connection is byte-identical to the old one. The server can't easily tell a refresh from a brand-new tab on the same browser. That's the whole point.
+The next request opens new TCP or QUIC connections and the TLS handshake resumes from a cached ticket, so it lands on the 0-RTT early-data path on TLS 1.3 or session-ID resumption on TLS 1.2. The cookie header on the new connection is byte-identical to the cookie header on the old one. From the server's side, the visible signal is one connection closing and another opening with the same cookies, which is what a browser tab reload looks like.
 
 ## Why this exists
 
-Plenty of anti-bot stacks track connection age. Real browsers don't keep a TCP socket open for hours. The keep-alive timer expires, a new connection opens for the next page load. A scraper that holds one connection alive for six hours sticks out like a sore thumb.
+Connection age is one of the cheaper signals an anti-bot stack tracks. A browser doesn't sit on a TCP socket for hours; the keep-alive timer expires, the next page load opens a fresh connection, and the cycle repeats. A scraper that pins one connection open for six hours stands out against that baseline.
 
-`Refresh()` lets you mimic that without throwing away your cookies or tickets. Run it on a timer. Every two or three minutes is fine. Other times you'll want it: a connection's gone stale, the server's misbehaving, or you want to switch protocols (see [Protocol Switching](./protocol-switching)).
+`Refresh()` produces the same lifecycle without losing your cookies or tickets. Run it on a timer, two or three minutes is fine. The other reasons to call it: a connection has gone stale, the server is misbehaving, or you want to switch protocols (see [Protocol Switching](./protocol-switching)).
 
 ## What survives a Refresh
 
@@ -31,19 +31,19 @@ Plenty of anti-bot stacks track connection age. Real browsers don't keep a TCP s
 | In-flight requests | No, cancelled |
 | Open streaming responses | No, terminated |
 
-If you call `Refresh()` while a streaming download is mid-flight, that stream dies. There's no graceful drain. Hold onto streaming responses and finish them before refreshing.
+Calling `Refresh()` while a streaming download is in flight kills that stream. There's no graceful drain. Finish or close streaming responses before refreshing.
 
 ## The 0-RTT story
 
-Tickets stay in the cache, so the next handshake after `Refresh()` resumes from the previous TLS state. On TLS 1.3 that's a 0-RTT early-data path. On TLS 1.2 it's session-ID resumption (skips the cert roundtrip but doesn't ship request bytes early). The first request after a refresh is dramatically faster than the first request on a brand-new session.
+Tickets stay in the cache across the refresh, so the next handshake resumes from the previous TLS state. TLS 1.3 takes the 0-RTT early-data path; TLS 1.2 falls back to session-ID resumption, which skips the certificate roundtrip but doesn't ship request bytes early. Either way, the first request after a refresh is faster by a wide margin than the first request on a brand-new session.
 
 :::tip
-Most long-running scrapers should call `Refresh()` every few minutes. Real browsers do too. A connection that's been alive for hours is one of the cheaper signals an anti-bot stack can use against you.
+Long-running scrapers benefit from a `Refresh()` every few minutes. A connection that's been alive for hours is one of the cheaper signals an anti-bot stack can use against you, and the cost of refreshing is one resumed handshake.
 :::
 
 ## Code
 
-The shape's the same in every binding: send some requests, call `Refresh()`, send more.
+The shape is the same across every binding: send some requests, call `Refresh()`, send more.
 
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
@@ -147,16 +147,16 @@ for (int i = 0; i < 3; i++)
 
 ## What's NOT preserved
 
-- **Live connections.** Every TCP socket, every QUIC connection, gone.
-- **Active requests.** Anything in flight gets cancelled. The caller sees a context-cancelled or connection-closed error.
+- **Live connections.** Every TCP socket and every QUIC connection is closed.
+- **Active requests.** Anything in flight is cancelled. The caller sees a context-cancelled or connection-closed error.
 - **Streaming responses.** Body reads fail partway. Drain or close streams before refreshing.
 
-Everything else (jar, tickets, ECH, header order, custom JA3, preset, proxy) sticks around. A save before and after `Refresh()` would only differ in the timestamp.
+Everything else (jar, tickets, ECH, header order, custom JA3, preset, proxy) carries forward. A save before and a save after `Refresh()` differ only in the timestamp.
 
 ## When NOT to use it
 
-If you want a totally fresh session (no cookies, no tickets, nothing), don't `Refresh()`. Just close and build a new one. `Refresh()` is the "keep my identity, drop my sockets" tool. For "drop my identity" you build a new `NewSession`.
+For a totally fresh session with no cookies, no tickets and no inherited state, don't `Refresh()`. Close the session and build a new one. `Refresh()` is the "keep my identity, drop my sockets" tool; "drop my identity" is what `NewSession` is for.
 
-Heads up: after `Refresh()` the session adds `cache-control: max-age=0` to the next request, mimicking a real browser F5. That hits servers like a deliberate cache-bust. If you don't want that signal, use a fresh session instead.
+One detail to know: after `Refresh()` the session adds `cache-control: max-age=0` to the next request, which matches what a real browser F5 sends. Some servers treat that as a deliberate cache-bust. If that signal is unwanted, build a fresh session instead.
 
-`Refresh()` and `Close()` both use a timeout-bounded close path on QUIC, so a misbehaving H3 peer can't hang the call forever.
+`Refresh()` and `Close()` both go through a timeout-bounded close path on QUIC, so a misbehaving H3 peer can't hang the call forever.

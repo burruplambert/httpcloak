@@ -8,48 +8,35 @@ import TabItem from '@theme/TabItem';
 
 # Build Custom Chrome From tls.peet.ws
 
-Grab a tls.peet.ws capture from a real Chrome session, turn it into your own
-httpcloak preset. Ten minutes of work, and you're shipping a Chrome version
-we don't bundle yet.
+The shipped presets cover the Chrome versions httpcloak builds against directly. When the target wants a slightly different Chrome version, the recipe is to capture one from a real browser, convert it into JSON, and register it as a custom preset. The whole flow takes about ten minutes.
 
 :::tip
-This is the move when you need a Chrome major we haven't shipped. Don't wait
-for a release. Capture, edit JSON, ship.
+This recipe is the path when a target expects a Chrome major that is not on the shipped list. Capture from real Chrome, edit the JSON, register the preset, no library release needed.
 :::
 
 ## When to use this
 
-Reach for this recipe when:
+This is the right tool when:
 
-- A target site checks `User-Agent` against the major Chrome version, and
-  the shipped `chrome-latest` is a major or two behind what they expect.
-- You want to reproduce a specific user's setup (Linux Chrome 145, macOS
-  Chrome 147, whatever).
-- You're debugging a fingerprint mismatch and want to compare what Chrome
-  actually sends versus what httpcloak puts on the wire.
+- A target site checks `User-Agent` against a specific Chrome major and the shipped `chrome-latest` is a version or two off.
+- You want to reproduce a specific user's setup (Linux Chrome 145, macOS Chrome 147, etc.).
+- You are debugging a fingerprint mismatch and want a side-by-side comparison of what real Chrome sends versus what the preset puts on the wire.
 
-Don't use this to impersonate a browser we haven't profiled at the TLS layer.
-This recipe only handles header, User-Agent, and sec-ch-ua deltas. If a new
-Chrome version added a TLS extension or reshuffled extension order, you need
-a fresh utls profile, not JSON edits. See
-[Custom JA3](../fingerprinting/custom-ja3) for that path.
+It is not the right tool for browsers httpcloak has not profiled at the TLS layer. JSON edits cover headers, User-Agent, and sec-ch-ua. They do not cover TLS extension order or new extensions, since those live in the utls profile. For that path, see [Custom JA3](../fingerprinting/custom-ja3).
 
 ## The flow
 
-1. Open Chrome (the version you want to clone). Hit `https://tls.peet.ws/api/all`.
+1. Open Chrome (the version you want to clone). Visit `https://tls.peet.ws/api/all`.
 2. Save the response JSON.
 3. Run `describe_preset("chrome-latest")` to dump the shipped preset to JSON.
-4. Diff the two. Spot the deltas (UA string, sec-ch-ua brand list, sometimes
-   accept-language).
+4. Diff the two. The deltas usually land in the UA string, the sec-ch-ua brand list, and sometimes accept-language.
 5. Edit the preset JSON to match the capture.
 6. Load it with `load_preset_from_json` under a fresh name.
-7. Hit tls.peet again with the new preset. Verify JA4, peetprint, and akamai
-   hash all match the original capture.
+7. Hit tls.peet again with the new preset. Verify JA4, peetprint, and akamai hash all match the original capture.
 
 ## Step 1: Capture from real Chrome
 
-Open Chrome, navigate to `https://tls.peet.ws/api/all`, save the JSON.
-On Linux you can do it from the command line if you have Chrome installed:
+Open Chrome, navigate to `https://tls.peet.ws/api/all`, save the JSON. On Linux with Chrome installed, this works from the command line:
 
 ```bash
 google-chrome --headless --dump-dom https://tls.peet.ws/api/all > capture.json
@@ -91,17 +78,13 @@ The fields we care about (full response is much bigger):
 }
 ```
 
-Two things we'll pull out:
+Two pieces are worth pulling out:
 
-1. `user_agent`, the exact Chrome version string. Note the major number and
-   the platform.
-2. `sec-ch-ua` header, the brand-version list. Rotates with Chrome majors,
-   classic giveaway when it's stale.
+1. `user_agent`, the exact Chrome version string. The major number and platform are both meaningful here.
+2. `sec-ch-ua`, the brand-version list. This rotates with each Chrome major, and a stale value is a classic giveaway.
 
 :::tip
-DevTools won't show you the actual header order Chrome ships. The
-`sent_frames[].headers` block in `tls.peet.ws/api/all` is the ground truth
-for what your target actually sees.
+DevTools shows the headers your code constructs, not the headers Chrome puts on the wire. The `sent_frames[].headers` block in the tls.peet response is the ground truth, since it captures the bytes after the network stack has finished with them.
 :::
 
 ## Step 2: Describe the shipped preset
@@ -144,8 +127,7 @@ print(f"wrote {len(j)} bytes")
 </TabItem>
 </Tabs>
 
-Dumps the entire shipped preset, fully resolved. No inheritance, no defaults
-to chase. You'll see something like:
+`Describe` returns the whole preset fully resolved, with no inheritance and no defaults to track down later. The output looks roughly like this:
 
 ```json
 {
@@ -190,7 +172,7 @@ to chase. You'll see something like:
 
 ## Step 3: Diff the capture vs the preset
 
-Three spots where things usually drift:
+Three fields usually drift between Chrome majors:
 
 | Field | Where in capture | Where in preset |
 |-------|------------------|-----------------|
@@ -198,17 +180,12 @@ Three spots where things usually drift:
 | sec-ch-ua brand list | inside `sent_frames[].headers` | `headers.values."sec-ch-ua"` |
 | sec-ch-ua-platform | same | `headers.values."sec-ch-ua-platform"` |
 
-Less common but still worth checking:
+Two other places worth checking:
 
-- `accept-language`, defaults vary by Chrome locale.
-- TLS extensions. If the capture lists an extension that's not in the JA3
-  string of the shipped preset, JSON won't save you. That's a utls profile
-  bump. See
-  [What is TLS fingerprinting](../fingerprinting/what-is-tls-fingerprinting).
+- `accept-language`. The default varies with Chrome locale.
+- TLS extensions. If the capture's JA3 lists an extension the shipped preset doesn't have, a JSON edit won't fix it. The fix is a utls profile update. See [What is TLS fingerprinting](../fingerprinting/what-is-tls-fingerprinting).
 
-In our example both the capture and the shipped preset are Chrome 148 on
-Linux, so the deltas are minimal. If your capture is Chrome 150 on macOS,
-you'd update:
+In the example above both capture and shipped preset are Chrome 148 on Linux, so the deltas are minimal. For a capture from Chrome 150 on macOS, the edits would look like this:
 
 ```json
 "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
@@ -223,9 +200,7 @@ you'd update:
 
 ## Step 4: Edit and rename
 
-Always rename. `RegisterStrict` (used internally by the loader) refuses to
-shadow a built-in name, so you literally can't overwrite `chrome-latest` by
-accident.
+Always rename the preset before registering. `RegisterStrict` (used internally by the loader) refuses to shadow a built-in name, so overwriting `chrome-latest` with a custom build is rejected at registration time.
 
 ```json
 {
@@ -282,8 +257,7 @@ print(f"registered {name}")
 
 ## Step 6: Verify the round-trip
 
-This is the step that actually matters. Hit tls.peet again with your new
-preset, check the hashes line up with the original capture.
+This is the step that proves the rewrite worked. Send a fresh request through tls.peet using the new preset and compare the hashes against the original capture.
 
 ```go
 package main
@@ -339,8 +313,7 @@ func main() {
 }
 ```
 
-Run it end-to-end and you should see `PASS`. Actual output from running this
-recipe against the live tls.peet endpoint:
+A clean run prints `PASS`. Sample output from running this recipe against the live tls.peet endpoint:
 
 ```
 ja4   base=t13d1516h2_8daaf6152771_d8a2da3f94cd mine=t13d1516h2_8daaf6152771_d8a2da3f94cd match=true
@@ -351,31 +324,21 @@ PASS
 
 ## Why JA3 might differ
 
-Comparing JA3 hashes between two captures with the same preset? They won't
-match. JA3 bakes raw TLS extension IDs into the string, and Chrome rotates
-GREASE values on every connection. JA3 is unstable by design.
+Two captures from the same preset will produce different JA3 hashes. JA3 hashes the raw TLS extension IDs, and Chrome rotates GREASE values on every connection, so the same preset emits different JA3s every time. JA3 is unstable by design.
 
-JA4, peetprint, and akamai hashes are all GREASE-normalised. Those are the
-right metrics for "did my preset round-trip correctly?" If JA4 and peetprint
-match, you're good, even if JA3 changes on every request.
+JA4, peetprint, and the akamai HTTP/2 hash all normalise GREASE before hashing. Those are the metrics that answer "did my preset round-trip correctly". A JA4 and peetprint match is a clean round-trip even when JA3 differs.
 
 :::warning
-Don't use JA3 hash matching as your CI pass criterion. It'll flake. Use JA4
-instead.
+Don't use JA3 hash equality as a CI pass criterion. It will flake. Use JA4 instead.
 :::
 
 ## What this recipe doesn't cover
 
-- **TLS extension order changes**: Chrome 150 adds a new extension or
-  reshuffles them? JSON edits won't help. utls needs a profile bump.
-- **HTTP/2 frame ordering**: shipped presets cover all the common Chrome
-  shapes. If you spot a frame shape the shipped preset doesn't have, open
-  an issue.
-- **HTTP/3**: same deal. The shipped `quic_client_hello` references cover
-  QUIC handshake bytes. JSON only touches headers, not the QUIC layer.
+- **TLS extension order changes.** When a new Chrome major adds an extension or reshuffles the order, JSON edits cannot reach into the ClientHello. The fix is a utls profile bump.
+- **HTTP/2 frame ordering.** The shipped presets cover the common Chrome shapes. A frame shape the shipped preset does not have is worth an issue, not a JSON workaround.
+- **HTTP/3.** Same constraint as the TLS layer. The shipped `quic_client_hello` profiles define the QUIC handshake bytes; JSON only edits headers.
 
-For any of those, the path is updating utls plus sardanioss/net, not
-authoring JSON.
+The path for any of those is a utls and sardanioss/net update, not a custom JSON preset.
 
 ## Related
 

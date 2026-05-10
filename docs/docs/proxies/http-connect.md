@@ -5,9 +5,9 @@ sidebar_position: 3
 
 # HTTP CONNECT
 
-The OG HTTP proxy. Your client opens TCP to the proxy, sends `CONNECT host:port HTTP/1.1`, the proxy comes back with `200 Connection established`, and from there the socket is just a raw tunnel. Your real TLS handshake then runs through that tunnel like the proxy isn't even there.
+HTTP CONNECT is the original HTTP proxy method. The client opens TCP to the proxy, sends `CONNECT host:port HTTP/1.1`, the proxy comes back with `200 Connection established`, and from there the socket is just a raw tunnel. The real TLS handshake then runs through that tunnel like the proxy isn't even there.
 
-This is what HTTPS-through-an-HTTP-proxy actually looks like on the wire. Squid, mitmproxy in upstream mode, every datacenter proxy provider, almost every corporate egress proxy: all HTTP CONNECT.
+This is what HTTPS-through-an-HTTP-proxy looks like on the wire. Squid, mitmproxy in upstream mode, every datacenter proxy provider, almost every corporate egress proxy: all HTTP CONNECT.
 
 ## URL shape
 
@@ -16,7 +16,7 @@ http://user:pass@proxy.example.com:8080
 https://user:pass@proxy.example.com:8443
 ```
 
-Use `https://` when the connection from your client to the proxy itself should be TLS. It's not super common, but some providers offer it. The inner request is always TLS regardless, because that's the target site's TLS, decrypted only at the target.
+`https://` is for cases where the connection from your client to the proxy itself should be TLS. It's not super common, but some providers offer it. The inner request is always TLS regardless, since that's the target site's TLS, decrypted only at the target.
 
 ## Setting it up
 
@@ -113,7 +113,7 @@ That's two round-trips before TLS even starts (TCP handshake, then CONNECT excha
 
 ## Saving an RTT with speculative TLS
 
-httpcloak can pipeline the CONNECT request with the inner ClientHello. Same socket, both writes coalesced before any read. Saves one full round-trip on every fresh proxied connection.
+httpcloak can pipeline the CONNECT request with the inner ClientHello. Same socket, both writes coalesced before any read. That saves one full round-trip on every fresh proxied connection.
 
 ```go
 s := httpcloak.NewSession("chrome-latest",
@@ -126,7 +126,7 @@ It's off by default because some proxies (older Squid configs, a handful of debu
 
 ## H3 with an HTTP CONNECT TCP proxy
 
-HTTP CONNECT only carries TCP. If you set just `WithSessionTCPProxy` with an HTTP URL, H3 will dial direct to the target (no proxy on UDP). Three options:
+HTTP CONNECT only carries TCP. Setting just `WithSessionTCPProxy` with an HTTP URL leaves H3 dialing direct to the target with no proxy on the UDP side. Three options:
 
 - Let H3 dial direct (the default). Fine on most networks.
 - Add a UDP proxy: `WithSessionUDPProxy("masque://...")` or a SOCKS5 endpoint that supports UDP ASSOCIATE.
@@ -134,7 +134,7 @@ HTTP CONNECT only carries TCP. If you set just `WithSessionTCPProxy` with an HTT
 
 ## Auth
 
-Basic auth is handled for you when the credentials are in the URL. httpcloak base64-encodes `user:pass` and adds `Proxy-Authorization: Basic ...` to the CONNECT request. Password has special characters? URL-encode them:
+Basic auth is handled for you when the credentials live in the URL. httpcloak base64-encodes `user:pass` and adds `Proxy-Authorization: Basic ...` to the CONNECT request. If the password has special characters, URL-encode them:
 
 ```
 http://user:p%40ss%21@proxy.example.com:8080

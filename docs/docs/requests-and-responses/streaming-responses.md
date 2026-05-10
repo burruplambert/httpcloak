@@ -5,17 +5,17 @@ sidebar_position: 5
 
 # Streaming Responses
 
-`DoStream()` returns a response whose body you read incrementally. Use it for:
+`DoStream()` returns a response whose body you read incrementally. It returns the moment the response headers arrive, leaving the body for the caller to pull. Plain `Do()` reads the full body into memory before returning, which is fine for small payloads and the wrong call for large ones.
 
-- **Big downloads.** Don't buffer a 2 GB file in RAM.
+Use streaming for:
+
+- **Big downloads.** A 2 GB file doesn't belong in RAM.
 - **Server-Sent Events.** Long-lived connections that drip events.
-- **NDJSON / line-delimited streams.** Read one record at a time.
+- **NDJSON / line-delimited streams.** One record at a time.
 - **Anything chunked.** When the server doesn't know the content length up front.
 
-Plain `Do()` reads the full body into memory before returning. `DoStream()` returns the moment the response headers arrive, and you pull the body yourself.
-
 :::info
-Pre-1.6.6, `DoStream` didn't update the cookie jar from the response. On an older version? Upgrade, or extract Set-Cookie headers by hand. Bug fixed in 1.6.6.
+Pre-1.6.6, `DoStream` didn't update the cookie jar from the response. On an older version, upgrade or extract Set-Cookie headers by hand. The bug was fixed in 1.6.6.
 :::
 
 ## The shape
@@ -26,7 +26,7 @@ import TabItem from '@theme/TabItem';
 <Tabs groupId="lang">
 <TabItem value="go" label="Go">
 
-`Session.DoStream(ctx, req)` returns a `*StreamResponse`. It implements `io.Reader`, so anything that takes a Reader works: bufio.Scanner, json.Decoder, io.Copy, all of it.
+`Session.DoStream(ctx, req)` returns a `*StreamResponse` that implements `io.Reader`. Anything that takes a Reader works: bufio.Scanner, json.Decoder, io.Copy.
 
 ```go
 package main
@@ -62,7 +62,7 @@ func main() {
 }
 ```
 
-`Close()` is mandatory. Defer it the second you have the stream. Skip it and you leak the underlying connection, which means it never goes back to the pool and you eat the dial cost on the next request.
+`Close()` is mandatory. Defer it the second you have the stream. Without it, the underlying connection leaks instead of returning to the pool, and the next request eats the dial cost.
 
 </TabItem>
 <TabItem value="python" label="Python">
@@ -83,7 +83,7 @@ with s.get("https://httpbin.org/stream/10", stream=True) as r:
     print(f"got {n} lines")
 ```
 
-`iter_lines()` and `iter_content(chunk_size=N)` both work. The `with` block calls Close for you when the body's done.
+`iter_lines()` and `iter_content(chunk_size=N)` both work. The `with` block calls Close for you when the body is done.
 
 </TabItem>
 <TabItem value="nodejs" label="Node.js">
@@ -141,7 +141,7 @@ The `using` on the StreamResponse handles Close.
 
 ## What you can read it as
 
-The body's just bytes coming off the wire. You decide how to split them.
+The body is bytes coming off the wire. The caller decides how to split them.
 
 - **Line-delimited.** `bufio.Scanner` (Go), `iter_lines()` (Python), readline loop (Node).
 - **Fixed-size chunks.** `Read(buf)` (Go), `iter_content(chunk_size=N)` (Python), `read(N)` (Node).
@@ -150,7 +150,7 @@ The body's just bytes coming off the wire. You decide how to split them.
 
 ## Lifetime and Close
 
-The contract: **caller must call Close when done**. There's no GC fallback because the stream wraps real syscall resources: a TCP socket, an H2 stream window, an H3 stream.
+The contract is the caller must call Close when done. There's no GC fallback because the stream wraps real syscall resources: a TCP socket, an H2 stream window, an H3 stream.
 
 Common ways to forget:
 
@@ -158,21 +158,21 @@ Common ways to forget:
 - Iterating partway and bailing without closing.
 - In Python, skipping `with`. The non-with form needs an explicit `r.close()`.
 
-Closing partway through is totally fine. The lib reads-and-discards the rest in the background to keep the underlying connection clean for reuse, or hard-aborts the H2/H3 stream if there's a lot left.
+Closing partway through is fine. The lib reads-and-discards the rest in the background to keep the underlying connection clean for reuse, or hard-aborts the H2/H3 stream when there's a lot of body left.
 
 ## ContentLength and chunked
 
-`stream.ContentLength` (or `content_length` / `contentLength` in the bindings) is `-1` when the server uses chunked transfer encoding (or H2/H3 without an explicit content-length frame). Don't assume it's positive when sizing a download progress bar.
+`stream.ContentLength` (or `content_length` / `contentLength` in the bindings) is `-1` when the server uses chunked transfer encoding, or H2/H3 without an explicit content-length frame. Don't assume it's positive when sizing a download progress bar.
 
-Need to know the size up front? Fire a `HEAD` request first, read `Content-Length` from the response headers, then `DoStream()` the GET. Most servers send a length on HEAD even when they'd switch to chunked on GET.
+To know the size up front, fire a `HEAD` request first, read `Content-Length` from the response headers, then `DoStream()` the GET. Most servers send a length on HEAD even when they switch to chunked on GET.
 
 ## Cookie jar parity (since 1.6.6)
 
-Streaming responses now go through the same cookie extraction path as regular ones. `Set-Cookie` headers from the response (or any in-stream redirect the lib resolved before handing you the body) land in the session jar.
+Streaming responses go through the same cookie extraction path as regular ones. `Set-Cookie` headers from the response, including any in-stream redirect the lib resolved before handing you the body, land in the session jar.
 
 Before 1.6.6, streaming bypassed the jar update and you'd silently miss cookies from streamed endpoints. The fix landed in [#5491c85](../changelog), so `Do` and `DoStream` now behave identically.
 
-Stuck on an older version and can't upgrade?
+For older versions where upgrading isn't an option:
 
 ```go
 // Manual cookie extraction from a streamed response, pre-1.6.6 workaround.
@@ -183,6 +183,6 @@ for _, sc := range stream.Headers["Set-Cookie"] {
 
 ## A note on H2 and H3
 
-Stream over HTTP/2 or HTTP/3 and the underlying transport still rides on a single multiplexed connection. So `stream.Close()` doesn't kill the connection itself, just the one stream on it. You can run multiple streaming requests in flight on the same H2 connection at once, which is great for SSE + an API call running side by side.
+Streaming over HTTP/2 or HTTP/3 still rides on a single multiplexed connection underneath. `stream.Close()` doesn't kill that connection, just the one stream on it. Multiple streaming requests can run in flight on the same H2 connection at once, which works well for SSE plus an API call running side by side.
 
-On HTTP/1.1, a streaming response holds the whole TCP connection until you close. Concurrent requests need separate connections. The lib handles connection pooling either way so you don't have to think about it, but heads up: 100 concurrent streams on H1 means 100 TCP connections.
+On HTTP/1.1, a streaming response holds the whole TCP connection until you close. Concurrent requests need separate connections. The lib handles connection pooling either way so the caller doesn't manage it, with the caveat that 100 concurrent streams on H1 means 100 TCP connections.

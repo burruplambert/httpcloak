@@ -8,9 +8,9 @@ import TabItem from '@theme/TabItem';
 
 # First Request
 
-httpcloak puts the same bytes on the wire as a real browser. Same TLS ClientHello, same HTTP/2 SETTINGS frame, same header order, same priority frames. If a site fingerprints your client, you show up looking like Chrome (or Firefox, or Safari) instead of Go's `net/http` or Python `requests`.
+httpcloak emits the same wire bytes as a real browser across the TLS ClientHello, HTTP/2 SETTINGS frame, header order, and priority frames. A site that fingerprints clients sees Chrome (or Firefox, or Safari), not Go's `net/http` or Python `requests`.
 
-This page is the four-line "does it work" check. Pick your language, copy the snippet, run it. You should get a 200 back from `tls.peet.ws/api/all` with a Chrome-shaped fingerprint in the response.
+This page is the four-line check that the install works. Pick a language, run the snippet, and you should get a 200 from `tls.peet.ws/api/all` with a Chrome-shaped fingerprint in the body.
 
 ## The snippet
 
@@ -101,7 +101,7 @@ Console.WriteLine(r.Text);
 
 ## What you should see
 
-The full response is a chunky JSON blob with TLS, HTTP/2, and header data. Here's the trimmed version with the parts that actually matter:
+The full response is a JSON blob covering TLS, HTTP/2, and header data. The parts that matter, trimmed down:
 
 ```json
 {
@@ -120,16 +120,16 @@ The full response is a chunky JSON blob with TLS, HTTP/2, and header data. Here'
 
 A few things worth flagging:
 
-- `http_version` is `h2`. Chrome speaks HTTP/2 by default to anything ALPN-capable, so you do too. HTTP/3 kicks in if the server advertises it via Alt-Svc. Pin one with `WithForceHTTP2()` or `WithForceHTTP3()` if you'd rather not let it negotiate.
-- `ja4` is stable across runs on the same preset. `ja3_hash` isn't, because Chrome shuffles GREASE extension values on every ClientHello and that bleeds into the JA3 string. JA4 strips GREASE. Match against JA4, ignore JA3.
-- `akamai_fingerprint_hash` rolls up H2 SETTINGS, WINDOW_UPDATE, PRIORITY, and pseudo-header order into one value. It should line up with what real Chrome 148 ships.
+- `http_version` is `h2`. Chrome negotiates HTTP/2 against any ALPN-capable server, and httpcloak follows the same pattern. HTTP/3 takes over when the server advertises it via Alt-Svc. To skip negotiation, pin a transport with `WithForceHTTP2()` or `WithForceHTTP3()`.
+- `ja4` stays stable across runs on the same preset. `ja3_hash` does not, because Chrome shuffles GREASE extension values on every ClientHello and the JA3 string folds those values in. JA4 strips GREASE before hashing. Match against JA4 and ignore JA3.
+- `akamai_fingerprint_hash` rolls H2 SETTINGS, WINDOW_UPDATE, PRIORITY, and pseudo-header order into one value. It should match what real Chrome 148 ships.
 
 :::tip tls.peet.ws is your friend
-Bookmark `tls.peet.ws/api/all`. Anytime you tweak a preset, drop in a custom JA3, or wonder why a target's still flagging you, hit this endpoint and diff the response against a real browser. DevTools won't even show you the request header order, so this is the easiest source of truth.
+Bookmark `tls.peet.ws/api/all`. Any time a preset gets tweaked, a custom JA3 goes in, or a target keeps flagging the request, hit this endpoint and diff the response against a real browser. DevTools doesn't expose request header order, so this endpoint is the closest thing to a source of truth.
 :::
 
 ## Where to next
 
-- [Presets Explained](./presets-explained) for what `chrome-latest` actually bundles and how to pick something else.
-- [Common Options](./common-options) for timeouts, retries, redirects, and the boring stuff every client has.
-- [Fingerprinting overview](/fingerprinting) when you want to start hand-tuning the wire bytes.
+- [Presets Explained](./presets-explained) for what `chrome-latest` bundles and how to pick something else.
+- [Common Options](./common-options) for timeouts, retries, redirects, and the rest of the everyday surface.
+- [Fingerprinting overview](/fingerprinting) for hand-tuning the wire bytes.

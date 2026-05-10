@@ -5,9 +5,7 @@ sidebar_position: 4
 
 # Per-Request Cookies
 
-Sometimes you just want to slap a `Cookie` header onto a single request without touching the session jar. Maybe you're testing one specific cookie. Maybe you've already got the value from somewhere else. Maybe the jar is off and you're driving manually.
-
-httpcloak passes the `Cookie` header through unchanged. Whatever string you give it goes on the wire.
+A per-request `Cookie` header attaches cookies to a single call without touching the session jar. The header you set goes onto the wire byte-for-byte; httpcloak doesn't reorder, normalise, or rewrite the string. The pattern fits one-off testing, replaying a captured cookie value from somewhere outside the lib, or driving cookies by hand when the jar is off.
 
 ## Setting it on a request
 
@@ -84,29 +82,29 @@ var r2 = s.Get("https://httpbin.org/cookies", cookies: cookies);
 
 ## How this interacts with the jar
 
-If the jar is on, the lib **merges** your per-request `Cookie` header with whatever the jar would have sent. Your header comes first, jar contents come after, joined with `; `.
+When the jar is on, the lib **merges** the per-request `Cookie` header with whatever the jar would have sent on its own. The caller-supplied header comes first, jar contents follow, joined with `; `.
 
-That's usually what you want. But if your goal is "use only this one cookie, ignore the jar," you've got two clean options:
+The merge is usually what you want. To send only the per-request cookie and bypass the jar entirely, two clean options exist:
 
-1. Disable the jar with [`WithoutCookieJar()`](./disabling-cookie-jar) for that whole session.
-2. Call `ClearCookies()` on the session right before the request, then attach your header.
+1. Disable the jar with [`WithoutCookieJar()`](./disabling-cookie-jar) for the whole session.
+2. Call `ClearCookies()` on the session right before the request, then attach the header.
 
-Don't try to fight the merge by setting `Cookie: ""`. The lib treats empty as "no per-request cookie," not "send nothing," so the jar will still inject.
+Setting `Cookie: ""` doesn't suppress the merge. The lib treats an empty value as "no per-request cookie" rather than "send nothing", so the jar still injects.
 
 ## Cookie order matters for fingerprinting
 
-The order of cookies in the `Cookie` header is part of your client's fingerprint. Real browsers sort consistently (longer path first, then by creation time, per RFC 6265). httpcloak preserves whatever you give it byte-for-byte.
+The order of cookies in the `Cookie` header is part of the client fingerprint. Real browsers sort consistently (longer path first, then by creation time, per RFC 6265), and httpcloak preserves whatever string you hand it byte-for-byte without re-sorting.
 
-So if you're hand-rolling cookies and you want to look like a browser, sort them yourself. Don't shuffle them across requests, don't rely on `dict` iteration order in scripts, and double-check your sort matches the order the jar would have produced. Anti-bot vendors absolutely watch for cookie order drift between requests.
+When hand-rolling cookies for a browser-shaped request, sort them yourself before attaching the header. Don't rely on `dict` iteration order in scripts, don't shuffle the order between requests on the same flow, and check that your sort matches the order the jar would have produced. Anti-bot vendors watch for cookie order drift between requests, and a mismatch on a long flow flags faster than most people expect.
 
-If the jar is doing the work for you, you don't have to think about this. The jar handles the sort. This only matters when you're driving the `Cookie` header manually.
+When the jar is on, this is a non-issue. The jar handles the sort and the order stays consistent across the session. Manual ordering only comes up when the `Cookie` header is being driven by hand.
 
 ## When per-request beats the jar
 
-A few situations where reaching for a per-request header makes more sense than touching the jar:
+A few situations where a per-request header is the cleaner option:
 
 - **One-off auth.** A single API call needs a special token cookie that shouldn't stick around for follow-ups.
-- **Replaying a captured session.** You've got a `Cookie` string from a browser export; just paste it.
-- **Cross-host scenarios.** You want the same cookie sent to two different hosts that the jar's domain rules wouldn't cover automatically.
+- **Replaying a captured session.** A `Cookie` string from a browser export pastes straight in.
+- **Cross-host scenarios.** The same cookie needs to ride out to two different hosts that the jar's domain rules wouldn't cover on their own.
 
-For everything else, let the jar do its job.
+Outside of those, let the jar do the work.

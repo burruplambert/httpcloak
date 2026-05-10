@@ -5,16 +5,16 @@ sidebar_position: 4
 
 # Form Data and Multipart
 
-Two flavors of form posting. Pick based on what you're shipping:
+Two flavors of form posting. Pick based on the payload:
 
 - **`application/x-www-form-urlencoded`** for plain key/value text fields. Small, simple, no binary.
 - **`multipart/form-data`** for file uploads, mixed text + file fields, or anything binary.
 
-Browsers pick the same way. `<form>` with `enctype="multipart/form-data"` for uploads, default url-encoded otherwise.
+Browsers pick the same way: `<form>` with `enctype="multipart/form-data"` for uploads, default url-encoded otherwise.
 
 ## URL-encoded
 
-The body's just `key1=val1&key2=val2`, with values percent-encoded. Content-Type is `application/x-www-form-urlencoded`.
+The body is `key1=val1&key2=val2` with values percent-encoded, and the Content-Type is `application/x-www-form-urlencoded`.
 
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
@@ -22,7 +22,7 @@ import TabItem from '@theme/TabItem';
 <Tabs groupId="lang">
 <TabItem value="go" label="Go">
 
-Go gives you `net/url.Values` to build the body, then you ship the bytes.
+Go gives you `net/url.Values` to build the body, then ships the bytes.
 
 ```go
 package main
@@ -60,7 +60,7 @@ func main() {
 }
 ```
 
-The non-session client has `client.PostForm(ctx, url, bodyBytes)` too, which sets the Content-Type for you.
+The non-session client has `client.PostForm(ctx, url, bodyBytes)` which sets the Content-Type for you.
 
 </TabItem>
 <TabItem value="python" label="Python">
@@ -78,7 +78,7 @@ r = s.post(
 print(r.json()["form"])  # {"user": "alice", "token": "abc 123"}
 ```
 
-When `data=` is a dict, the binding url-encodes it and sets the Content-Type for you. Pass `data=` a string or bytes and it ships them as-is, with whatever Content-Type you put in `headers`.
+When `data=` is a dict, the binding url-encodes it and sets the Content-Type for you. A string or bytes value gets shipped as-is with whatever Content-Type you put in `headers`.
 
 </TabItem>
 <TabItem value="nodejs" label="Node.js">
@@ -116,13 +116,13 @@ Console.WriteLine(r.Text);
 
 Things to keep in mind:
 
-- **Encoding is fixed.** Always UTF-8 percent-encoded. Don't try Latin-1 in form bodies even if a server "would accept it."
+- **Encoding is fixed.** Always UTF-8 percent-encoded. Don't try Latin-1 in form bodies even if a server claims it would accept it.
 - **Repeated keys.** url-encoded supports the same key twice (`a=1&a=2`). Most builders give you a list-valued helper. In Go: `form.Add("a", "1"); form.Add("a", "2")`.
-- **Length limits.** Some servers cap form bodies around 1MB. If you're shipping more than a kilobyte of text, multipart is usually the better fit. Megabytes? You almost certainly want multipart for file fields, or just JSON.
+- **Length limits.** Some servers cap form bodies around 1MB. For more than a kilobyte of text, multipart is usually the better fit. For megabytes, multipart with file fields is the right pick, or just JSON.
 
 ## Multipart
 
-Multipart wraps each field in its own MIME part with a boundary string. You get a Content-Type like `multipart/form-data; boundary=----WebKitFormBoundaryAbCdEf123`. The body looks roughly like:
+Multipart wraps each field in its own MIME part with a boundary string. The Content-Type looks like `multipart/form-data; boundary=----WebKitFormBoundaryAbCdEf123`, and the body looks roughly like:
 
 ```
 ------WebKitFormBoundaryAbCdEf123
@@ -137,7 +137,7 @@ file body bytes
 ------WebKitFormBoundaryAbCdEf123--
 ```
 
-You almost never want to write this by hand. Use the helpers, that's what they're for.
+Writing this by hand is almost never worth it. The helpers exist for exactly this.
 
 <Tabs groupId="lang">
 <TabItem value="go" label="Go">
@@ -193,7 +193,7 @@ func main() {
 
 `BuildMultipart` handles boundary generation, MIME headers per part, and the trailing `--`. The Content-Type it returns is the full string with the boundary parameter, drop it straight into your headers.
 
-For really large file uploads, building the whole body in memory is a bad idea. Use `mime/multipart.Writer` directly with `io.Pipe` and stream into the request via `Body: pipeReader`. Your RAM will thank you.
+For large file uploads, building the whole body in memory is a bad idea. Use `mime/multipart.Writer` directly with `io.Pipe` and stream into the request via `Body: pipeReader`.
 
 </TabItem>
 <TabItem value="python" label="Python">
@@ -263,16 +263,16 @@ Console.WriteLine(r.Text);
 
 ## Order of fields
 
-Multipart preserves the order you list fields. For most servers that doesn't matter (they parse into a map). But occasionally:
+Multipart preserves the order you list fields. Most servers parse into a map and don't care, but a few do:
 
 - A server rejects an upload if the file part comes before a CSRF token field.
 - A server expects a specific field order baked into its form validation.
 
-Seeing weird "field missing" or "invalid form" errors when the values look fine? Try reordering. Drop the file last, drop the token first. The browser-emitted order is whatever the `<form>` markup says, which is usually text fields then file inputs.
+When values look fine but you're seeing "field missing" or "invalid form" errors, try reordering. Drop the file last, the token first. The browser-emitted order follows whatever the `<form>` markup says, usually text fields then file inputs.
 
 ## Boundary string
 
-Browsers use boundaries like `----WebKitFormBoundaryAbCdEf123456`. Go's stdlib (and therefore httpcloak's `BuildMultipart`) generates random boundaries that look different. For 99% of servers this doesn't matter, the boundary is just a delimiter. If you hit a strict WAF that pattern-matches on browser-style boundaries, you can build the body yourself with `mime/multipart.Writer.SetBoundary()` and pass a Chrome-shaped one. Rare scenario though.
+Browsers use boundaries like `----WebKitFormBoundaryAbCdEf123456`. Go's stdlib (and therefore httpcloak's `BuildMultipart`) generates random boundaries that look different. For 99% of servers this doesn't matter since the boundary is just a delimiter. A strict WAF that pattern-matches on browser-style boundaries can be handled by building the body yourself with `mime/multipart.Writer.SetBoundary()` and passing a Chrome-shaped one. Rare scenario.
 
 ## Verify with httpbin
 
@@ -282,4 +282,4 @@ Browsers use boundaries like `----WebKitFormBoundaryAbCdEf123456`. Go's stdlib (
 - `files`: file fields, with the file content inlined as a string
 - `headers["Content-Type"]`: the Content-Type you sent (verify the boundary)
 
-If `files` is empty but you sent a file, your boundary or part headers are busted. If the file content looks like garbage, your encoding's off.
+An empty `files` when you sent a file means your boundary or part headers are off. Garbage-looking file content means the encoding is wrong.

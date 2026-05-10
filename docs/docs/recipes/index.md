@@ -5,7 +5,7 @@ sidebar_position: 1
 
 # Recipes
 
-End-to-end patterns for the stuff people actually ship. Copy, tweak, run.
+End-to-end patterns for the things people ship in production. Each one is a complete walk-through with code, copy and tweak as needed.
 
 ## In this section
 

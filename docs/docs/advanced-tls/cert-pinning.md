@@ -8,9 +8,9 @@ import TabItem from '@theme/TabItem';
 
 # Certificate Pinning
 
-Cert pinning means: trust this exact cert (or its public key), nobody else. Even if a CA somewhere in the chain gets popped, even if a corporate proxy injects its own root, even if your friendly anti-bot vendor is silently MITMing every request you send, the handshake fails because the key on the wire isn't the one you nailed down.
+Certificate pinning enforces an exact-match check on the peer's cert (or, more usefully, its public key) at the TLS layer. Even when a CA somewhere in the chain gets compromised, a corporate proxy injects its own root, or an inspection box silently MITMs every request, the handshake fails because the key on the wire isn't the one nailed down in the client.
 
-That last case is the one that bites red teamers. Plenty of "transparent" inspection boxes on internal networks own a trusted root, so the standard cert chain validates fine. Pin the SPKI and the whole game falls apart for them.
+That last case is what matters for red team work. Plenty of "transparent" inspection boxes on internal networks own a trusted root, so a standard cert chain validates fine and the request leaks straight into the inspector. Pin the SPKI and the inspector's substituted cert no longer matches.
 
 ## Pin types
 
@@ -21,13 +21,13 @@ Two flavors:
 | `PinTypeSHA256` | SHA256 of the cert's Subject Public Key Info (SPKI) | Default. Survives cert renewals as long as the keypair stays the same. |
 | `PinTypeCertificate` | SHA256 of the full DER cert | Stricter. Breaks the second the cert renews, even with the same key. |
 
-SPKI hashing is what HPKP and Chrome's static pin list use. Stick with SPKI unless you have a reason not to.
+SPKI hashing is what HPKP and Chrome's static pin list use. Stick with SPKI unless there's a specific reason not to.
 
-There's also a file-based path: load a PEM cert off disk and httpcloak grabs the SPKI for you. Same pin type under the hood, just less copy-pasting hashes around.
+There's also a file-based path: load a PEM cert off disk and httpcloak extracts the SPKI from it. Same pin type under the hood, less copy-pasting hashes around.
 
 ## Client-level pinning
 
-The fastest way. The `*client.Client` exposes pin methods directly:
+The fastest path. The `*client.Client` exposes pin methods directly:
 
 ```go
 import "github.com/sardanioss/httpcloak/client"
@@ -47,15 +47,15 @@ c.ClearPins()
 pinner := c.CertPinner()
 ```
 
-`PinCertificate` is the one you'll reach for 90% of the time. Pass the base64 SPKI hash, optionally scope it with `ForHost(...)` and `IncludeSubdomains()`, done.
+`PinCertificate` is the one to reach for 90% of the time. Pass the base64 SPKI hash, optionally scope it with `ForHost(...)` and `IncludeSubdomains()`, done.
 
-`PinCertificateFromFile` parses a PEM cert and extracts the SPKI for you. Useful when you've got the cert sitting in a file and don't want to pipe it through openssl.
+`PinCertificateFromFile` parses a PEM cert and extracts the SPKI on the way in. Useful when the cert is already sitting in a file and there's no need to pipe it through openssl first.
 
-`ClearPins` wipes every pin on the client. `CertPinner` hands you the pinner so you can call `AddPin`, `GetPins`, `HasPins` directly.
+`ClearPins` wipes every pin on the client. `CertPinner` returns the underlying pinner for direct calls to `AddPin`, `GetPins`, `HasPins`.
 
 ## Standalone CertPinner
 
-You can also build a pinner outside any client:
+A pinner can also be built outside any client:
 
 ```go
 p := client.NewCertPinner()
@@ -73,9 +73,9 @@ _ = p.AddPinFromPEM(pemBytes, client.ForHost("api.example.com"))
 err := p.Verify("example.com", peerCerts)
 ```
 
-When do you reach for the standalone version vs Client-attached? Use Client-attached when httpcloak is doing the request and you want pinning enforced automatically on every response. Use standalone when you're verifying chains from somewhere else (a stored cert dump, a different transport, a custom dial) and you want to call `Verify` yourself.
+Client-attached vs standalone: use Client-attached when httpcloak is doing the request and pinning should be enforced automatically on every response. Use standalone when chains come from somewhere else (a stored cert dump, a different transport, a custom dial) and the caller wants to invoke `Verify` directly.
 
-`AddPin` takes flexible input. You can pass `sha256/...` prefixes, raw hex, or base64. The lib normalizes it down to base64 internally:
+`AddPin` takes flexible input. The accepted forms are `sha256/...` prefixes, raw hex, or raw base64. The lib normalizes everything down to base64 internally:
 
 ```go
 p.AddPin("sha256/YSxNUV05SLc2H4Z6kOXWCsUPPMenylyBVtogFlUiByE=")  // works (with prefix)
@@ -85,7 +85,7 @@ p.AddPin("YSxNUV05SLc2H4Z6kOXWCsUPPMenylyBVtogFlUiByE=")  // works (raw base64)
 
 ## Pin scoping with PinOption
 
-Pins default to "all hosts". Almost always wrong. Two options narrow scope:
+Pins default to "all hosts", which is almost always wrong. Two options narrow scope:
 
 | Option | Effect |
 |---|---|
@@ -101,11 +101,11 @@ c.PinCertificate(spkiHash,
 )
 ```
 
-Skip both options and the pin applies globally. Every TLS connection through this client checks against it. That's almost never what you want.
+Skip both options and the pin applies globally. Every TLS connection through the client checks against it, which is almost never the intended behavior.
 
 ## Pin failure handling
 
-When verification fails, you get back a `*client.CertPinError` with the host and both sides of the mismatch:
+When verification fails, the returned error is a `*client.CertPinError` carrying the host and both sides of the mismatch:
 
 ```go
 resp, err := c.Do(ctx, req)
@@ -119,7 +119,7 @@ if err != nil {
 }
 ```
 
-The `ActualHashes` list contains the SPKI hash of every cert in the peer chain, leaf first. Handy for figuring out whether the wrong cert showed up, or whether the right cert just rotated to a new key.
+The `ActualHashes` list contains the SPKI hash of every cert in the peer chain, leaf first. Handy for figuring out whether the wrong cert showed up or whether the right cert just rotated to a new key.
 
 ## How to capture a pin
 
@@ -139,11 +139,11 @@ Output (example.com, captured 2026-05-10):
 YSxNUV05SLc2H4Z6kOXWCsUPPMenylyBVtogFlUiByE=
 ```
 
-That's the value you feed `PinCertificate`. Run it once per target, stash the hash somewhere, ship it.
+That's the value to feed `PinCertificate`. Run the pipeline once per target, stash the hash somewhere, ship it.
 
 ## End-to-end example
 
-This Go program captures example.com's SPKI on the fly via openssl, pins it, and confirms the request lands. Then it swaps in a bogus pin and checks the verification fails:
+This Go program captures example.com's SPKI on the fly via openssl, pins it, confirms the request lands, then swaps in a bogus pin and checks that verification fails:
 
 <Tabs groupId="lang">
 <TabItem value="go" label="Go">
@@ -218,7 +218,7 @@ func main() {
 </TabItem>
 <TabItem value="python" label="Python">
 
-Pinning is Go-only right now. The Python binding doesn't surface `PinCertificate` yet. If you need pinning from Python, run a local httpcloak proxy with pinning configured on the Go side and point Python at it. Tracking issue if you want to bump priority: open a GH issue.
+Pinning is Go-only right now. The Python binding doesn't surface `PinCertificate` yet. To use pinning from Python, run a local httpcloak proxy with pinning configured on the Go side and point Python at it. Open a GH issue if you want to bump priority on the Python binding.
 
 </TabItem>
 <TabItem value="node" label="Node.js">
@@ -243,8 +243,8 @@ expected: [AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=]
 got:      [YSxNUV05SLc2H4Z6kOXWCsUPPMenylyBVtogFlUiByE= Kt2bkYM55rPaGBFYxTLlq8AIJqapRcc1eKjai8GUPO0= OXyj9ngbqO9cjLeO/+t9Ggl2EP4JTnVWHq4LEwhFM9w= G/ANXI8TwJTdF+AFBM8IiIUPEv0Gf6H5LA/b9guG4yE=]
 ```
 
-First request: 200, pin matched. Second: `CertPinError`, peer chain hashes leaked into `ActualHashes` so you can see exactly what showed up.
+First request: 200, pin matched. Second: `CertPinError`, with peer chain hashes surfaced in `ActualHashes` so the exact set of certs on the wire is visible.
 
 :::warning
-Pins go stale. Sites rotate certs, sometimes on a schedule (Let's Encrypt is 90 days), sometimes after an incident, and your hardcoded SPKI hash dies the moment the keypair changes. Build a refresh path: re-capture the hash on a cron, or pin multiple SPKIs (current + next) at once, or fall back gracefully when `CertPinError` shows up. A pinned client that 100% fails after cert rotation is worse than no pin at all.
+Pins go stale. Sites rotate certs, sometimes on a schedule (Let's Encrypt is 90 days), sometimes after an incident, and a hardcoded SPKI hash dies the moment the keypair changes. Build a refresh path: re-capture the hash on a cron, pin multiple SPKIs (current + next) at once, or fall back gracefully when `CertPinError` shows up. A pinned client that fails 100% after cert rotation is worse than no pin at all.
 :::

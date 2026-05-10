@@ -6,7 +6,7 @@ sidebar_position: 1
 
 # httpcloak
 
-httpcloak is a Go HTTP client that puts the same wire bytes on the line as a real browser, across HTTP/1.1, HTTP/2, and HTTP/3. The Go core handles TLS (uTLS), HTTP/2, HTTP/3 (QUIC), proxying (HTTP CONNECT, SOCKS5, MASQUE), and per-resource RFC 7540 / RFC 9218 stream priorities. Python, Node.js, and .NET get the same API through a shared cgo library.
+httpcloak is a Go HTTP client that emits the same wire bytes as a real browser across HTTP/1.1, HTTP/2, and HTTP/3. The Go core handles TLS via uTLS, HTTP/2, HTTP/3 over QUIC, proxying through HTTP CONNECT, SOCKS5, and MASQUE, and per-resource RFC 7540 / RFC 9218 stream priorities. Python, Node.js, and .NET get the same API through a shared cgo library.
 
 ## Quickstart
 
@@ -76,14 +76,14 @@ Console.WriteLine(resp.StatusCode);
 
 ### Connection lifecycle
 
-- **`Refresh()`**: drops every live connection but keeps TLS session
-  tickets, the way a browser tab does on reload. Next request resumes
+- **`Refresh()`**: drops every live connection but keeps the TLS session
+  tickets, the way a browser tab does on reload. The next request resumes
   0-RTT on the same preset.
 - **`RefreshWithProtocol()` / `WithSwitchProtocol`**: hop between H1, H2,
   and H3 mid-session and re-handshake on the new transport.
 - **`Save()` / `LoadSession()`**: persists the session (tickets, cookies,
   preset state) to disk so you can resume across processes.
-- **`Warmup(ctx, url)`**: multi-hop browser-style warmup before the real
+- **`Warmup(ctx, url)`**: multi-hop browser-style warmup ahead of the real
   request. Pre-populates cookies, ECH state, and session tickets.
 
 ### Fingerprint customization
@@ -95,10 +95,10 @@ Console.WriteLine(resp.StatusCode);
   `priority:` headers picked per request from `Sec-Fetch-Dest`. Every RFC
   7540 preset inherits a 14-dest default table, overridable per preset.
 - **Custom JA3 + Akamai shorthand**: `WithCustomFingerprint` takes a JA3
-  string and an Akamai HTTP/2 fingerprint string. Fine-grained override
+  string and an Akamai HTTP/2 fingerprint string. A targeted override
   without writing a whole preset.
-- **Cookie jar opt-out**: `WithoutCookieJar()` kills the internal jar.
-  You handle cookies via per-request headers.
+- **Cookie jar opt-out**: `WithoutCookieJar()` disables the internal jar.
+  Cookies move through per-request headers instead.
 
 ### Privacy and advanced TLS
 
@@ -108,27 +108,27 @@ Console.WriteLine(resp.StatusCode);
 - **MASQUE**: HTTP/3 CONNECT-UDP proxy support. Tunnels QUIC over a
   remote endpoint.
 - **Speculative TLS for proxy CONNECT**: `WithEnableSpeculativeTLS()`
-  pipelines the CONNECT request with the inner ClientHello. Saves one
+  pipelines the CONNECT request with the inner ClientHello, saving one
   RTT on every proxied connection.
 - **TLS keylog**: `WithKeyLogFile(path)` writes a Wireshark-compatible
-  SSLKEYLOGFILE so you can decrypt offline.
+  SSLKEYLOGFILE for offline decryption.
 
 ### Network and proxy
 
 - **Proxy types**: HTTP CONNECT, SOCKS5, SOCKS5 with UDP ASSOCIATE, and
-  MASQUE. Split-config works via `WithSessionTCPProxy` +
-  `WithSessionUDPProxy` (e.g. HTTP proxy for H1/H2, MASQUE for H3).
+  MASQUE. Split-config works through `WithSessionTCPProxy` and
+  `WithSessionUDPProxy` (HTTP proxy for H1/H2, MASQUE for H3, for example).
 - **Source-address binding**: `WithLocalAddress(string)` and
   `WithLocalAddrIP(net.IP)` pin every dial socket to a chosen local IP.
-  `IP_FREEBIND` / `IPV6_FREEBIND` gets set on Linux so addresses you
-  haven't configured on the interface (routed IPv6 prefix rotation, say)
-  work without `CAP_NET_ADMIN`.
+  `IP_FREEBIND` / `IPV6_FREEBIND` gets set on Linux, so addresses that
+  aren't configured on the interface (a routed IPv6 prefix for rotation,
+  for example) bind without `CAP_NET_ADMIN`.
 - **`WithSessionPreferIPv4()`**: skips Happy Eyeballs and forces v4.
 
 ### Presets
 
 - **Chrome**: 133, 141, 143, 144, 145, 146, 147, 148, with per-OS variants
-  (Windows / Linux / macOS / Android / iOS) where they actually differ.
+  (Windows / Linux / macOS / Android / iOS) where they differ.
 - **Firefox**: 133, 148.
 - **Safari**: 18 (desktop), 17 / 18 (iOS).
 - **`chrome-latest` aliases**: `chrome-latest`, `chrome-latest-windows`,
@@ -144,10 +144,10 @@ Console.WriteLine(resp.StatusCode);
 
 ## Where to next
 
-- New here? Start with [Getting Started](/getting-started).
-- Looking up something specific? Hit the [Reference](/reference).
-- Need a proxy? See [Proxies](/proxies).
-- Want to dial in the fingerprint? See [Fingerprinting](/fingerprinting).
-- Long-running session, Refresh, Warmup, Save/Restore? See [Connection Lifecycle](/connection-lifecycle).
-- ECH, keylog, speculative TLS? See [Advanced TLS](/advanced-tls).
-- End-to-end patterns for real builds? See [Recipes](/recipes).
+- New here, start with [Getting Started](/getting-started).
+- Looking up something specific, the [Reference](/reference) is the place.
+- Proxy setup is in [Proxies](/proxies).
+- Fingerprint dial-in lives in [Fingerprinting](/fingerprinting).
+- Long-running sessions, Refresh, Warmup, Save/Restore: see [Connection Lifecycle](/connection-lifecycle).
+- ECH, keylog, speculative TLS: see [Advanced TLS](/advanced-tls).
+- End-to-end patterns for real builds are in [Recipes](/recipes).

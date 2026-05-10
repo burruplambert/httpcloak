@@ -8,36 +8,36 @@ import TabItem from '@theme/TabItem';
 
 # HTTP/1.1
 
-H1 is the fallback. Almost every modern host has moved on to H2 or H3, but H1's still alive for legacy targets, internal services, and any case where ALPN refuses to hand you anything else. httpcloak speaks H1 when it has to, and lets you force it when you want.
+H1 is the fallback path in httpcloak. Most modern hosts negotiate H2 or H3 by default, so H1 only shows up against legacy targets, internal services, and cases where ALPN won't hand back anything newer. The lib speaks H1 when it has to, and lets you force it when the situation calls for it.
 
 ## When the lib picks H1
 
 Three paths land you on H1:
 
-- The target's TLS server hello returns `http/1.1` in ALPN. No `h2` advertised, no `h3` Alt-Svc. You get H1.
+- The target's TLS server hello returns `http/1.1` in ALPN, with no `h2` advertised and no `h3` Alt-Svc. The negotiation has nowhere else to go.
 - The auto-negotiation race finds H2 fails with an `ALPNMismatchError`. The lib reuses that same TLS connection and drops to H1 instead of redoing the handshake.
-- You forced it. Either `WithForceHTTP1()` at construction or `RefreshWithProtocol("h1")` mid-session.
+- You forced it, either with `WithForceHTTP1()` at construction or `RefreshWithProtocol("h1")` mid-session.
 
-Why force it? Two reasons. First, predictable behavior in tests. Second, some boxes in front of the origin (older WAFs, internal mTLS gateways) only speak H1, and you don't want the lib burning RTTs trying H2 first.
+Forcing H1 covers two situations. The first is predictable behavior in tests, where you don't want the protocol to drift between runs. The second is targets sitting behind older WAFs or internal mTLS gateways that only speak H1, where letting the lib try H2 first wastes a round trip on a guaranteed downgrade.
 
-## What the H1 transport actually does
+## What the H1 transport does
 
-Raw TCP, then a uTLS handshake with `http/1.1` as the only ALPN entry, then a plain `Request-Line + headers + CRLF + body`. No multiplexing, no header compression, no priority frames. One request per connection at a time, optionally pipelined with `Connection: keep-alive`.
+Raw TCP, a uTLS handshake with `http/1.1` as the only ALPN entry, then plain text request-line plus headers plus CRLF plus body on the wire. No multiplexing, no header compression, no priority frames. One request per connection at a time, optionally pipelined with `Connection: keep-alive`.
 
-The transport lives in `transport/http1_transport.go`. The interesting part is what gets fingerprinted.
+The transport lives in `transport/http1_transport.go`. The interesting part is what gets fingerprinted on top.
 
 ## What gets fingerprinted at H1
 
 Three layers, top to bottom:
 
-1. **TLS handshake**. Same uTLS-backed ClientHello as H2/H3, just with the ALPN extension rewritten to `["http/1.1"]` only. JA3, JA4, peetprint all still apply. See [TLS fingerprinting](/fingerprinting/what-is-tls-fingerprinting).
-2. **Header order**. H1's plain text, so header order is exactly the order of bytes you put on the wire. The preset's header order list drives this. Heads up: DevTools won't show you the real order Chrome sends, so check `tls.peet.ws/api/all` if you need ground truth.
-3. **`Connection` header behavior**. `keep-alive` vs `close` vs `Upgrade: websocket` is a real fingerprint signal. Chrome on H1 sends `Connection: keep-alive` by default, and the preset matches.
+1. **TLS handshake**. Same uTLS-backed ClientHello as H2 and H3, with the ALPN extension rewritten to `["http/1.1"]` only. JA3, JA4, and peetprint all still apply. See [TLS fingerprinting](/fingerprinting/what-is-tls-fingerprinting).
+2. **Header order**. H1 is plain text, so header order is exactly the order of bytes you put on the wire. The preset's header order list drives this. DevTools won't show you the real order Chrome sends, so check `tls.peet.ws/api/all` when you need ground truth.
+3. **`Connection` header behavior**. `keep-alive` vs `close` vs `Upgrade: websocket` is a real fingerprint signal. Chrome on H1 sends `Connection: keep-alive` by default, and the preset matches that.
 
-H1 has no SETTINGS, no WINDOW_UPDATE, no PRIORITY frames. So the Akamai H2 hash is empty when you're on H1, and any check that relies on those signals just can't fire.
+H1 has no SETTINGS, no WINDOW_UPDATE, and no PRIORITY frames, so the Akamai H2 hash is empty on this path and any check that relies on those signals just can't fire.
 
 :::info H1 is also the websocket upgrade path
-WebSocket starts as an H1 request with `Upgrade: websocket`. If you need the upgrade flow, you need H1. See [streaming and upgrades](/connection-lifecycle).
+WebSocket starts as an H1 request with `Upgrade: websocket`. The upgrade flow needs H1. See [streaming and upgrades](/connection-lifecycle).
 :::
 
 ## Code: force H1 and verify
@@ -150,11 +150,11 @@ peet http_version: HTTP/1.1
 ja3: fe202172df94b322cc6e1e888a464d43
 ```
 
-`resp.Protocol` is the lib's internal label (`h1`, `h2`, `h3`). `http_version` from `tls.peet.ws` is what the server actually saw, so that's your source of truth.
+`resp.Protocol` is the lib's internal label (`h1`, `h2`, `h3`). `http_version` from `tls.peet.ws` is what the server actually saw, so that field is the source of truth.
 
 ## Switching mid-session
 
-Warm up on H2, then drop to H1 for one specific endpoint with `RefreshWithProtocol`:
+`RefreshWithProtocol` swaps the active protocol on an existing session. Warm up on H2, drop to H1 for a single endpoint, keep the same cookies and tickets:
 
 ```go
 sess := httpcloak.NewSession("chrome-latest")
@@ -171,5 +171,5 @@ sess.Get(ctx, "https://legacy.example.com/api/upgrade")
 `RefreshWithProtocol` drops the existing connection pool. Cookies and the TLS session ticket cache survive the switch.
 
 :::caution H1 with HTTP proxies
-If you're going through an HTTP `CONNECT` proxy and the upstream only speaks H1, the lib's speculative-TLS optimization still applies. The ClientHello rides on the same packet as `CONNECT`, saving you an RTT. See [HTTP CONNECT proxies](/proxies/http-connect).
+Going through an HTTP `CONNECT` proxy where the upstream only speaks H1 still benefits from the lib's speculative-TLS optimization. The ClientHello rides on the same packet as `CONNECT`, saving a round trip. See [HTTP CONNECT proxies](/proxies/http-connect).
 :::

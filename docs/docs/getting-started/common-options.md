@@ -8,15 +8,13 @@ import TabItem from '@theme/TabItem';
 
 # Common Options
 
-Every HTTP client has the same handful of knobs. Timeouts, redirects, retries, default headers, cookies. This page covers those for httpcloak. Nothing fancy, just the everyday stuff you'll reach for in week one.
-
-For the full option surface, including everything that's not on this page, see [Reference: Options](/reference/options).
+Every HTTP client exposes the same handful of knobs: timeouts, redirects, retries, default headers, cookies. This page covers those for httpcloak. The full option surface lives in [Reference: Options](/reference/options).
 
 ## Timeout
 
-`WithSessionTimeout` is the default timeout for every request on the session. You can override it per-request via the `Timeout` field on `Request` (or the `timeout` kwarg on the bindings).
+`WithSessionTimeout` sets the default timeout for every request on the session. Per-request overrides go through the `Timeout` field on `Request` in Go, or the `timeout` kwarg in the bindings.
 
-The session timeout covers the whole request: DNS, connect, TLS handshake, request send, response read. It doesn't cover reading the body once `Get`/`Do` has returned. You handle that yourself.
+The session timeout covers the whole request: DNS, connect, TLS handshake, request send, response read. It does not cover reading the body once `Get` or `Do` has returned. The body read is on you.
 
 <Tabs groupId="lang">
 <TabItem value="go" label="Go">
@@ -51,11 +49,11 @@ using var session = new Session(preset: "chrome-latest", timeout: 10);
 </TabItem>
 </Tabs>
 
-In Go, the timeout is also bounded by the `context.Context` you pass to `Get`/`Do`. Whichever fires first wins. Use the context for caller cancellation, the session timeout as a backstop.
+In Go, the timeout is also bounded by the `context.Context` passed to `Get` or `Do`, and whichever deadline fires first wins. The context handles caller cancellation, the session timeout is the backstop.
 
 ## Redirects
 
-httpcloak follows redirects by default, up to 10 hops. You can kill that entirely, or just change the cap.
+Redirects are followed by default, up to 10 hops. You can disable them entirely or just change the cap.
 
 <Tabs groupId="lang">
 <TabItem value="go" label="Go">
@@ -95,15 +93,15 @@ using var capped  = new Session(preset: "chrome-latest", maxRedirects: 5);
 </TabItem>
 </Tabs>
 
-When redirects are followed, the response object hands you the full chain via `response.History` (Go), `r.history` (Python), `r.history` (Node), `Response.History` (.NET). Each entry has the status, URL, and headers of the intermediate hop. The final URL lands on `FinalURL` / `final_url` / `finalUrl` / `FinalUrl`.
+When redirects are followed, the response object exposes the full chain through `response.History` (Go), `r.history` (Python and Node), or `Response.History` (.NET). Each entry carries the status, URL, and headers of the intermediate hop. The final URL lands on `FinalURL`, `final_url`, `finalUrl`, or `FinalUrl` depending on the binding.
 
-When redirects are off, a 301/302 (or whatever) just comes back as the response, body and all. No magic.
+With redirects off, a 301 or 302 comes back as the response, body and all, with no auto-follow.
 
 ## Retries
 
-Retries are off by default. Flip them on with `WithRetry(n)` for sane defaults, or reach for `WithRetryConfig` to tune the backoff window and the trigger status codes. Default retry-on-status when you enable retries is `[429, 500, 502, 503, 504]`.
+Retries are off by default. `WithRetry(n)` turns them on with sensible defaults. `WithRetryConfig` tunes the backoff window and the trigger status codes. The default retry-on-status set is `[429, 500, 502, 503, 504]`.
 
-Heads up: retries on POST/PUT/PATCH bodies need the body to be re-readable. Pass a `bytes.Buffer` or a `[]byte`-backed reader, not a one-shot stream, otherwise the retry has nothing to send.
+One thing to watch: retries on POST, PUT, and PATCH need a re-readable body. A `bytes.Buffer` or `[]byte`-backed reader works. A one-shot stream does not, since the retry has nothing left to send.
 
 <Tabs groupId="lang">
 <TabItem value="go" label="Go">
@@ -167,9 +165,9 @@ using var tuned = new Session(
 
 ## Custom headers
 
-Presets ship with a default header set in the right order. You don't want to touch this most of the time, the whole point is to look like Chrome. But you'll usually need to tack on an `Authorization`, `Cookie`, `Referer`, or some app-specific header.
+Presets ship with a default header set in the order Chrome sends. Most of the time these stay untouched, since matching Chrome is the point. What you'll usually need is to add an `Authorization`, `Cookie`, `Referer`, or some app-specific header on top.
 
-Just add them per-request. They get merged into the preset's order at the correct slot (httpcloak knows where Chrome puts `authorization` vs `accept` and so on).
+Per-request additions get merged into the preset's order at the correct slot. httpcloak knows where Chrome puts `authorization` relative to `accept`, and so on for every standard header.
 
 <Tabs groupId="lang">
 <TabItem value="go" label="Go">
@@ -217,15 +215,15 @@ var r = session.Get("https://httpbin.org/headers", headers: new() {
 </TabItem>
 </Tabs>
 
-Need to override the preset's header order entirely? That's a separate concern (`SetHeaderOrder` on the session, see [Reference: Options](/reference/options)).
+To override the preset's header order entirely, use `SetHeaderOrder` on the session. See [Reference: Options](/reference/options) for that one.
 
 ## Cookies
 
 The session has a built-in cookie jar. It captures `Set-Cookie` from every response and replays the right cookies on subsequent requests, scoped to domain and path the way browsers do.
 
-It just works out of the box. No opt-in needed. If you want to inspect or seed the jar, see [Cookies and State](/cookies-and-state).
+The jar is on by default with no opt-in needed. To inspect or seed it, see [Cookies and State](/cookies-and-state).
 
-If your app already manages cookies somewhere else (shared store across many sessions, or you're proxying for another tool that owns the jar), turn the internal jar off:
+If cookies are already managed elsewhere (a shared store across many sessions, or proxying for another tool that owns the jar), turn the internal jar off:
 
 <Tabs groupId="lang">
 <TabItem value="go" label="Go">
@@ -258,11 +256,11 @@ using var session = new Session(preset: "chrome-latest", withoutCookieJar: true)
 </TabItem>
 </Tabs>
 
-With the jar off, `Set-Cookie` values from responses aren't stored, and nothing gets auto-injected on later requests. You handle the `Cookie` header yourself per-request. See [Disabling the Cookie Jar](/cookies-and-state/disabling-cookie-jar) for the full pattern.
+With the jar off, `Set-Cookie` values are not stored and nothing gets auto-injected on later requests. The `Cookie` header is yours to manage per-request. See [Disabling the Cookie Jar](/cookies-and-state/disabling-cookie-jar) for the full pattern.
 
 ## Local source address
 
-Got an IPv6 prefix routed to your host (cheap rotating egress) or multiple IPv4 addresses on one box? You can pin a session to a specific source IP. Linux freebind kicks in automatically so you don't have to configure each address on the interface, which is a low-key huge time saver.
+A session can be pinned to a specific source IP, which is the move when an IPv6 prefix is routed to the host (cheap rotating egress) or when multiple IPv4 addresses live on the same box. Linux freebind kicks in automatically, so addresses that aren't configured on the interface still bind without `CAP_NET_ADMIN`.
 
 <Tabs groupId="lang">
 <TabItem value="go" label="Go">
@@ -297,7 +295,7 @@ using var session = new Session(preset: "chrome-latest", localAddress: "2001:db8
 </TabItem>
 </Tabs>
 
-Works for IPv4 too. For rotation patterns and freebind details, see [Source Address Binding](/proxies/source-address-binding).
+IPv4 works the same way. For rotation patterns and freebind details, see [Source Address Binding](/proxies/source-address-binding).
 
 ## What's not on this page
 
@@ -307,5 +305,5 @@ Works for IPv4 too. For rotation patterns and freebind details, see [Source Addr
 - Streaming uploads/downloads, multipart, redirect history details: see [Requests and Responses](/requests-and-responses).
 
 :::info Full option list
-What's here is the everyday set. For everything else (`WithForceHTTP3`, `WithKeyLogFile`, `WithECHFrom`, `WithCustomFingerprint`, `WithSessionCache`, and friends), see [Reference: Options](/reference/options).
+This page covers the everyday set. For the rest (`WithForceHTTP3`, `WithKeyLogFile`, `WithECHFrom`, `WithCustomFingerprint`, `WithSessionCache`, and the rest of the surface), see [Reference: Options](/reference/options).
 :::

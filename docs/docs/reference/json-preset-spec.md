@@ -5,9 +5,9 @@ sidebar_position: 3
 
 # JSON Preset Spec
 
-The canonical JSON schema for presets. If you're building a preset programmatically, this is the contract.
+The canonical JSON schema for presets. This is the contract for any preset built programmatically or shipped as a file.
 
-Source of truth: `fingerprint/custom_preset.go` (`PresetSpec` and friends). The schema is round-trip stable. `fingerprint.Describe(name)` spits out JSON that `fingerprint.LoadPresetFromJSON` parses straight back into an identical preset.
+Source of truth: `fingerprint/custom_preset.go`, where `PresetSpec` and the surrounding types are defined. The schema is round-trip stable. `fingerprint.Describe(name)` produces JSON that `fingerprint.LoadPresetFromJSON` parses back into an identical preset.
 
 :::note
 JSON doesn't allow comments. The `// ...` annotations in the snippets below are docs only. Strip them before handing the JSON to the parser.
@@ -16,6 +16,8 @@ JSON doesn't allow comments. The `// ...` annotations in the snippets below are 
 ---
 
 ## Top-level shape
+
+The outer document carries a schema version and either a single preset or a pool.
 
 ```json
 {
@@ -35,6 +37,8 @@ Exactly one of `preset` or `pool` has to be set.
 
 ### Pool shape
 
+Pools wrap a list of preset definitions plus a rotation strategy. The runtime picks one preset per session.
+
 ```json
 {
   "version": 1,
@@ -53,7 +57,7 @@ Exactly one of `preset` or `pool` has to be set.
 
 ## `preset` object
 
-Every field a single preset can declare.
+The full set of fields a single preset can declare. Each section corresponds to one layer of the wire fingerprint.
 
 ```json
 {
@@ -79,11 +83,13 @@ Every field a single preset can declare.
 | `tcp` | object | See [TCP section](#tcp-object). |
 | `protocols` | object | See [Protocols section](#protocols-object). |
 
-Omit a field and it inherits from `based_on`. If there's no parent, it stays at zero.
+Omit a field and it inherits from `based_on`. With no parent, the field stays at its zero value.
 
 ---
 
 ## `tls` object
+
+The TLS layer. Two configuration modes that don't mix: a named uTLS ClientHello (`client_hello`) or a raw JA3 string. The named mode covers Chrome, Firefox, Safari, and iOS variants tracked in uTLS; JA3 mode is for anything outside that set.
 
 ```json
 "tls": {
@@ -123,7 +129,7 @@ Omit a field and it inherits from `based_on`. If there's no parent, it stays at 
 
 ### `ja3_extras` shape
 
-Same fields as the top-level shortcuts, just nested. Use this when you want the JA3 string and its extras kept together:
+The same fields as the top-level shortcuts, nested under one object. Use this form when you want the JA3 string and its extras kept together as a single block.
 
 ```json
 "ja3_extras": {
@@ -139,7 +145,7 @@ Same fields as the top-level shortcuts, just nested. Use this when you want the 
 
 ### TLS validation rules
 
-The build step rejects these combos:
+The build step rejects the following combinations:
 
 - `ja3` and `client_hello` set in the same spec.
 - `ja3_extras` without `ja3`.
@@ -150,6 +156,8 @@ The build step rejects these combos:
 ---
 
 ## `http2` object
+
+The HTTP/2 layer. Covers SETTINGS values and order, WINDOW_UPDATE size, pseudo-header order, HPACK indexing, and the per-resource priority table.
 
 ```json
 "http2": {
@@ -185,17 +193,19 @@ The build step rejects these combos:
 
 ### Akamai shorthand
 
-`akamai` is a one-line shorthand: `SETTINGS|WINDOW_UPDATE|PRIORITY|PSEUDO_ORDER`. The parser splits it and applies the four parts.
+`akamai` is a one-line shorthand for the four parts of an Akamai HTTP/2 fingerprint: `SETTINGS|WINDOW_UPDATE|PRIORITY|PSEUDO_ORDER`. The parser splits it and applies each part to the corresponding fields.
 
-When both `akamai` and individual fields are set, here's the resolution order:
+When both `akamai` and individual fields are set, resolution runs in this order:
 
 1. Apply individual fields (`header_table_size`, `enable_push`, etc.) for any slots the akamai shorthand does **not** touch.
 2. Apply `akamai` authoritatively for the slots it explicitly names.
 3. Apply `settings` (the structured `[{id, value}]` list) last. Overrides both.
 
-So if your akamai is `1:65536` and you also set `header_table_size: 99999`, the akamai value wins for slot 1. Slots not in akamai (like `max_concurrent_streams`) take the individual value.
+So with `akamai: "1:65536"` and `header_table_size: 99999`, the akamai value wins for slot 1. Slots the akamai string doesn't name (like `max_concurrent_streams`) take the individual value.
 
 ### Settings IDs
+
+The numeric IDs HTTP/2 uses in `SETTINGS` frames.
 
 | ID | Setting |
 |---|---|
@@ -209,6 +219,8 @@ So if your akamai is `1:65536` and you also set `header_table_size: 99999`, the 
 
 ### HPACK and priority
 
+How header compression and stream priorities behave on the wire.
+
 | Field | Type | Values |
 |---|---|---|
 | `hpack_indexing_policy` | string | `"chrome"`, `"never"`, `"always"`, `"default"` |
@@ -218,7 +230,7 @@ So if your akamai is `1:65536` and you also set `header_table_size: 99999`, the 
 
 ### `priority_table`
 
-Maps `sec-fetch-dest` values (`document`, `image`, `script`, `style`, `font`, etc.) to per-resource priority settings. When populated, the transport emits a per-request RFC 7540 stream weight (derived from `urgency`) and an RFC 9218 `priority:` header on every request, keyed off its `sec-fetch-dest`.
+Maps `sec-fetch-dest` values (`document`, `image`, `script`, `style`, `font`, and so on) to per-resource priority settings. When populated, the transport emits a per-request RFC 7540 stream weight derived from `urgency` plus an RFC 9218 `priority:` header on every request, keyed off the request's `sec-fetch-dest`.
 
 ```json
 "priority_table": {
@@ -234,11 +246,13 @@ Maps `sec-fetch-dest` values (`document`, `image`, `script`, `style`, `font`, et
 | `incremental` | bool | Whether the resource can be processed incrementally. |
 | `emit_header` | bool | When true, the transport emits a `priority:` header on the request. |
 
-Omit it and you get the preset's static `stream_weight` / `stream_exclusive` on every request. That's the legacy single-weight behaviour.
+Omit it and every request uses the preset's static `stream_weight` and `stream_exclusive`. That's the legacy single-weight behaviour from before the priority table existed.
 
 ---
 
 ## `http3` object
+
+The HTTP/3 layer, including the QUIC transport parameters that anchor a Chrome-shaped initial packet.
 
 ```json
 "http3": {
@@ -285,11 +299,13 @@ Omit it and you get the preset's static `stream_weight` / `stream_exclusive` on 
 | `quic_initial_stream_receive_window` | uint64 | `initial_max_stream_data_*`. iOS Safari uses 2 MiB; Chrome desktop uses different values. |
 | `quic_initial_connection_receive_window` | uint64 | `initial_max_data`. iOS Safari uses 16 MiB. |
 
-Omit a field (nil) and you get the quic-go default. The library only sets a slot if the spec asks for it.
+Omit a field (nil) and the quic-go default applies. The library only writes a slot when the spec asks for it.
 
 ---
 
 ## `headers` object
+
+The HTTP request header bundle. User-Agent, all the named values, and the exact wire order they're sent in.
 
 ```json
 "headers": {
@@ -313,11 +329,13 @@ Omit a field (nil) and you get the quic-go default. The library only sets a slot
 | `values` | object (string→string) | Header values keyed by lowercase header name. Merged with the inherited `values` from `based_on`. |
 | `order` | array of `{key, value}` | The exact header order on the wire. Lowercase keys. An empty `value` means "use the value from `values` or `user_agent`". |
 
-Order matters. HTTP/2 / HTTP/3 implementations don't enforce header order on the receiving side, but bot detection products absolutely fingerprint it. Real Chrome and real Firefox sit miles apart on this.
+Order matters. HTTP/2 and HTTP/3 don't enforce header order on the receiving side, but bot-detection products fingerprint it. Real Chrome and real Firefox sit far apart on this dimension.
 
 ---
 
 ## `tcp` object
+
+The TCP/IP layer fingerprint. TTL, MSS, window size and scale, the Don't Fragment bit.
 
 ```json
 "tcp": {
@@ -330,13 +348,15 @@ Order matters. HTTP/2 / HTTP/3 implementations don't enforce header order on the
 }
 ```
 
-`platform` is a shorthand that fills in the typical TTL / MSS / window combo for that OS. Individual fields override the platform default.
+`platform` is a shorthand that fills in the typical TTL / MSS / window combo for that OS. Individual fields override the platform default field-by-field.
 
-These only matter for the handful of bot-management products that fingerprint the TCP/IP stack. Most don't bother.
+These only matter for the handful of bot-management products that fingerprint the TCP/IP stack. Most don't.
 
 ---
 
 ## `protocols` object
+
+Feature flags that gate which protocols the preset participates in.
 
 ```json
 "protocols": {
@@ -352,7 +372,7 @@ These only matter for the handful of bot-management products that fingerprint th
 
 ## Round-trip guarantee
 
-`Describe -> LoadPresetFromJSON -> BuildPreset -> Describe` produces byte-identical JSON. CI uses this to catch silent drift in the embedded presets.
+The chain `Describe -> LoadPresetFromJSON -> BuildPreset -> Describe` produces byte-identical JSON. CI uses this property to catch silent drift in the embedded presets.
 
 ```go
 import "github.com/sardanioss/httpcloak/fingerprint"
@@ -371,20 +391,22 @@ The verified spot-check (chrome-148-windows, firefox-148, safari-18-ios) shows z
 
 ## Inheritance and validation
 
-`based_on` resolves at build time. Loops get detected and reported as `based_on inheritance loop detected at "..."`. The chain ends at a built-in (whose `based_on` is empty).
+`based_on` resolves at build time. Inheritance loops are caught and reported as `based_on inheritance loop detected at "..."`. The chain terminates at a built-in preset whose `based_on` is empty.
 
-When you call `BuildPreset(spec)`:
+`BuildPreset(spec)` does the following:
 
 1. If `based_on` is set, the parent preset gets cloned (deep copy of headers, H2/H3 config, JA3 extras).
 2. Each non-empty section in your spec overlays on top.
 3. Validation runs: TLS rules, HPACK indexing policy values, stream priority mode values, QUIC transport param order values.
 4. The built `*Preset` comes back. Register it with `fingerprint.Register(name, preset)` so `NewSession(name)` can find it.
 
-A spec with no `name` is fine. `BuildPreset` returns a `*Preset` carrying whatever name `based_on` had, and you can rename before registering.
+A spec with no `name` is fine. `BuildPreset` returns a `*Preset` carrying whatever name `based_on` had, and you can rename it before registering.
 
 ---
 
 ## Loading from disk
+
+Two-step: read and parse the JSON, then build and register the preset.
 
 ```go
 pf, err := fingerprint.LoadPresetFromFile("/etc/httpcloak/presets/my-chrome.json")
@@ -394,7 +416,7 @@ fingerprint.Register("my-chrome", preset)
 // Now NewSession("my-chrome") works.
 ```
 
-For one-shot loading and registration:
+Or, in one shot:
 
 ```go
 preset, err := fingerprint.LoadAndBuildPreset("/path/to/preset.json")
@@ -405,7 +427,7 @@ fingerprint.Register(preset.Name, preset)
 
 ## A complete minimal example
 
-A real preset that just swaps the User-Agent on top of `chrome-148-windows`:
+A real preset that swaps only the User-Agent on top of `chrome-148-windows`:
 
 ```json
 {
@@ -420,4 +442,4 @@ A real preset that just swaps the User-Agent on top of `chrome-148-windows`:
 }
 ```
 
-Everything else (TLS, HTTP/2, header order, HTTP/3, TCP) inherits from `chrome-148-windows`. This is exactly the trick the embedded JSONs use to ship Chrome 147 and 148 without retyping 5000 lines per version.
+Everything else (TLS, HTTP/2, header order, HTTP/3, TCP) inherits from `chrome-148-windows`. The embedded JSONs use this same pattern to ship Chrome 147 and 148 without retyping 5000 lines per version.

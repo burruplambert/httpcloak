@@ -5,10 +5,10 @@ sidebar_position: 1
 
 # Getting Started
 
-Fire off your first request, see how presets work, and get a feel for the day-to-day knobs you'll actually touch.
+This section walks the first request, what a preset bundles, and the everyday options every session ends up reaching for. Three pages, each one self-contained.
 
 ## In this section
 
-- [First Request](./first-request): your first call with the default Chrome preset
-- [Presets Explained](./presets-explained): what a preset bundles, how to pick one
-- [Common Options](./common-options): timeouts, redirects, retries, the boring but essential stuff
+- [First Request](./first-request): the four-line check that a request is going out with a Chrome-shaped fingerprint.
+- [Presets Explained](./presets-explained): what loads when you name a preset, the `based_on` chain, picking one for the target.
+- [Common Options](./common-options): timeouts, redirects, retries, headers, cookies, source IP.

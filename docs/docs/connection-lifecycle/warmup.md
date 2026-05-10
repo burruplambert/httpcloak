@@ -5,28 +5,28 @@ sidebar_position: 2
 
 # Warmup
 
-`Warmup(ctx, url)` runs a multi-hop preflight that mimics what a real browser does when you type a URL and hit enter. It loads the HTML, parses out the stylesheets, scripts, images and fonts the page references, then fetches them in parallel with browser-style headers and timing. By the time it returns, your session has cookies, cache validators, TLS tickets and ECH state that look like a tab someone's already used.
+`Warmup(ctx, url)` runs a multi-hop preflight that mimics what a browser does when a user types a URL and hits enter. It loads the HTML, parses out the stylesheets, scripts, images and fonts the page references, then fetches them in parallel with browser-style headers and timing. By the time it returns, the session holds cookies, cache validators, TLS tickets and ECH state consistent with a tab that's already been used.
 
 ## Why bother
 
-Cold-start fingerprinting is real. The very first request from a session has patterns that are hard to fake. Header order's fine, JA3's fine, but the *timing* and the *request graph* are bare. There's no Referer chain. The cookie jar's empty. No cache-validation headers. No subresource fetches. The site never set an `Accept-CH` so you're not sending high-entropy client hints. None of this individually screams bot, but together it paints a "this connection just opened to grab one specific endpoint" picture, which is exactly what bots do.
+Cold-start fingerprinting catches a lot of bots. The first request from a fresh session can have correct header order and a clean JA3, but the timing and the request graph give it away. There's no Referer chain. The cookie jar is empty. No cache-validation headers. No subresource fetches. The site never sent an `Accept-CH`, so no high-entropy client hints come back on the next hop. Each gap on its own isn't decisive, but together they describe a connection that opened solely to grab one specific endpoint, which is the canonical bot shape.
 
-`Warmup` papers over a lot of that in one call. It:
+`Warmup` covers most of that in one call. It:
 
 - Fetches the navigation HTML with proper Sec-Fetch headers.
 - Parses the HTML for `<link>`, `<script>`, `<img>` and `<link rel="preload">` references.
 - Splits them into priority groups: CSS and fonts first, then scripts, then images.
-- Fires each batch concurrently (up to 6 in flight, matching Chrome's per-host H1 connection limit), with realistic 50-300ms gaps between batches.
+- Fires each batch concurrently (up to 6 in flight, matching Chrome's per-host H1 connection limit) with 50-300ms gaps between batches.
 - Picks up Set-Cookie headers along the way.
 - Records `Accept-CH` headers from any host that asks for client hints.
 - Caches ETag and Last-Modified so the next request to the same URL ships conditional headers.
 - Lets the TLS layer cache session tickets for every host hit.
 
-After `Warmup` returns, your follow-up request looks like the user clicked the next link. Not like the connection just popped into existence.
+By the time it returns, the next request from the session looks like the user clicked through to it, not like the connection just opened to grab it.
 
 ## Common pattern
 
-Warm up on the home page, then go after the actual endpoint you care about.
+Warm up against the home page, then hit the endpoint you actually care about.
 
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
@@ -115,24 +115,24 @@ Console.WriteLine($"status={r.StatusCode}");
 | Header order memory | Already preset-driven, no drift |
 | Cookie jar size | Whatever the site sets, often 5-20 |
 
-If the warmed page redirects (301/302), the redirect chain is followed and cookies set along the way all land in the jar with proper domain scoping.
+If the warmed page redirects (301/302), the redirect chain is followed and cookies set along the way land in the jar with the right domain scoping.
 
 ## Edge cases worth knowing
 
-Warmup caps at 50 subresources. Big news sites reference 200+ images on a single page, so we stop at 50 to stop the call running forever. Subresource fetch failures are silent (matches browser behaviour, one broken image shouldn't kill the whole page load). If the navigation URL returns something other than `text/html`, warmup returns nil after the navigation. TLS and cookies still get populated, just no subresource crawl.
+Warmup caps at 50 subresources. Big news sites reference 200+ images on a single page, so the cap exists to keep the call from running forever. Subresource fetch failures are silent, which matches browser behaviour where one broken image shouldn't kill the whole page load. If the navigation URL returns something other than `text/html`, warmup returns nil after the navigation. TLS and cookies still populate, the subresource crawl is just skipped.
 
 The inter-batch delays (50-150ms before scripts, 100-300ms before images) are randomised per call, so back-to-back warmups don't share an identical timing fingerprint.
 
 ## When NOT to warmup
 
-- The endpoint you want is on a different origin from any plausible home page. Site A's warmup cookies won't help when you're hitting site B.
-- You're in a tight retry loop. Warming up before each retry is overkill.
-- The target's a JSON-only API that never sets cookies. The request graph just costs you bandwidth.
+- The target endpoint is on a different origin from any plausible home page. Cookies set on site A don't help requests against site B.
+- You're inside a tight retry loop. Warming up before every retry is overkill.
+- The target is a JSON-only API that never sets cookies. The request graph adds bandwidth and gives you nothing back.
 
-In those cases skip `Warmup`, or call it once at session creation and never again.
+For those cases, skip `Warmup`, or call it once at session creation and not again.
 
 ## Warmup vs Refresh
 
-These aren't interchangeable. `Refresh()` cuts connections without touching state. `Warmup()` does the opposite: leaves connections alone and pumps state into the session. Common pipeline is `Warmup` once at start, then periodic `Refresh()` calls.
+These aren't interchangeable. `Refresh()` closes connections without touching state. `Warmup()` does the opposite: leaves connections alone and pumps state into the session. The typical pipeline is one `Warmup` at startup followed by periodic `Refresh()` calls.
 
 `Warmup` respects the context. Cancel it and the call returns the context error after the in-flight batch finishes.

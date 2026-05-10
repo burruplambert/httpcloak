@@ -5,7 +5,7 @@ sidebar_position: 1
 
 # Reference
 
-Everything in one place. Every option, every preset, the JSON schema, and a top-down map of how the library hangs together.
+Lookup pages for everything the library exposes. Every option, every preset hash, the canonical JSON schema, and a top-down map of how the packages fit together.
 
 ## In this section
 

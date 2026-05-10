@@ -5,25 +5,17 @@ sidebar_position: 3
 
 # Disabling the Cookie Jar
 
-Sometimes you don't want the session managing cookies for you. Maybe you've got a database acting as your single source of truth. Maybe you want every request fully isolated. Or maybe you're debugging and the auto-replay is getting in the way.
+`WithoutCookieJar()` (added in 1.6.6) is a session option that turns the internal jar off. With it set, `Set-Cookie` headers from responses are not stored, the jar is not consulted when building the next request's `Cookie` header, and `GetCookies()` returns an empty list. Caller-provided `Cookie` headers still pass through untouched; the only thing the flag suppresses is the lib's own auto-injection.
 
-`WithoutCookieJar()` (added in 1.6.6) flips the jar off. With it set:
+## When to reach for it
 
-- `Set-Cookie` headers from responses are **not** stored
-- The jar is **not** consulted when building the next request's `Cookie` header
-- `GetCookies()` returns an empty list
+A few situations where switching the jar off is the right call:
 
-Caller-provided `Cookie` headers still pass through untouched. Only the auto-injection from the internal jar is suppressed.
-
-## When to actually do this
-
-A few real reasons to turn it off:
-
-- **You manage cookies yourself.** App-level cookie store in Redis, Postgres, whatever. You read from there, build the `Cookie` header per request, and don't want the lib doing anything else.
+- **You manage cookies yourself.** An application-level cookie store in Redis, Postgres, or anywhere else, owns the truth. You read from there, build the `Cookie` header per request, and don't want the lib layering anything on top.
 - **You want each request fully independent.** Useful for fan-out crawling where two requests on the same session shouldn't share state.
-- **You're debugging.** When you're trying to figure out why a response sets a weird cookie, having the jar silently swallow and replay it makes things harder. Turn it off, watch the raw headers.
+- **You're debugging.** When you're trying to figure out why a response sets a particular cookie, having the jar silently swallow and replay it makes the trace harder to read. Switch it off and watch the raw headers.
 
-If none of those apply, leave the jar on. It's there for a reason.
+Outside of those, leave the jar on. The default behaviour matches what most calling code expects.
 
 ## Code
 
@@ -115,17 +107,17 @@ Console.WriteLine(r.Text);
 
 ## Managing cookies yourself
 
-With the jar off, you're driving. Two main patterns:
+With the jar off, the calling code owns cookie state. Two patterns cover most cases:
 
-1. **Send a `Cookie` header per request.** Build the string yourself, attach it to the request headers. See [Per-Request Cookies](./per-request-cookies) for examples.
-2. **Pull `Set-Cookie` out of the response.** Each `Response` exposes its raw headers; parse `Set-Cookie` yourself and stash the result wherever you want.
+1. **Send a `Cookie` header per request.** Build the string yourself and attach it to the request headers. See [Per-Request Cookies](./per-request-cookies) for examples in each language.
+2. **Pull `Set-Cookie` out of the response.** Each `Response` exposes its raw headers; parse `Set-Cookie` yourself and stash the result wherever your store lives.
 
 :::info Headers still pass through
-Even with the jar off, the `Cookie` header you set on a request still goes out as you wrote it. The flag only suppresses the lib's auto-injection, not your manual headers.
+Even with the jar off, the `Cookie` header set on a request goes out byte-for-byte as written. The flag only suppresses the lib's auto-injection; manual headers are unaffected.
 :::
 
 ## Mixing modes
 
-You can't toggle `WithoutCookieJar` mid-session. It's a session option, set once at construction. If you need both modes (jar-on for one workflow, jar-off for another), spin up two sessions.
+`WithoutCookieJar` is a session option, set once at construction, and can't be toggled mid-session. To run both modes side by side (jar-on for one workflow, jar-off for another), build two sessions.
 
-If you need shared TLS state across the two, use `Fork()` to create a sibling that carries the same TLS resumption cache but starts fresh on cookies. Heads up: forks share the same cookie jar pointer, so if you fork from a jar-enabled parent, both share the jar. To genuinely separate the cookie state, build a fresh session.
+For shared TLS state across the two, `Fork()` creates a sibling that carries the same TLS resumption cache while starting fresh on other state. One thing to watch: forks share the cookie jar pointer with the parent, so a fork from a jar-enabled session ends up sharing the jar. Genuinely separate cookie state needs a fresh session built from scratch.

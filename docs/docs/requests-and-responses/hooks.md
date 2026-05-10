@@ -8,7 +8,7 @@ import TabItem from '@theme/TabItem';
 
 # Hooks
 
-Hooks are middleware. PreRequest fires right before a request hits the wire, PostResponse fires right after the response lands. Use them to mutate, log, transform, or kill a request at the gate. Same idea as Express middleware or `requests.Session.hooks`, just with httpcloak's types.
+Hooks are middleware. PreRequest fires right before a request hits the wire, PostResponse fires right after the response lands. Same idea as Express middleware or `requests.Session.hooks`, with httpcloak's types. Use them to mutate, log, transform, or kill a request at the gate.
 
 Two slots:
 
@@ -21,9 +21,9 @@ Two slots:
 type PreRequestHook func(req *http.Request) error
 ```
 
-You get the actual `*http.Request` (the `sardanioss/http` one) right before the transport ships it. Anything you change lands on the wire: headers, URL, method, body. Return a non-nil error and the whole request gets cancelled before a single byte goes out. The error bubbles back to the caller wrapped as `pre-request hook failed: <your err>`.
+The hook gets the actual `*http.Request` (the `sardanioss/http` one) right before the transport ships it. Anything you change lands on the wire: headers, URL, method, body. A non-nil return cancels the request before a single byte goes out, and the error bubbles back to the caller wrapped as `pre-request hook failed: <your err>`.
 
-What you'll typically do here:
+Typical uses:
 
 - Inject a correlation header like `X-Request-ID` or a tracing span ID
 - Refresh a bearer token if it's near expiry
@@ -36,9 +36,9 @@ What you'll typically do here:
 type PostResponseHook func(resp *Response) error
 ```
 
-Fires once the response is fully built (status, headers, body buffered or streaming). You can read `resp.StatusCode`, `resp.Headers`, `resp.Timing`, `resp.Protocol`, the lot. Returning an error here is purely advisory. Hooks are observability, not control flow, so the response still flows back to the caller untouched. If you want to fail loud on a 5xx, do it in your call site, not the hook.
+Fires once the response is fully built (status, headers, body buffered or streaming). The hook can read `resp.StatusCode`, `resp.Headers`, `resp.Timing`, `resp.Protocol`, and the rest of the response surface. Returning an error here is advisory only. Hooks are observability, not control flow, so the response flows back to the caller untouched. To fail loud on a 5xx, do it at the call site, not the hook.
 
-What you'll typically do here:
+Typical uses:
 
 - Log status + timing for every response
 - Extract a `X-Auth-Token` from response headers and stash it
@@ -47,9 +47,9 @@ What you'll typically do here:
 
 ## Order and chaining
 
-Hooks fire in the order you registered them. Add three PreRequest hooks and they run 1, 2, 3 every request. PreRequest hooks short-circuit on the first error, so if hook 2 returns an error, hook 3 never fires and the request never goes out.
+Hooks fire in the order you registered them. Three PreRequest hooks run 1, 2, 3 on every request. PreRequest hooks short-circuit on the first error: if hook 2 returns an error, hook 3 never fires and the request never goes out.
 
-Same deal for PostResponse, except errors don't stop anything. Each hook runs to completion regardless.
+PostResponse runs the same order, but errors don't stop anything. Each hook runs to completion regardless.
 
 ## Wiping hooks
 
@@ -59,7 +59,7 @@ Same deal for PostResponse, except errors don't stop anything. Each hook runs to
 c.ClearHooks()
 ```
 
-There's also `c.Hooks().ClearPreRequest()` and `c.Hooks().ClearPostResponse()` if you only want to nuke one side.
+There's also `c.Hooks().ClearPreRequest()` and `c.Hooks().ClearPostResponse()` for clearing one side at a time.
 
 ## Example: log every URL, warn on errors
 
@@ -186,12 +186,12 @@ What you'll see on stdout:
 Two requests, four hook fires. The pre hook stamped both with `X-Request-ID: abc-123`, the post hook flagged the teapot.
 
 :::warning
-Hooks run on the request's hot path, synchronously, every single request. A hook that does network I/O or grabs a contended mutex tanks throughput. If your hook needs to hit a database or push to a queue, do it on a background goroutine / async task and return immediately. Heavy hooks turn a 50ms request into a 500ms one and you'll spend an afternoon wondering why.
+Hooks run on the request's hot path, synchronously, every single request. A hook that does network I/O or grabs a contended mutex tanks throughput. If your hook needs to hit a database or push to a queue, do it on a background goroutine / async task and return immediately. Heavy hooks turn a 50ms request into a 500ms one, and the cause is hard to spot from the call site.
 :::
 
 ## Pulling a token out of a response
 
-Quick pattern. Server sets `X-Auth-Token` on login. Stash it from a hook so the rest of your code can grab it without parsing every response by hand.
+A quick pattern. The server sets `X-Auth-Token` on login. Stash it from a hook so the rest of the code can grab it without parsing every response by hand.
 
 ```go
 var token string
@@ -204,11 +204,11 @@ c.OnPostResponse(func(resp *client.Response) error {
 })
 ```
 
-`GetHeader` is case-insensitive so you don't have to worry about whether the server sent `X-Auth-Token` or `x-auth-token`.
+`GetHeader` is case-insensitive, so the lookup matches whether the server sent `X-Auth-Token` or `x-auth-token`.
 
 ## Blocking a request at the gate
 
-Return an error from PreRequest and the request never goes out. Handy for kill-switches or allowlists.
+Returning an error from PreRequest cancels the request before it goes out. Useful for kill-switches or allowlists.
 
 ```go
 allowed := map[string]bool{"api.example.com": true}

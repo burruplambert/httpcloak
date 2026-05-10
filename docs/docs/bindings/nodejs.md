@@ -5,7 +5,7 @@ sidebar_position: 3
 
 # Node.js
 
-The Node.js binding wraps the cgo shared library through [koffi](https://koffi.dev/), a fast FFI lib that doesn't need a node-gyp build step. Both ESM (`import`) and CommonJS (`require`) work. TypeScript types ship in the package, no separate `@types` install.
+The Node.js binding wraps the cgo shared library through [koffi](https://koffi.dev/), an FFI lib that skips the node-gyp build step. Both ESM (`import`) and CommonJS (`require`) work. TypeScript types ship in the package, so no separate `@types` install is needed.
 
 ## Install
 
@@ -13,7 +13,7 @@ The Node.js binding wraps the cgo shared library through [koffi](https://koffi.d
 npm install httpcloak
 ```
 
-The main package pulls in koffi and a per-platform native binary as an `optionalDependencies` entry. So a Linux x64 user transparently gets `@httpcloak/linux-x64`, a macOS arm64 user gets `@httpcloak/darwin-arm64`, and so on. If npm picks the wrong one (rare on weird platforms or in Docker buildx setups), force the right one:
+The main package pulls in koffi and a per-platform native binary through `optionalDependencies`. A Linux x64 install transparently gets `@httpcloak/linux-x64`, a macOS arm64 install gets `@httpcloak/darwin-arm64`, and so on. When npm picks the wrong one (rare, but it happens on unusual platforms or in Docker buildx setups), force the correct package:
 
 ```bash
 npm install httpcloak @httpcloak/linux-x64
@@ -53,16 +53,16 @@ const { Session } = require("httpcloak");
 })();
 ```
 
-There's no `using` declaration in standard JS yet, so `try / finally` is how you guarantee `close()`. If your TypeScript target is `ES2024+` you can do `using s = new Session(...)` once we ship `Symbol.asyncDispose` support.
+There's no `using` declaration in standard JS yet, so `try / finally` is the way to guarantee `close()`. With a TypeScript target of `ES2024+`, `using s = new Session(...)` becomes available once `Symbol.asyncDispose` support ships.
 
 ## koffi vs napi
 
-Worth flagging upfront: this binding's FFI-based, not a node-native module. Two practical knock-ons:
+Worth flagging upfront: this binding is FFI-based, not a node-native module. Two practical knock-ons:
 
-- **No prebuild compile step.** `npm install` just downloads JS plus the per-platform `.so` / `.dylib` / `.dll`. Faster install, no compiler dependency.
-- **Different runtime constraints than typical native modules.** Worker threads can use the binding fine. Buffer ownership rules are spelled out per-method (FastResponse calls out which buffers are pool-managed in its docstring).
+- **No prebuild compile step.** `npm install` downloads JS plus the per-platform `.so` / `.dylib` / `.dll`. Faster install, no compiler dependency.
+- **Different runtime constraints than typical native modules.** Worker threads can use the binding fine. Buffer ownership rules are spelled out per-method, with FastResponse calling out which buffers are pool-managed in its docstring.
 
-If you've worked with koffi before, none of this is news. If you haven't, just know that calling into the lib has a small (microseconds) FFI overhead and the binding handles type marshalling for you.
+For anyone already familiar with koffi, none of this is new. For first-timers, the relevant facts are that calling into the lib carries a small (microseconds) FFI overhead and the binding handles type marshalling.
 
 ## `Session`
 
@@ -131,7 +131,7 @@ session.postSync(url, options?): Response;
 session.requestSync(method, url, options?): Response;
 ```
 
-These block the event loop. Don't use them inside an async server. They're here for scripts and CLIs where you genuinely don't have a loop to worry about.
+These block the event loop. Don't use them inside an async server. They exist for scripts and CLIs where the event loop isn't a concern.
 
 ### `RequestOptions`
 
@@ -150,7 +150,7 @@ These block the event loop. Don't use them inside an async server. They're here 
 }
 ```
 
-`fetchMode` overrides the auto-detected `Sec-Fetch-Mode` / `Sec-Fetch-Dest` / `Sec-Fetch-Site` triplet. Useful when the auto-sniff gets it wrong (POSTs to CORS endpoints without a JSON Accept header are the usual offender).
+`fetchMode` overrides the auto-detected `Sec-Fetch-Mode` / `Sec-Fetch-Dest` / `Sec-Fetch-Site` triplet. The override matters when the auto-sniff gets it wrong; POSTs to CORS endpoints without a JSON Accept header are the usual offender.
 
 ### Streaming
 
@@ -171,7 +171,7 @@ for await (const chunk of stream) {
 stream.close();
 ```
 
-It also exposes `readChunk(size)`, `readAll()`, and `iterate(chunkSize)` if you want explicit control.
+It also exposes `readChunk(size)`, `readAll()`, and `iterate(chunkSize)` for explicit control.
 
 ### Fast path
 
@@ -184,7 +184,7 @@ session.deleteFast(url, options?): FastResponse;
 session.patchFast(url, options?): FastResponse;
 ```
 
-`FastResponse` is sync-only and uses pool-managed buffers. Call `release()` when you're done so the buffer goes back. Don't hold the buffer across many requests without copying it first.
+`FastResponse` is sync-only and uses pool-managed buffers. Call `release()` when done with the response so the buffer returns to the pool. Don't hold the buffer across many requests without copying it first.
 
 ### Lifecycle
 
@@ -195,7 +195,7 @@ session.warmup(url, options?): void;
 session.fork(n?: number): Session[];
 ```
 
-`refresh` keeps cookies and TLS tickets, drops connections. `warmup` simulates a real page load. `fork` clones cookies and TLS state into N sibling sessions, each with its own connection pool.
+`refresh` keeps cookies and TLS tickets while dropping connections. `warmup` simulates a real page load. `fork` clones cookies and TLS state into N sibling sessions, each with its own connection pool.
 
 ### Persistence
 
@@ -206,7 +206,7 @@ Session.load(path: string): Session;       // static
 Session.unmarshal(data: string): Session;  // static
 ```
 
-`marshal()` returns JSON you can stuff into a database. `load` and `unmarshal` rebuild the session.
+`marshal()` returns JSON ready for a database. `load` and `unmarshal` rebuild the session from disk or the JSON string.
 
 ### Cookies
 
@@ -221,7 +221,7 @@ session.deleteCookie(name, domain?): void;
 session.clearCookies(): void;
 ```
 
-The flat `Record<string, string>` shape will get replaced with `Cookie[]` in a future major. Use `getCookiesDetailed` / `getCookieDetailed` if you want the new shape today.
+The flat `Record<string, string>` shape will get replaced with `Cookie[]` in a future major. `getCookiesDetailed` / `getCookieDetailed` already return the new shape.
 
 ### Proxies
 
@@ -257,7 +257,7 @@ session.setSessionIdentifier(sessionId: string): void;
 ## Conventions
 
 - camelCase everywhere. `getCookies`, `setProxy`, `clearCookies`, never `get_cookies`.
-- Promises by default. Sync siblings have a `Sync` suffix. Streams and the fast path are sync-only since they handle their own lifecycle.
+- Promises by default. Sync siblings carry a `Sync` suffix. Streams and the fast path are sync-only since they handle their own lifecycle.
 - TypeScript types ship in the package. `import type { SessionOptions, Response } from "httpcloak"` works without `@types`.
 - Errors throw `HTTPCloakError`. `r.raiseForStatus()` throws on `>= 400`.
 
@@ -286,13 +286,13 @@ session.setSessionIdentifier(sessionId: string): void;
 
 ## Concurrency
 
-Fire many concurrent `session.get()` calls from the same `Session` and you're fine. The cgo transport handles parallel dials and the Node side uses koffi's thread-pool offload so the event loop stays responsive.
+Many concurrent `session.get()` calls from the same `Session` work fine. The cgo transport handles parallel dials and the Node side uses koffi's thread-pool offload so the event loop stays responsive.
 
 What that means:
 
 - One session, many `await Promise.all([...])` calls. Fine.
 - Worker threads each holding their own `Session`. Also fine.
-- Sharing one `Session` across worker threads. Possible but you have to pass it via the koffi pointer dance. Most folks just create one per worker.
+- Sharing one `Session` across worker threads. Possible, but it requires passing the koffi pointer across the boundary. The simpler pattern is one `Session` per worker.
 
 For browser-tab-style parallelism with shared cookies, use `session.fork(n)`.
 
@@ -321,7 +321,7 @@ import {
 } from "httpcloak";
 ```
 
-`LocalProxy` runs an HTTP proxy server that applies the fingerprint to whatever HTTP client you point at it. Undici, fetch, curl, anything.
+`LocalProxy` runs an HTTP proxy server that applies the fingerprint to any HTTP client pointed at it. Undici, fetch, curl, anything that speaks HTTP-proxy.
 
 ## See also
 

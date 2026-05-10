@@ -5,9 +5,9 @@ sidebar_position: 6
 
 # MASQUE
 
-MASQUE is the new kid: HTTP/3's answer to "I want to tunnel UDP through a proxy". The client opens an HTTP/3 connection to the proxy, sends an Extended CONNECT request with `:protocol = connect-udp` against the well-known path, and on success uses HTTP/3 Datagrams (RFC 9297) to push UDP payload bytes back and forth.
+MASQUE is HTTP/3's answer to tunneling UDP through a proxy. The client opens an HTTP/3 connection to the proxy, sends an Extended CONNECT request with `:protocol = connect-udp` against the well-known path, and on success uses HTTP/3 Datagrams (RFC 9297) to push UDP payload bytes back and forth.
 
-In practice for httpcloak, the inner UDP payload is QUIC packets aimed at the real target. So you get QUIC inside QUIC. The outer QUIC encrypts your tunnel to the proxy, the inner QUIC encrypts your traffic to the target.
+For httpcloak, the inner UDP payload is QUIC packets aimed at the real target. So you get QUIC inside QUIC. The outer QUIC encrypts your tunnel to the proxy, the inner QUIC encrypts your traffic to the target.
 
 The relevant RFCs:
 
@@ -110,7 +110,7 @@ Console.WriteLine($"{r.StatusCode} {r.Body}");
 </TabItem>
 </Tabs>
 
-If you also need H1/H2 to go through a proxy, pair `udp_proxy` with `tcp_proxy`. The common shape: HTTP CONNECT for TCP, MASQUE for UDP.
+To send H1/H2 through a proxy as well, pair `udp_proxy` with `tcp_proxy`. The common shape: HTTP CONNECT for TCP, MASQUE for UDP.
 
 ## What's on the wire
 
@@ -134,7 +134,7 @@ The inner QUIC connection runs an entirely separate handshake against the actual
 
 httpcloak ships a small list of known MASQUE-capable providers in [proxy/masque_providers.go](https://github.com/sardanioss/httpcloak/blob/main/proxy/masque_providers.go). If your `https://` URL matches one of those hostnames it gets handled as MASQUE automatically. For any other provider, use `masque://` explicitly. That's the unambiguous form.
 
-You can extend the list at runtime:
+The list can be extended at runtime:
 
 ```go
 import "github.com/sardanioss/httpcloak/proxy"
