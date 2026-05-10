@@ -14,8 +14,8 @@ The model is N browser tabs from the same browser window. Same login, same cooki
 Forked siblings share the live state that defines the identity:
 
 - **Cookie jar.** Same pointer. A `Set-Cookie` from any sibling lands in the jar that every sibling (and the parent) reads from. Log in on the parent, fork, every child is logged in.
-- **TLS resumption tickets.** The H1, H2 and H3 session caches are shared. The first handshake on a fresh fork resumes from a ticket the parent already cached, so it lands on the 0-RTT path.
-- **ECH config cache.** Same encrypted-ClientHello blobs, no re-discovery needed.
+- **TLS resumption tickets.** The H1, H2, and H3 session caches are shared (the same `*ClientSessionCache` pointer lives on both transports). The first handshake on a fresh fork resumes from a ticket the parent already cached, so it lands on the 0-RTT path.
+- **ECH config (DNS-side).** The DNS HTTPS RR cache (`dns.echCache`) is process-wide, so any fork that dials a host the parent has already resolved skips the HTTPS RR lookup. The per-transport `echConfigCache` (the binding between a host and the exact config used to mint a session ticket) does NOT propagate; each fork builds its own as it dials, and a fork's first connection to a given host does one fresh HTTPS RR cache hit before populating the per-transport map.
 - **Custom fingerprint state.** Custom JA3, custom H2 settings, custom pseudo-header order, custom TCP fingerprint, header order. The full fingerprint surface copies over on fork.
 - **Cache validators.** ETag and Last-Modified entries snapshot at fork time so siblings start with believable conditional-request headers.
 

@@ -249,6 +249,16 @@ export interface SessionOptions {
   akamai?: string;
   /** Extra fingerprint options: { tls_alpn, tls_signature_algorithms, tls_cert_compression, tls_permute_extensions } */
   extraFp?: Record<string, any>;
+  /** TCP IP Time-To-Live in the SYN packet. 128 = Windows, 64 = Linux/macOS/iOS/Android. */
+  tcpTtl?: number;
+  /** TCP Maximum Segment Size option. 1460 for standard Ethernet. */
+  tcpMss?: number;
+  /** TCP Window Size in the SYN packet. 64240 = Windows 10/11, 65535 = Linux/macOS. */
+  tcpWindowSize?: number;
+  /** TCP Window Scale option exponent. 8 = Windows, 7 = Linux/Android, 6 = macOS/iOS. */
+  tcpWindowScale?: number;
+  /** IP Don't-Fragment flag. true on every modern client. */
+  tcpDf?: boolean;
 }
 
 export interface RequestOptions {
@@ -313,8 +323,11 @@ export class Session {
   /** Refresh the session by closing all connections while keeping TLS session tickets.
    * This simulates a browser page refresh - connections are severed but 0-RTT
    * early data can be used on reconnection due to preserved session tickets.
+   *
+   * @param switchProtocol - Optional protocol to switch to ("h1", "h2", "h3").
+   *   Overrides any switchProtocol set at construction time. Persists for future refresh() calls.
    */
-  refresh(): void;
+  refresh(switchProtocol?: "h1" | "h2" | "h3"): void;
 
   // Synchronous methods
   /** Perform a synchronous GET request */

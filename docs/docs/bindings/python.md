@@ -180,7 +180,7 @@ Session.unmarshal(data: str) -> Session
 ### Cookie management
 
 ```python
-session.cookies                                # Dict[str, str] property (flat name->value shape)
+session.cookies                                # property -> List[Cookie] (delegates to get_cookies)
 session.get_cookies() -> List[Cookie]          # full Cookie objects
 session.get_cookies_detailed() -> List[Cookie] # alias of get_cookies
 session.get_cookie(name) -> Optional[Cookie]   # full Cookie object or None
@@ -191,7 +191,7 @@ session.delete_cookie(name, domain="")
 session.clear_cookies()
 ```
 
-`get_cookies` and `get_cookies_detailed` both return the same `List[Cookie]`; same with `get_cookie` and `get_cookie_detailed`. Each `Cookie` carries `name`, `value`, `domain`, `path`, `expires`, `max_age`, `secure`, `http_only`, `same_site`. The `session.cookies` property still returns the flat `Dict[str, str]` shape for quick lookups by name only.
+`get_cookies` and `get_cookies_detailed` both return the same `List[Cookie]`; same with `get_cookie` and `get_cookie_detailed`. The `session.cookies` property delegates to `get_cookies()` and returns the same `List[Cookie]` value despite the older `Dict[str, str]` type annotation it still carries (the annotation is queued to flip in a future release; the runtime already returns the list). Build the flat name-to-value dict yourself when you need it: `{c.name: c.value for c in session.cookies}`. Each `Cookie` carries `name`, `value`, `domain`, `path`, `expires`, `max_age`, `secure`, `http_only`, `same_site`.
 
 ### Proxy management
 
@@ -256,20 +256,34 @@ r.raise_for_status()
 
 The session is thread-safe for concurrent requests. The Go transport pool underneath handles parallel dials, and the Python wrapper holds the GIL only briefly when entering the C call.
 
-For asyncio: there's no native async surface on the public API yet. The lib has an internal async callback manager, but the typical pattern is to run httpcloak inside a `concurrent.futures.ThreadPoolExecutor` or `asyncio.to_thread`. That performs fine, since the request spends most of its time waiting on cgo with the GIL released.
+### Native asyncio
+
+Every sync request method has a `*_async` sibling that returns a coroutine and runs the underlying cgo call through the lib's async callback manager (no thread-pool round-trip). Available on every `Session`:
+
+```python
+async def get_async(url, *, params=None, headers=None, cookies=None,
+                    timeout=None, allow_redirects=True, auth=None) -> Response: ...
+async def post_async(url, *, data=None, json=None, files=None, **kw) -> Response: ...
+async def put_async(url, **kw) -> Response: ...
+async def delete_async(url, **kw) -> Response: ...
+async def patch_async(url, **kw) -> Response: ...
+async def head_async(url, **kw) -> Response: ...
+async def options_async(url, **kw) -> Response: ...
+async def request_async(method: str, url: str, **kw) -> Response: ...
+```
+
+Use them directly inside an asyncio event loop:
 
 ```python
 import asyncio
-
-async def fetch(s, url):
-    return await asyncio.to_thread(s.get, url)
+import httpcloak
 
 async def main():
     with httpcloak.Session(preset="chrome-146") as s:
         results = await asyncio.gather(
-            fetch(s, "https://example.com"),
-            fetch(s, "https://example.org"),
-            fetch(s, "https://httpbin.org/get"),
+            s.get_async("https://example.com"),
+            s.get_async("https://example.org"),
+            s.get_async("https://httpbin.org/get"),
         )
         for r in results:
             print(r.status_code)

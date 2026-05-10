@@ -64,6 +64,8 @@ const sidebars: SidebarsConfig = {
         'connection-lifecycle/session-save-restore',
         'connection-lifecycle/fork',
         'connection-lifecycle/observability',
+        'connection-lifecycle/session-manager',
+        'connection-lifecycle/dns-cache',
       ],
     },
     {

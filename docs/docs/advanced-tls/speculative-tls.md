@@ -150,9 +150,37 @@ If a proxy looks like it's misbehaving, turn the option off and re-test. A fresh
 
 Speculative TLS composes with the rest of the lib:
 
-- Works with H1, H2, and H3-over-MASQUE alike (whenever the dial path is HTTP CONNECT, which for H3 means MASQUE specifically).
+- Works on H1 and H2 dial paths (HTTP CONNECT through an HTTP or SOCKS5 proxy). H3 / MASQUE is a separate dial path that doesn't go through `SpeculativeConn` today, so the optimisation doesn't apply to QUIC traffic.
 - Works with `WithECHFrom`. The ECH-wrapped ClientHello is what gets pipelined.
 - Works with custom JA3 / JA4 fingerprints.
 - Works with session resumption. The speculative ClientHello can carry a PSK and resume in one round-trip.
 
-Stack speculative TLS, session resumption, and ECH on a proxy-heavy workload and the first request reaches data in one round-trip with the SNI encrypted on the way out. That's a Chrome-class profile very few clients ship with by default.
+Stack speculative TLS, session resumption, and ECH on a proxy-heavy H1/H2 workload and the first request reaches data in one round-trip with the SNI encrypted on the way out. That's a Chrome-class profile very few clients ship with by default.
+
+## When the optimisation backfires
+
+A small fraction of CONNECT proxies are strict about the byte order on the wire and reject a CONNECT request that arrives with extra application bytes pipelined behind it. Speculative TLS sends the CONNECT and the ClientHello back-to-back, so the proxy sees both in one read; a strict parser reads the CONNECT, replies, then chokes on the ClientHello bytes still in the buffer. The lib catches the failure and surfaces it as `transport.SpeculativeTLSError`:
+
+```go
+import "github.com/sardanioss/httpcloak/transport"
+
+resp, err := s.Get(ctx, url)
+if err != nil {
+    if transport.IsSpeculativeTLSError(err) {
+        // proxy rejected pipelining; retrying without speculative TLS
+    }
+}
+```
+
+There's a manual escape valve too: if the application has already learned that a particular proxy can't take pipelined bytes, mark it once and the lib stops trying speculative TLS for that proxy address for the rest of the process lifetime:
+
+```go
+transport.MarkProxyNoSpeculative("proxy.example.com:443")
+
+// optionally check before configuring a session
+if transport.IsProxyNoSpeculative("proxy.example.com:443") {
+    // skip WithSessionEnableSpeculativeTLS for this proxy
+}
+```
+
+The mark is a process-global set keyed by proxy address. It survives across sessions but doesn't persist across restarts; rebuild it on startup if your proxy pool has known-bad entries.

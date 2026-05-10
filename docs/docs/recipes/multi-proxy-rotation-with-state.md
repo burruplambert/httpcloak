@@ -35,9 +35,13 @@ Most residential proxy providers don't track session continuity themselves, so t
    - Pick a proxy from the pool.
    - Call `session.SetTCPProxy(url)` (plus `SetUDPProxy` if H3 is in play).
    - Send the request.
-3. Optional: call `session.Refresh()` to drop live connections without dropping tickets or cookies. The next request opens a new socket through the new proxy and resumes TLS at 0-RTT.
+`SetTCPProxy` rebuilds the underlying transports, so the next request dials fresh through the new proxy. There's no extra `Refresh()` to call between rotations.
 
 The session is the unit of state. Proxies are configuration that change underneath it.
+
+:::info `SetTCPProxy` already drops connections
+`SetTCPProxy` (and `SetProxy` / `SetUDPProxy`) close the H1, H2, and H3 transports and rebuild them with the new proxy config. An extra `Refresh()` between proxy swaps is a no-op at best; at worst it discards TLS session tickets that would otherwise resume on the next handshake. The example below leaves it out.
+:::
 
 ## Full example: rotating through 3 proxies
 
@@ -94,11 +98,6 @@ func main() {
         resp.Close()
         fmt.Printf("[req %d] proxy=%s status=%d body_len=%d\n",
             i, proxy, resp.StatusCode, len(body))
-
-        // Refresh between requests to drop the live connection.
-        // Tickets and cookies survive, next request resumes 0-RTT
-        // on whatever proxy is set at that point.
-        s.Refresh()
     }
 }
 ```
@@ -125,8 +124,6 @@ with httpcloak.Session("chrome-latest", timeout=30) as s:
             print(f"[req {i}] proxy={proxy} status={r.status_code}")
         except Exception as e:
             print(f"[req {i}] proxy={proxy} err={e}")
-
-        s.refresh()
 ```
 
 Full Python API lives at [/bindings/python](../bindings/python).
@@ -136,19 +133,19 @@ Full Python API lives at [/bindings/python](../bindings/python).
 
 ## What survives a rotation
 
-After `SetTCPProxy(newProxy)` (with or without `Refresh()`):
+After `SetTCPProxy(newProxy)`:
 
 | State | Survives? | Notes |
 |-------|-----------|-------|
-| TLS session tickets | Yes | 0-RTT on next handshake |
-| Cookie jar | Yes | Same jar, same cookies |
-| ECH config | Yes | No re-fetch needed |
-| Header order, preset config | Yes | Session-level, not per-conn |
-| HTTP/2 connection | No (after Refresh) | Drops cleanly, reopens on next req |
-| HTTP/3 connection | No (after Refresh) | Same |
-| TCP socket | No (after Refresh) | Reopens through new proxy |
+| Cookie jar | Yes | Lives on the session, not on the transport |
+| ECH config (DNS-side) | Yes | Cached per host in `dns.echCache`, process-wide |
+| Header order, preset, DNS cache | Yes | Session-level, not per-connection |
+| Custom JA3, H2 settings, TCP fingerprint | Yes | Re-applied to the rebuilt transports |
+| TLS session tickets | Depends | Default in-memory cache is per-transport, so lost on rebuild. A pluggable shared cache via `WithSessionCache` survives the swap |
+| HTTP/1, HTTP/2, HTTP/3 connections | No | Closed and rebuilt with the new proxy config |
+| TCP / UDP sockets | No | Reopen through the new proxy on the next request |
 
-The live socket is the only thing that drops, which is exactly the point of the swap. The new TCP connection rides through the new proxy IP, and every other piece of state stays attached to it.
+The point of the swap is that the live sockets drop. Cookies and the bigger session-level state stay attached, and any per-host TLS resumption that you want preserved across rotations needs a shared `SessionCacheBackend`.
 
 ## Rotation strategies
 
@@ -187,7 +184,6 @@ Stay on one proxy until something fails, then swap. Pool consumption stays low, 
 err := doRequest(s)
 if err != nil || isBadStatus(resp.StatusCode) {
     s.SetTCPProxy(nextProxy())
-    s.Refresh()
 }
 ```
 
@@ -221,7 +217,7 @@ s.SetTCPProxy(currentProxy)
 
 **Building a new session per proxy.** This is the failure mode the recipe exists to fix. A new session means new TLS state, new cookies, and a brand-new visitor on every rotation. One session, many proxies.
 
-**Forgetting `Refresh()`.** `SetTCPProxy` only takes effect on the next new connection. The existing TCP and TLS connection keeps running through the previous proxy until it closes on its own. Calling `Refresh()` after `SetTCPProxy` forces the swap on the next request.
+**Calling `Refresh()` after `SetTCPProxy`.** Don't. `SetTCPProxy` (via `Transport.SetProxy`) already closes the H1, H2, and H3 transports and rebuilds them with the new proxy config, so the next request dials fresh through the new proxy on its own. An extra `Refresh()` just throws away TLS session tickets that would otherwise resume on the next handshake.
 
 **Mixing UDP and TCP proxies.** H3 dials UDP and uses `SetUDPProxy`; H1 and H2 dial TCP and use `SetTCPProxy`. Setting one and leaving the other unset means protocol racing happily picks the unproxied side and bypasses your proxy entirely.
 

@@ -15,7 +15,7 @@ Use streaming for:
 - **Anything chunked.** When the server doesn't know the content length up front.
 
 :::info
-Pre-1.6.6, `DoStream` didn't update the cookie jar from the response. On an older version, upgrade or extract Set-Cookie headers by hand. The bug was fixed in 1.6.6.
+On older builds, `DoStream` didn't update the cookie jar from the response. The fix is queued for the next release (commit `e3acf96`) and will land alongside the IPv6 source-binding hardening. Upgrade once it ships, or extract Set-Cookie headers by hand on builds that predate it.
 :::
 
 ## The shape
@@ -166,16 +166,16 @@ Closing partway through is fine. The lib reads-and-discards the rest in the back
 
 To know the size up front, fire a `HEAD` request first, read `Content-Length` from the response headers, then `DoStream()` the GET. Most servers send a length on HEAD even when they switch to chunked on GET.
 
-## Cookie jar parity (since 1.6.6)
+## Cookie jar parity (queued for next release)
 
-Streaming responses go through the same cookie extraction path as regular ones. `Set-Cookie` headers from the response, including any in-stream redirect the lib resolved before handing you the body, land in the session jar.
+Once shipped, streaming responses go through the same cookie extraction path as regular ones. `Set-Cookie` headers from the response, including any in-stream redirect the lib resolved before handing you the body, land in the session jar.
 
-Before 1.6.6, streaming bypassed the jar update and you'd silently miss cookies from streamed endpoints. The fix landed in [#5491c85](../changelog), so `Do` and `DoStream` now behave identically.
+Before this fix, streaming bypassed the jar update and you'd silently miss cookies from streamed endpoints. The patch lives at commit [`e3acf96`](../changelog) and is queued for the next tagged release (post-1.6.6); after it ships, `Do` and `DoStream` behave identically.
 
-For older versions where upgrading isn't an option:
+For builds that predate the fix:
 
 ```go
-// Manual cookie extraction from a streamed response, pre-1.6.6 workaround.
+// Manual cookie extraction from a streamed response, pre-fix workaround.
 for _, sc := range stream.Headers["Set-Cookie"] {
     // parse sc with net/http or store as raw and inject on next request
 }

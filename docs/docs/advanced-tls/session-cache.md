@@ -207,6 +207,37 @@ Capacity: the local in-process cache evicts at 32 entries (`TLSSessionCacheMaxSi
 
 Observability: wire the error callback into your metrics layer with operation as a label (`get`, `put`, `put_serialize`, etc). A spike on `put` errors usually means Redis is back-pressured or out of memory. A spike on `get` with a non-zero hit rate elsewhere usually means a network split between the worker and the backend. Empty error stream plus low resumption rate means your TTL is too short or the keys aren't matching across replicas (check that all replicas use the same preset string, since the preset is part of the key).
 
+## Direct `PersistableSessionCache` use
+
+Most callers wire a backend through `WithSessionCache` and never touch the cache type directly. For the cases that need it (custom transports, tooling that pre-populates the cache from a saved snapshot, tests that want to inject and inspect tickets), the type lives in `transport/tls_cache.go`:
+
+```go
+import "github.com/sardanioss/httpcloak/transport"
+
+cache := transport.NewPersistableSessionCache(preset, protocol, errCb)
+// or with a backend already attached
+cache := transport.NewPersistableSessionCacheWithBackend(preset, protocol, backend, errCb)
+
+cache.SetBackend(backend, preset, protocol, errCb) // swap the backend at runtime
+cache.SetSessionIdentifier("alice")                 // namespace the keys
+id := cache.GetSessionIdentifier()
+cache.SetErrorCallback(newCb)                       // hot-swap the error sink
+
+state, _ := cache.Get(ctx, host, port)              // raw lookup, bypasses tls.Config wiring
+cache.Put(ctx, host, port, state)                   // raw insert
+
+// snapshot helpers for save / restore flows
+blob, _ := cache.Export()                           // []byte JSON, all entries
+_ = cache.Import(blob)                              // load entries back
+
+cache.Clear()                                       // drop everything (local + backend, scoped to identifier)
+n := cache.Count()                                  // count of in-memory entries
+```
+
+`Export` / `Import` round-trip the in-memory state as a JSON blob, useful for warming a fresh process with the previous run's tickets without touching a network backend. `Clear` deletes every entry that lives under the cache's preset / protocol / identifier prefix; it doesn't reach into other identifiers' keyspaces.
+
+The `protocol` argument is one of `"h1"`, `"h2"`, `"h3"`, matching the wire-protocol slot a ticket binds to. Mixing protocols in one cache instance isn't supported; each protocol gets its own `PersistableSessionCache` under the hood, and `WithSessionCache` builds them in pairs (or triples when H3 is in play) for you.
+
 ## Picking a backend
 
 Redis is the obvious default. It does per-key TTL, it's fast, and the `go-redis` client handles pipelining and reconnection. For a fleet under a few hundred RPS at peak, a single Redis instance is enough. Past that, look at Redis Cluster or a sharded setup, since the workload is mostly small reads and writes that distribute well across keys.

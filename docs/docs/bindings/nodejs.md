@@ -190,12 +190,12 @@ session.patchFast(url, options?): FastResponse;
 
 ```ts
 session.close(): void;
-session.refresh(): void;
+session.refresh(switchProtocol?: "h1" | "h2" | "h3"): void;
 session.warmup(url, options?): void;
 session.fork(n?: number): Session[];
 ```
 
-`refresh` keeps cookies and TLS tickets while dropping connections. `warmup` simulates a real page load. `fork` clones cookies and TLS state into N sibling sessions, each with its own connection pool.
+`refresh` keeps cookies and TLS tickets while dropping connections. The optional `switchProtocol` argument forces the next request onto the named protocol and persists for future `refresh()` calls until cleared (works at runtime even though the published `.d.ts` declares `refresh(): void`; cast to `any` from TS until the typings catch up). `warmup` simulates a real page load. `fork` clones cookies and TLS state into N sibling sessions, each with its own connection pool.
 
 ### Persistence
 

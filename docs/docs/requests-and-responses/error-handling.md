@@ -170,6 +170,84 @@ These come back as a populated `Response` with a status code, not as an error:
 
 The HTTP exchange completed and the server replied. Whether the caller treats it as a failure is business logic, not a transport concern.
 
+## Typed errors (Go)
+
+The transport package wraps every network-side error in a `transport.TransportError` carrying enough context to skip string-matching the message. The struct is what `errors.As` unwraps into, and the package ships predicates for the common questions.
+
+```go
+type TransportError struct {
+    Op       string  // "dial", "tls_handshake", "request", "dns_resolve", ...
+    Host     string
+    Port     string
+    Protocol string  // "h1", "h2", "h3"
+    Cause    error   // the underlying net/tls/dns error
+    Category error   // ErrConnection, ErrTLS, ErrDNS, ErrTimeout, ErrProxy, ErrProtocol, ErrRequest, ErrResponse, ErrClosed
+    Retryable bool
+}
+```
+
+`TransportError` implements `Error`, `Unwrap`, and `Is`. `Is(target)` matches on either the category sentinel (`ErrTLS`, `ErrDNS`, etc.) or the wrapped cause, so `errors.Is(err, transport.ErrTLS)` works whether the error came back from the lib's TLS dial or from a deeper cause that string-matches a TLS keyword.
+
+The five predicates cover the common branches without you having to reach into the struct yourself:
+
+```go
+import "github.com/sardanioss/httpcloak/transport"
+
+if transport.IsTimeout(err) { /* deadline / i/o timeout */ }
+if transport.IsTLSError(err) { /* handshake / cert / x509 */ }
+if transport.IsDNSError(err) { /* lookup failed */ }
+if transport.IsConnectionError(err) { /* refused / reset / unreachable */ }
+if transport.IsProxyError(err) { /* proxy hop failed */ }
+```
+
+When you want the structured fields:
+
+```go
+var te *transport.TransportError
+if errors.As(err, &te) {
+    log.Printf("op=%s host=%s:%s proto=%s retryable=%v cause=%v",
+        te.Op, te.Host, te.Port, te.Protocol, te.Retryable, te.Cause)
+
+    if te.Retryable {
+        // one safe place to gate retries: the wrapper already decided
+    }
+}
+```
+
+`Retryable` is the lib's opinion on whether the underlying cause is worth retrying. Timeouts and DNS failures are flagged retryable; TLS handshake failures and proxy auth errors are not. The retry config (`WithRetryConfig`) reads this same flag, so a custom retry loop and the built-in retry agree on which errors to bounce.
+
+### `ALPNMismatchError`
+
+A separate type, returned from H2 dials when the server's TLS hello negotiates `http/1.1` instead. The error carries the live `*utls.UConn` so the H1 path can reuse it without a fresh handshake.
+
+```go
+var ame *transport.ALPNMismatchError
+if errors.As(err, &ame) {
+    // ame.TLSConn is the open TLS conn, ame.Negotiated is "http/1.1"
+}
+```
+
+You usually don't see this surface in user code; the lib handles it internally inside `doAuto` and the H2 race. It matters when you're driving the transport manually.
+
+### `HTTPError`
+
+Wraps a non-success response in a typed error for callers who explicitly opted into "raise on bad status". Returned from `Response.RaiseForStatus()` (and the binding equivalents) and from any caller that uses `transport.NewHTTPError`:
+
+```go
+type HTTPError struct {
+    StatusCode int
+    Status     string
+    Body       []byte
+    Headers    map[string]string
+}
+
+(*HTTPError).IsClientError() bool   // 4xx
+(*HTTPError).IsServerError() bool   // 5xx
+(*HTTPError).IsRetryable()  bool    // 408, 425, 429, 500, 502, 503, 504
+```
+
+The default response handler does NOT raise on 4xx/5xx. You opt in with `RaiseForStatus()` per response, or by wiring a hook that emits `HTTPError` from a status filter. See [Hooks](./hooks) for the per-status pattern.
+
 ## Retry guidance
 
 :::warning

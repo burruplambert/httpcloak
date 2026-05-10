@@ -115,7 +115,7 @@ The preset registry and the data structures behind it.
 - `ja3.go`: JA3 string parser and TLS spec builder.
 - `headers.go`: header order and value handling.
 - `preset_pool.go`: round-robin or random rotation across multiple presets.
-- `priority_table_test.go` (paired with the runtime piece in transport): RFC 9218 priority handling for `sec-fetch-dest` driven priorities.
+- `priority_table_test.go`: golden tests for the runtime priority table. The runtime types (`ResourcePrioritySpec`, `PriorityTable map[string]ResourcePrioritySpec`) live alongside the JSON parser in `custom_preset.go`, and `presets.go` exposes the `H2PriorityFor(dest)` accessor that emits the per-request RFC 9218 priority header and RFC 7540 stream weight.
 
 ### `proxy/`
 
@@ -137,7 +137,7 @@ DNS resolution.
 
 ### `protocol/`
 
-The IPC layer for the daemon binary (`httpcloak-daemon`). Languages other than Go (Python, Node.js, .NET) talk to the daemon over stdin/stdout JSON. Not relevant for direct Go callers, but `protocol/types.go` defines `SessionConfig`, which the root package's `NewSession` builds internally.
+Defines `SessionConfig`, the JSON-shaped struct the root package's `NewSession` builds internally and that the cgo entry points consume from the bindings. Not relevant for direct Go callers. The package docstring still talks about a daemon and stdin/stdout JSON. That was an early design that was never shipped. The bindings (Python, Node.js, .NET) all link the cgo-built shared library directly via FFI / P/Invoke and call `httpcloak_session_new` and friends. There is no daemon binary.
 
 ### `client/`
 
@@ -145,10 +145,12 @@ A lower-level client surface that predates the unified root API. New code should
 
 ### Other directories
 
-- `bindings/`: language SDKs (Python, Node.js, .NET) that wrap the daemon or link against the C library.
-- `pool/`: connection pooling primitives.
+- `bindings/`: language SDKs (Python, Node.js, .NET) that link against the cgo-built shared library and call its exported entry points directly.
+- `pool/`: connection pooling primitives. **Internal / advanced.** The package exports `HostPool`, `QUICHostPool`, `Manager`, and `QUICManager` plus their methods because the transport layer needs them, but they're not part of the supported user-facing surface. Most callers reach the pools through `Session` and `Transport`. Reach into `pool/` only when building a custom transport on top of the lib.
 - `streaming/`: streaming-body request helpers.
 - `extensions/`: uTLS extension shims.
+
+The same caveat applies to `proxy/socks5_*.go` (`SOCKS5Dialer`, `SOCKS5UDPConn` and friends) and the lower-level transport entry points listed in [Observability](../connection-lifecycle/observability). They show up in GoDoc because Go has no friend-package mechanism, but treat them as internal unless you're explicitly extending the lib's transport stack.
 
 
 

@@ -18,7 +18,7 @@ The dispatcher in `transport/transport.go` is one function, `doAuto`. The steps 
 2. Otherwise fire two goroutines: one dials H3 over UDP via QUIC, the other dials H2 over TCP+TLS.
 3. Take the first success. Cancel the loser.
 4. If H2's TLS handshake came back with `http/1.1` in ALPN (`ALPNMismatchError`), reuse that same TLS connection for an H1 request. No second handshake.
-5. If both attempts time out (default budget around 6 seconds), the lib tries H2 directly as a last resort, then H1.
+5. If both attempts fail (or the 6-second race budget elapses), fall through to H1 on a fresh TCP connection. There's no extra H2 retry; H2 already had its shot inside the race.
 6. Cache the winning protocol in `protocolSupport[host]` so the next request to the same host skips the race.
 
 The race lives in `raceH3H2`. It dodges the 5-second wall you'd hit when H3 went first and the network silently swallowed UDP/443. With the race, H2 fills in the moment TCP comes back, usually under 200ms.

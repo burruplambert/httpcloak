@@ -130,7 +130,7 @@ Console.WriteLine(r.Text);
 The session exposes the jar's contents through five methods:
 
 - `GetCookies()` returns the full list of `CookieInfo` records with domain, path, expiry, and flags
-- `GetCookiesDetailed()` is an alias of `GetCookies` returning the same list (kept for forwards-compat with bindings that distinguish the two shapes)
+- `GetCookiesDetailed()` is an alias of `GetCookies` in Go (both return the same `[]CookieInfo`). Bindings keep the two names because their `GetCookies` still returns the older flat name-to-value shape for backwards-compat; `GetCookiesDetailed` (and the `*_detailed` Python siblings) is the path that returns the full Cookie objects across all four surfaces. The bindings will collapse onto a single shape in a future major.
 - `SetCookie(...)` adds or updates a cookie programmatically
 - `DeleteCookie(name, domain)` removes one (pass an empty domain to wipe matches across every domain)
 - `ClearCookies()` empties the jar
@@ -138,7 +138,7 @@ The session exposes the jar's contents through five methods:
 These are useful for tests, debugging, and seeding the jar before the first request goes out.
 
 :::info DoStream parity
-`DoStream()` pulls cookies out of streamed responses too, since 1.6.6. Older versions you'll find in tutorials online didn't, so if you copy code from one of those, check the version first. Streaming and non-streaming requests now feed the same jar.
+`DoStream()` cookie-jar updates are queued for the next release (commit `e3acf96`). On builds that predate that commit, streamed responses bypassed the jar; on builds that ship it, `Do` and `DoStream` feed the same jar identically. See [Streaming Responses](../requests-and-responses/streaming-responses) for the workaround on older builds.
 :::
 
 ## What the jar does NOT do

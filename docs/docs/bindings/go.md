@@ -215,6 +215,31 @@ func (c *Client) Close()
 
 `Client` only takes `WithTimeout` and `WithProxy`. Anything else means switching to `Session`.
 
+### `client.Client` runtime mutators
+
+Both `*httpcloak.Client` and `*httpcloak.Session` are thin wrappers around the lower-level `*client.Client` from the `httpcloak/client` subpackage. That lower client carries a handful of runtime mutators the wrappers don't always re-export. Reach for them when you need to flip something mid-flight without rebuilding the session:
+
+```go
+import "github.com/sardanioss/httpcloak/client"
+
+c := client.NewSession("chrome-latest")   // or NewClient for stateless
+defer c.Close()
+
+c.SetPreset("firefox-148")                // swap the fingerprint
+c.SetTimeout(15 * time.Second)
+c.SetForceProtocol(client.ProtocolHTTP3)  // pin to H3 from now on
+c.EnableCookies()                         // turn the jar on after the fact
+c.DisableCookies()                        // or back off
+c.CloseQUICConnections()                  // tear down H3 only, keep H1/H2 pools
+c.SetBasicAuth("user", "pass")
+c.SetBearerAuth("eyJ...")
+c.ClearCookies()                          // wipe the jar
+```
+
+`SetForceProtocol` takes a `client.Protocol` value (`ProtocolAuto`, `ProtocolHTTP1`, `ProtocolHTTP2`, `ProtocolHTTP3`). `CloseQUICConnections` is the precise tool for "drop H3 because the network just blocked UDP" without touching the H1/H2 connection pool that's still serving live requests.
+
+`*httpcloak.Session.GetTransport()` returns the lower transport (different from `*client.Client`), and the transport carries its own runtime escape hatches; see [Observability](../connection-lifecycle/observability) for that surface. The `client.Client` ones above are higher in the stack and are the right fit when you want runtime control without dropping into the transport.
+
 ## Request struct
 
 ```go

@@ -208,3 +208,24 @@ For JA3 override **and** preset headers in the same session, use the JSON Preset
 - JA3 is deprecated for a reason. Modern anti-bot stacks key on JA4 / peetprint / akamai. Mirroring a Chrome JA3 while inheriting Chrome's H2 SETTINGS gets you the right JA4 / peetprint / akamai too, which is the case shown above. When your JA3 says one browser and your H2 says another, the result is inconsistent and easy to flag.
 - Setting `JA3` clears the preset's `client_hello` ID. The session rebuilds a ClientHello from the JA3 on every connection. uTLS handles it, but the result is lossy compared to a real browser ClientHelloID. JA3 doesn't capture extension data like ALPS, key share groups, or application-settings, so the resulting handshake is close to real Chrome but not identical. For byte-exact Chrome bytes, use a preset.
 - The `extras` (ALPN, SignatureAlgorithms, CertCompression, PermuteExtensions) are uTLS-specific knobs that ride alongside the JA3. They don't show up inside the JA3 string itself, but they do hit the wire.
+
+## Programmatic parsing
+
+The JA3 parser the lib uses internally is exported, useful for tools that validate JA3 strings before plugging them into a session, or that need a `*tls.ClientHelloSpec` for a custom transport without going through `WithCustomFingerprint`:
+
+```go
+import "github.com/sardanioss/httpcloak/fingerprint"
+
+spec, err := fingerprint.ParseJA3(
+    "771,4865-4866-...,0-23-65281-...,29-23-24,0",
+    nil, // optional *JA3Extras to layer ALPN / sigalgs / cert-compression on top
+)
+if err != nil {
+    // bad JA3 shape (wrong field count, malformed integers, unknown cipher / extension)
+}
+
+// quick presence check without a full parse
+hasGREASE := fingerprint.JA3HasExtension(ja3, "27")
+```
+
+`ParseJA3` returns a uTLS `ClientHelloSpec` that any uTLS-aware code path can use directly. `JA3HasExtension` is a fast `string`-level check for "does this JA3 list extension X" without building the full spec. Both return well-typed errors on malformed input rather than panicking.

@@ -152,7 +152,7 @@ FastResponse DeleteFast(string url, ...);
 FastResponse PatchFast(string url, byte[]? body = null, ...);
 ```
 
-`FastResponse` skips a few allocations and exposes `Body` as a `byte[]` from a pooled buffer. Dispose it (or call `Release()`) when done with the response so the buffer returns to the pool.
+`FastResponse` skips a few allocations and exposes `Content` as a `byte[]` that's already been copied out of the pooled native buffer at the C boundary. There's no `Release()` method and no `IDisposable` to pair with `using`; the `byte[]` is GC-managed like any other .NET array. The class is a value-shaped record you read and let the garbage collector recycle.
 
 ### Lifecycle
 
@@ -236,26 +236,28 @@ public sealed class Response
     public string Text { get; }
     public string Url { get; }
     public string Protocol { get; }       // "http/1.1", "h2", "h3"
-    public double Elapsed { get; }        // ms
+    public TimeSpan Elapsed { get; }
     public List<Cookie> Cookies { get; }
     public List<RedirectInfo> History { get; }
     public bool Ok { get; }               // true if StatusCode < 400
     public string Reason { get; }
     public string? Encoding { get; }
 
+    public string? GetHeader(string name);          // first value, case-insensitive
+    public string[] GetHeaders(string name);        // all values, case-insensitive
     public T? Json<T>();
     public void RaiseForStatus();
 }
 ```
 
-`Content` holds the raw response bytes; `Text` is the decoded string. `Json<T>()` parses `Text` using `System.Text.Json` with relaxed escaping and returns `T?` (nullable; null on parse failure or empty body). `RaiseForStatus()` throws `HttpCloakException` on `>= 400`.
+`Content` holds the raw response bytes; `Text` is the decoded string. `Elapsed` is a `TimeSpan` (use `.TotalMilliseconds` if you need a `double` in ms). `Json<T>()` parses `Text` using `System.Text.Json` with relaxed escaping and returns `T?` (nullable; null on parse failure or empty body). `RaiseForStatus()` throws `HttpCloakException` on `>= 400`. `FastResponse` exposes the same property surface plus a smaller fast-path constructor and is documented as a separate type in [Reference: FastResponse](#fast-path).
 
 ## Conventions
 
 - PascalCase everywhere. `GetCookies`, `SetProxy`, `ClearCookies`.
 - `Async` suffix on `Task<T>` returns.
 - `CancellationToken` parameter on all `*Async` methods. Wire it up at the call site.
-- `IDisposable` on `Session`, `StreamResponse`, `FastResponse`, `LocalProxy`. Pair every `new` with `using`.
+- `IDisposable` on `Session`, `StreamResponse`, `LocalProxy`, and `PresetPool`. Pair every `new` with `using`. `FastResponse` does NOT implement `IDisposable` (its content is a copied `byte[]`, no native handle to release).
 - Errors throw `HttpCloakException`.
 - Nullable annotations are on. `string?` allows null, `string` doesn't.
 
@@ -283,19 +285,76 @@ using var s = new Session(
 
 Setting `ja3` auto-enables TLS-only mode. See [Custom JA3](/fingerprinting/custom-ja3).
 
+## `HttpCloakHandler`: drop into `HttpClient`
+
+For codebases already wired around `HttpClient`, `HttpCloakHandler` is the .NET-idiomatic way to graft httpcloak's TLS fingerprinting onto the existing pipeline. It's a `DelegatingHandler` subclass that runs an internal `LocalProxy` and routes outbound requests through it, so the surrounding code keeps using `HttpClient`, redirects, cookies, and decompression as normal:
+
+```csharp
+using HttpCloak;
+
+using var handler = new HttpCloakHandler(preset: "chrome-latest");
+using var client = new HttpClient(handler);
+
+var response = await client.GetAsync("https://example.com");
+var body = await response.Content.ReadAsStringAsync();
+```
+
+Constructor signatures:
+
+```csharp
+new HttpCloakHandler(
+    string preset = "chrome-146",
+    string? proxy = null,
+    string? tcpProxy = null,
+    string? udpProxy = null,
+    int timeout = 30,
+    int maxConnections = 1000);
+
+new HttpCloakHandler(LocalProxy existingProxy);
+```
+
+The first form spins up its own `LocalProxy` and disposes it with the handler. The second form takes an existing `LocalProxy` and leaves disposal to the caller (so multiple handlers can share one proxy). `handler.Proxy`, `handler.ProxyUrl`, and `handler.GetStats()` reach the underlying proxy for diagnostics.
+
+For a `LocalProxy` you already own (configured with custom registered sessions, etc.), the same proxy hands out a `WebProxy` directly:
+
+```csharp
+using var proxy = new LocalProxy(port: 0, preset: "chrome-latest");
+using var client = new HttpClient(new HttpClientHandler {
+    Proxy = proxy.CreateWebProxy(),
+    UseProxy = true,
+});
+```
+
+`LocalProxy.CreateWebProxy()` returns a `System.Net.WebProxy`, and `LocalProxy.CreateHandler()` returns a fully-wired `HttpClientHandler` (proxy plus `UseProxy = true`). Pick whichever fits the call site you're integrating with.
+
+## ECH DNS server overrides
+
+```csharp
+HttpCloak.HttpCloakInfo.SetEchDnsServers(new[] { "1.1.1.1:53", "8.8.8.8:53" });
+string[] current = HttpCloak.HttpCloakInfo.GetEchDnsServers();
+HttpCloak.HttpCloakInfo.SetEchDnsServers(null);   // reset to defaults
+```
+
+Process-wide setting; affects every session and every ECH HTTPS RR query the binary makes. Use it when the system resolver doesn't return ECH HTTPS RR (corporate DNS, captive portals).
+
 ## Other types
 
 ```csharp
 HttpCloak.LocalProxy
 HttpCloak.PresetPool
-HttpCloak.SessionCacheBackend
 HttpCloak.HttpCloakException
 HttpCloak.MultipartFile     // for PostMultipart
 HttpCloak.Cookie
 HttpCloak.RedirectInfo
 HttpCloak.StreamResponse
 HttpCloak.FastResponse
+HttpCloak.HttpCloakHandler  // DelegatingHandler for HttpClient integration
+HttpCloak.HttpCloakInfo     // version, AvailablePresets, SetEchDnsServers, GetEchDnsServers
+HttpCloak.CustomPresets     // Describe / LoadFromJson / LoadFromFile / Unregister
+HttpCloak.Presets           // string constants (Presets.CHROME_148, etc.)
 ```
+
+`SessionCacheBackend` is Python and Node only; the .NET binding doesn't ship a managed wrapper today. The C entry points exist in `libhttpcloak`, so a future binding update can fold it in. Until then, the in-memory per-session ticket cache works as expected and only the cross-process distributed-cache use case isn't reachable from .NET.
 
 `LocalProxy` runs a local HTTP proxy server that applies the fingerprint to any HTTP client pointed at it. `PresetPool` and JSON loading are covered in [JSON preset builder](/fingerprinting/json-preset-builder). `SessionCacheBackend` plugs into [Session save and restore](/connection-lifecycle/session-save-restore).
 

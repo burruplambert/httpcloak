@@ -17,14 +17,13 @@ Each line is space-separated:
 <label> <client_random_hex> <secret_hex>
 ```
 
-The label tells Wireshark which secret this is. For TLS 1.3 each connection emits five lines:
+The label tells Wireshark which secret this is. For TLS 1.3 each connection emits four lines:
 
 ```
 CLIENT_HANDSHAKE_TRAFFIC_SECRET <client_random> <secret>
 SERVER_HANDSHAKE_TRAFFIC_SECRET <client_random> <secret>
 CLIENT_TRAFFIC_SECRET_0         <client_random> <secret>
 SERVER_TRAFFIC_SECRET_0         <client_random> <secret>
-EXPORTER_SECRET                 <client_random> <secret>
 ```
 
 For TLS 1.2 connections the format collapses to a single line:
@@ -32,6 +31,8 @@ For TLS 1.2 connections the format collapses to a single line:
 ```
 CLIENT_RANDOM <client_random> <master_secret>
 ```
+
+Wireshark only needs the four 1.3 traffic secrets to decrypt the application data; the lib's uTLS fork doesn't emit `EXPORTER_SECRET` or any 0-RTT-specific labels, and Wireshark doesn't ask for them when reading the keylog.
 
 `<client_random>` is 64 hex chars (32 bytes). `<secret>` is 64 or 96 hex chars depending on the cipher suite. Wireshark matches lines to captured connections by the ClientRandom field.
 
@@ -111,6 +112,25 @@ For H3 (QUIC), the same keys get written but the Wireshark preference to enable 
 | `SSLKEYLOGFILE=/tmp/k.log` env var   | Every session writes there              |
 | `WithKeyLogFile("/tmp/s1.log")` only | Only that session writes, others silent |
 | Both set                             | The explicit option wins for that session |
+
+## Process-wide writer (non-file destinations)
+
+`WithKeyLogFile` and `SSLKEYLOGFILE` both target a path on disk. For destinations that aren't files (a ring buffer, an S3 multipart uploader, a syslog pipe, an in-memory `bytes.Buffer` for tests), the lib exposes a process-wide writer:
+
+```go
+import (
+    "bytes"
+    "github.com/sardanioss/httpcloak"
+)
+
+var sink bytes.Buffer
+httpcloak.SetKeyLogWriter(&sink)
+defer httpcloak.SetKeyLogWriter(nil)   // detach when done
+
+// every session that doesn't have its own WithKeyLogFile now writes to sink
+```
+
+`SetKeyLogWriter` accepts any `io.Writer` and applies process-wide. Pass `nil` to detach. A session with an explicit `WithKeyLogFile` still wins for that session; the writer is the fallback for sessions that don't pin a path themselves. Internally this delegates to `transport.SetKeyLogWriter`, with a few sibling helpers worth knowing about for advanced cases (`transport.GetKeyLogWriter`, `transport.SetKeyLogFile(path)`, `transport.NewKeyLogFileWriter(path)`, `transport.CloseKeyLog()`); reach for those when you need explicit control over the file lifecycle.
 | Neither set                          | No keylog                               |
 
 ## When you actually need this

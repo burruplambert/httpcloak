@@ -35,7 +35,14 @@ This chapter is a tour of the surface. The types and functions all live in `gith
 | `FetchDestStyle` | `style` |
 | `FetchDestFont` | `font` |
 | `FetchDestXHR` | `empty` |
-| `FetchDestMedia`, `FetchDestEmbed`, `FetchDestObject`, `FetchDestManifest`, `FetchDestReport`, `FetchDestServiceWorker`, `FetchDestSharedWorker`, `FetchDestWorker` | matches the constant name |
+| `FetchDestMedia` | `media` |
+| `FetchDestEmbed` | `embed` |
+| `FetchDestObject` | `object` |
+| `FetchDestManifest` | `manifest` |
+| `FetchDestReport` | `report` |
+| `FetchDestServiceWorker` | `serviceworker` (lowercase, no separator) |
+| `FetchDestSharedWorker` | `sharedworker` (lowercase, no separator) |
+| `FetchDestWorker` | `worker` |
 
 `Sec-Fetch-Site` describes the relationship between where the request came from and where it's going:
 

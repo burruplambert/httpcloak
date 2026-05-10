@@ -175,10 +175,10 @@ When you set `Akamai`, the parser fills in only the slots that appear in your st
 A minimal patch is enough, and the rest of the H2 state stays correct:
 
 ```
-1::|||
+1:65536|0|0|m,a,s,p
 ```
 
-That's a valid akamai string that says "set HEADER_TABLE_SIZE to its default, leave everything else alone". Three or four fields is the practical minimum for the override to do anything useful.
+That's a complete akamai string that sets `HEADER_TABLE_SIZE` to 65536 and leaves WINDOW_UPDATE, PRIORITY, and pseudo-header order at the preset's values (zero / default). The parser requires exactly four pipe-separated fields (`SETTINGS|WINDOW_UPDATE|PRIORITY|PSEUDO`) and rejects empty SETTINGS values, so the absolute minimum is one valid `id:value` pair plus three placeholder fields.
 
 ## Verifying
 
@@ -195,3 +195,30 @@ If the reflected akamai string doesn't match exactly, the parser dropped a field
 :::warning
 `akamai_fingerprint_hash` is an MD5 of the akamai string with sorted SETTINGS keys. Two strings that differ only in SETTINGS order produce the same hash, so `1:65536;4:6291456` and `4:6291456;1:65536` hash identically even though the strings differ. Wire-level SETTINGS frame order still matters for the H2 fingerprinters that look past the basic akamai hash, since those check the unsorted string. Always send fields in the order the real browser does.
 :::
+
+## Programmatic parsing
+
+The `fingerprint` package exposes the parser directly. Useful when you've captured an akamai string from a real browser session and want to validate it before plugging into a preset, or when you're writing tooling that reads akamai strings out of a config file:
+
+```go
+import "github.com/sardanioss/httpcloak/fingerprint"
+
+settings, pseudoOrder, err := fingerprint.ParseAkamai(
+    "1:65536;2:0;4:6291456;6:262144|15663105|0|m,a,s,p",
+)
+if err != nil {
+    // string didn't match the SETTINGS|WINDOW_UPDATE|PRIORITY|PSEUDO shape
+}
+// settings is *fingerprint.HTTP2Settings ready to drop into a custom preset
+// pseudoOrder is the resolved [":method", ":authority", ":scheme", ":path"]
+```
+
+For richer introspection (which fields were present in the input vs which fields fell back to defaults), `ParseAkamaiDetailed` returns an `AkamaiPresence` struct alongside the settings. That's the right call when you need to reason about partial overrides:
+
+```go
+presence, err := fingerprint.ParseAkamaiDetailed("1:65536|||")
+// presence.HasSettings == true, but presence.HasWindowUpdate / HasPriority /
+// HasPseudoOrder == false. The preset's defaults stay in place for the empty fields.
+```
+
+Both parsers reject malformed input rather than silently filling defaults: a string with the wrong field count, an empty SETTINGS value, or a non-numeric SETTINGS pair returns an error. Validate user-supplied akamai strings through one of these before passing them into a preset and you avoid the parse-time crash that the `Akamai` session option would otherwise hit at first request.

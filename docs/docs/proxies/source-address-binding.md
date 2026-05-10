@@ -30,7 +30,7 @@ ip := pickRandomFromPool() // returns net.IP
 httpcloak.WithLocalAddrIP(ip)
 ```
 
-A related option, `WithSessionPreferIPv4()`, isn't about local binding but commonly comes up next to it. It opts the dialer out of Happy Eyeballs and forces v4 lookups. Use it on networks where IPv6 is half-broken.
+A related option, `WithSessionPreferIPv4()`, isn't about local binding but commonly comes up next to it. It flips the DNS cache's `PreferIPv4` flag, which biases address ordering so the IPv4 record sorts ahead of the AAAA record. Happy Eyeballs in the H3 dial path still races whatever addresses come back, but with v4 first the v4 leg gets the head start. Use it on networks where IPv6 is half-broken; the upshot in practice is that v4 wins the dial unless v6 is significantly faster.
 
 ## What it does at the socket layer
 

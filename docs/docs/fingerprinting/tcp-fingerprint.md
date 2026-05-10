@@ -44,13 +44,13 @@ fingerprint.MacOSTCPFingerprint()   // {TTL:64,  MSS:1460, WindowSize:65535, Win
 fingerprint.PlatformTCPFingerprint(platform string)
 ```
 
-`PlatformTCPFingerprint` takes one of `"Windows"`, `"macOS"`, or anything else (which falls through to Linux). It's the helper to reach for when the preset itself is platform-aware:
+`PlatformTCPFingerprint` takes one of `"Windows"`, `"macOS"`, or anything else (which falls through to Linux). The platform string is the capitalised form, not `runtime.GOOS`. The helper paired with it lives one struct over: `fingerprint.GetPlatformInfo().Platform` returns exactly the value `PlatformTCPFingerprint` expects. Together they're the right pair when the preset itself is platform-aware:
 
 ```go
-import "runtime"
-
-fp := fingerprint.PlatformTCPFingerprint(runtime.GOOS)
+fp := fingerprint.PlatformTCPFingerprint(fingerprint.GetPlatformInfo().Platform)
 ```
+
+Passing `runtime.GOOS` directly does NOT work; `runtime.GOOS` returns `"linux"` / `"windows"` / `"darwin"` (lowercase), none of which match the switch arms, so every host falls through to the Linux case.
 
 Pass any of these into `WithTCPFingerprint` and the dialer control callback wired into every fresh socket will set the matching `setsockopt` calls before connect.
 
@@ -123,7 +123,7 @@ How to stay coherent depends on which preset you pick:
 - `*-windows` presets (`chrome-148-windows`, `chrome-146-windows`, etc) pair with `WindowsTCPFingerprint()`.
 - `*-macos` presets pair with `MacOSTCPFingerprint()`.
 - `*-linux` presets pair with `LinuxTCPFingerprint()`.
-- Bare `chrome-latest` and `chrome-146` (no platform suffix) auto-detect the running OS at runtime via `GetPlatformInfo`, so on a Linux build host `chrome-latest` resolves to `chrome-148-linux`. Pair these with `PlatformTCPFingerprint(runtime.GOOS)` to track whichever variant the registry hands you.
+- Bare `chrome-latest` and `chrome-146` (no platform suffix) auto-detect the running OS at runtime via `GetPlatformInfo`, so on a Linux build host `chrome-latest` resolves to `chrome-148-linux`. Pair these with `PlatformTCPFingerprint(fingerprint.GetPlatformInfo().Platform)` to track whichever variant the registry hands you.
 - Custom presets need the call to match whatever User-Agent string you set on the preset.
 
 For session pools that span multiple personas, pre-build the fingerprint once and reuse it:
@@ -198,12 +198,12 @@ func TestTTLOnSYN(t *testing.T) {
 
 ## Bindings
 
-Python and .NET expose the TCP fingerprint fields directly on the `Session` constructor. Node.js does not (no `tcpTtl`-style options on `SessionOptions` at this release).
+All three bindings expose the TCP fingerprint fields on the `Session` constructor at runtime. The Node.js TypeScript declarations don't yet surface them, so TS callers either bypass the typings with a cast or extend their local `.d.ts` until the upstream typings are updated. Plain JavaScript works as written.
 
 | Binding | Exposed kwargs / parameters |
 | --- | --- |
 | Python | `tcp_ttl`, `tcp_mss`, `tcp_window_size`, `tcp_window_scale`, `tcp_df` |
-| Node.js | not exposed |
+| Node.js | `tcpTtl`, `tcpMss`, `tcpWindowSize`, `tcpWindowScale`, `tcpDf` (runtime; missing from `.d.ts`) |
 | .NET | `tcpTtl`, `tcpMss`, `tcpWindowSize`, `tcpWindowScale`, `tcpDf` |
 
 ```python
@@ -236,17 +236,21 @@ var r = s.Get("https://tls.peet.ws/api/all");
 Console.WriteLine(r.Text);
 ```
 
-For Node.js (and any other binding lacking direct exposure), the cross-language workaround is `LocalProxy` with a registered session. A `LocalProxy` instance running in Go applies the registered session's TCP fingerprint to every outbound connection that session handles. A Node client pointing at the proxy and tagging requests with the right session identifier gets the right TCP shape on the wire to the actual target.
+```js
+const { Session } = require("httpcloak");
 
-```go
-// Build the Go-side session with the TCP fingerprint set.
-s := httpcloak.NewSession("chrome-latest",
-    httpcloak.WithTCPFingerprint(fingerprint.WindowsTCPFingerprint()))
+// Plain JS: pass the kwargs as-is.
+const s = new Session({
+    preset: "chrome-latest",
+    tcpTtl: 128,
+    tcpMss: 1460,
+    tcpWindowSize: 64240,
+    tcpWindowScale: 8,
+    tcpDf: true,
+});
 
-// Start the proxy and register the session under an ID.
-lp, _ := httpcloak.StartLocalProxy(8080, httpcloak.WithProxyPreset("chrome-latest"))
-defer lp.Stop()
-lp.RegisterSession("win-tcp", s)
+// TypeScript: bypass typings until the .d.ts is updated.
+// const s = new Session({ preset: "chrome-latest", ...({ tcpTtl: 128 } as any) });
 ```
 
-A Python `requests` client now talking to `http://127.0.0.1:8080` with `X-HTTPCloak-Session: win-tcp` on each request gets the Go session's TLS fingerprint AND its TCP fingerprint applied to every upstream hop, with no Python-side socket changes. See [Local Proxy Server](/recipes/local-proxy-server) for the full pattern including the session registry and per-request session selection header.
+For arbitrary clients (curl, third-party SDKs, anything outside these three bindings), the cross-language workaround is `LocalProxy` with a registered session. A `LocalProxy` instance running in Go applies the registered session's TCP fingerprint to every outbound connection that session handles, and any client pointing at the proxy gets the right TCP shape on the wire to the actual target. See [Local Proxy Server](/recipes/local-proxy-server) for the full pattern including the session registry and per-request session selection header.

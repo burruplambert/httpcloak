@@ -30,7 +30,7 @@ Pick one by name, send a request, the wire bytes match the real browser.
 
 ### Chrome
 
-Versions 133, 141, 143, 144, 145, 146, 147, 148. Each version has per-OS variants:
+Versions 133, 141, 143, 144, 145, 146, 147, 148. The 143-148 line ships per-OS variants; 133 and 141 are desktop-only single presets without per-OS suffixes. Layout for the per-OS line (using 148 as the example):
 
 | Family | Variants |
 |---|---|

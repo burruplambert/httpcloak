@@ -75,13 +75,15 @@ err := p.Verify("example.com", peerCerts)
 
 Client-attached vs standalone: use Client-attached when httpcloak is doing the request and pinning should be enforced automatically on every response. Use standalone when chains come from somewhere else (a stored cert dump, a different transport, a custom dial) and the caller wants to invoke `Verify` directly.
 
-`AddPin` takes flexible input. The accepted forms are `sha256/...` prefixes, raw hex, or raw base64. The lib normalizes everything down to base64 internally:
+`AddPin` takes flexible input. The accepted forms are `sha256/...` prefixes, raw hex (64 contiguous chars, no spaces), and raw base64. The lib normalises everything down to base64 internally:
 
 ```go
 p.AddPin("sha256/YSxNUV05SLc2H4Z6kOXWCsUPPMenylyBVtogFlUiByE=")  // works (with prefix)
-p.AddPin("612c4d51 5d3948b7 361f867a 90e5d60a c50f3cc7 a7ca5c81 56da2016 55220721")  // works (hex, after stripping spaces)
+p.AddPin("612c4d515d3948b7361f867a90e5d60ac50f3cc7a7ca5c8156da201655220721")  // works (hex, contiguous)
 p.AddPin("YSxNUV05SLc2H4Z6kOXWCsUPPMenylyBVtogFlUiByE=")  // works (raw base64)
 ```
+
+Hex must be a single contiguous 64-character string. The normaliser strips the `sha256/` and `sha256:` prefixes, then converts a 64-char hex string to base64. It does NOT strip whitespace; a pin with spaces in the middle (`612c4d51 5d3948b7 ...`) lands in the pin set as the literal spaced string and never matches a real SPKI hash. Strip whitespace yourself before calling `AddPin`.
 
 ## Pin scoping with PinOption
 
@@ -121,7 +123,32 @@ if err != nil {
 
 The `ActualHashes` list contains the SPKI hash of every cert in the peer chain, leaf first. Handy for figuring out whether the wrong cert showed up or whether the right cert just rotated to a new key.
 
-## How to capture a pin
+## Computing pins from inside Go
+
+The shell pipeline below works for one-off captures. For programmatic pin capture (a daemon that re-pins as certs rotate, a test that grabs the live SPKI before pinning), the `client` package exposes the helper directly:
+
+```go
+import "github.com/sardanioss/httpcloak/client"
+
+hash := client.CalculateSPKIHash(cert)            // *x509.Certificate -> base64 SPKI hash
+hashes := client.CalculateChainHashes(chain)      // []*x509.Certificate -> []string
+```
+
+The hash is SHA-256 of the certificate's `RawSubjectPublicKeyInfo`, base64-encoded with standard padding. That's the same value the openssl pipeline produces, byte for byte.
+
+Inspecting an active pinner's state is a single call:
+
+```go
+pins := c.CertPinner().GetPins()        // []client.CertificatePin
+for _, p := range pins {
+    fmt.Printf("host=%s subdomains=%v hash=%s type=%s\n",
+        p.Host, p.IncludeSubdomains, p.Hash, p.Type)
+}
+```
+
+`CertificatePin` carries `Hash`, `Host`, `IncludeSubdomains`, and `Type` (a `client.PinType` enum, `PinTypeSPKI` today; the type is there so future pin shapes can land without breaking callers).
+
+## How to capture a pin from the shell
 
 The one-liner. Pipe the cert into openssl, extract the public key, hash the DER, base64-encode it:
 

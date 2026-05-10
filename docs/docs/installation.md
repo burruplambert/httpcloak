@@ -17,7 +17,7 @@ import TabItem from '@theme/TabItem';
 go get github.com/sardanioss/httpcloak
 ```
 
-Requires Go 1.22+. The Go core has no cgo dependency.
+Requires Go 1.26+ (matches the version in the module's `go.mod`). The Go core has no cgo dependency.
 
 </TabItem>
 <TabItem value="python" label="Python">

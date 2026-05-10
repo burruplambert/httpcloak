@@ -33,7 +33,7 @@ The H3 ALPN ID is `h3`. The lib gets there one of two ways:
 - **Alt-Svc**. The H2 response carried `alt-svc: h3=":443"; ma=86400`. The lib remembers that for the cache window, and the next request to that host can race H3 against H2. See [auto-negotiation](./auto-negotiation).
 - **DNS HTTPS RR**. The HTTPS DNS record (RFC 9460) advertises ALPN values directly. If the resolver returns one with `h3` in it, the lib can try H3 on the first request without needing a previous H2 hit. Whether HTTPS RR fires depends on your DNS config (see `dns/`).
 
-Forcing H3 on a host that doesn't actually serve it ends in a QUIC handshake timeout. The default budget is around 5 seconds before the lib bails.
+Forcing H3 on a host that doesn't actually serve it ends in a QUIC handshake timeout. The default `QuicIdleTimeout` is 30 seconds, which doubles as the upper bound on a stuck handshake. Override it with `WithQuicIdleTimeout(d)` if you want to fail faster, or pass a tighter context deadline on the request itself. The 5-second figure that comes up next door belongs to the auto-negotiation race, not to forced H3.
 
 ## 0-RTT resumption
 

@@ -1,8 +1,12 @@
-// Package protocol defines the IPC message types for communication between
-// the httpcloak daemon and language SDKs (Python, Node.js, etc.)
+// Package protocol defines the JSON-shaped session configuration types that
+// the cgo entry points in bindings/clib consume from the language SDKs.
 //
-// The daemon reads JSON messages from stdin and writes responses to stdout.
-// Each message is a single JSON object followed by a newline.
+// The original design called for a separate httpcloak-daemon binary that
+// would speak JSON over stdin/stdout, which is why this package still ships
+// the MessageType / SessionCreateRequest / Response shapes. That daemon was
+// never released. The bindings (Python, Node.js, .NET) link against the
+// cgo-built shared library directly and call the C entry points; SessionConfig
+// here is the shape the root package's NewSession marshals internally.
 package protocol
 
 // MessageType represents the type of IPC message
