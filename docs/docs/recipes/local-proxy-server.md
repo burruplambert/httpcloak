@@ -12,7 +12,7 @@ You've already got a Python scraper. Or a Node service running on Undici. Or a P
 
 It's a drop-in. No SDK install in the target language, no code changes beyond a proxy URL in your client config. Anything that speaks "HTTP proxy" works: `requests`, `fetch`, `curl`, Undici, `HttpClient`, Playwright, your Bash one-liner from 2019.
 
-The biggest payoff is the Undici / Playwright combo. Playwright drives a real Chrome and ships authentic browser headers, but the TLS underneath ends up using whatever Undici / Node hands it, which fingerprints as Node not Chrome. Point Playwright at a `LocalProxy` running in TLS-only mode and the wire bytes match Chrome again, with Playwright's headers untouched. Same trick works for any Node app on Undici.
+The combo people actually want this for is Undici and Playwright. Playwright runs a real Chrome, ships legit Chrome cookies, real headers, the lot. But the TLS underneath rides on Undici / Node, which fingerprints as Node and gets flagged anyway. Pretty annoying when you've spent a whole afternoon getting Playwright to look human only for the bot-detection vendor to clock you on the very first byte. Point Playwright at a `LocalProxy` in TLS-only mode and the wire bytes match real Chrome again, your headers stay untouched. Same fix works for any Node app sitting on Undici.
 
 ## Quick start
 
@@ -108,15 +108,15 @@ The proxy binds to `127.0.0.1` only, never `0.0.0.0`. That's deliberate. You don
 - **HTTP-proxy-style request** (`GET http://target/path HTTP/1.1`): the proxy forwards through `Session.DoStream()` and the full TLS+H2 fingerprint stack lights up. This is the path where fingerprinting actually happens.
 - **CONNECT tunnel** (`CONNECT target:443 HTTP/1.1`): the proxy opens a raw TCP tunnel to the target. TLS happens between the client and the target. The proxy is just plumbing. Fingerprinting is whatever the client's TLS stack does.
 
-Most HTTP clients use CONNECT for HTTPS by default, which means by default you'd get a passthrough tunnel and no fingerprinting. There's a header to flip that:
+Catch is, every HTTP client out there CONNECT-tunnels for HTTPS by default. Which means by default LocalProxy is just a fancy TCP pipe and your fingerprinting is doing absolutely nothing. There's a header that flips it:
 
 ```
 X-HTTPCloak-Scheme: https
 ```
 
-Send a regular HTTP-proxy-style request to LocalProxy with this header set, and the proxy upgrades the URL to HTTPS internally and runs it through `Session.DoStream()`. Standard HTTP proxy client, full HTTPS fingerprinting, no CONNECT involved. This is the trick that makes Undici and friends actually pick up the fingerprint.
+Send an HTTP-proxy-style request with this header on it, and the proxy upgrades the URL to HTTPS internally and runs it through `Session.DoStream()`. Standard HTTP proxy client, real TLS fingerprinting, no CONNECT in the picture. Without this header, your client just CONNECT-tunnels and the bytes on the wire are still your client's TLS stack, not httpcloak's. Pure cosmetics.
 
-Plain HTTP requests (no scheme upgrade) don't run through Session at all. They get forwarded by a stock `http.Client` because there's no TLS to fingerprint. Faster, no overhead.
+Plain HTTP requests (no scheme upgrade) skip Session entirely. They get forwarded by a stock `http.Client` because there's no TLS to fingerprint anyway. Faster, no overhead, no point doing the dance.
 
 ## Options
 
@@ -154,16 +154,16 @@ The `HTTPCloak` scheme is the per-request signal. The proxy strips this header b
 
 ## TLSOnly mode
 
-This is the Undici / Playwright drop-in pattern.
+This is what TLSOnly is for. It's the whole reason the flag exists.
 
-By default, `LocalProxy` applies the preset's HTTP headers (User-Agent, sec-ch-ua, Accept-Language, the works). That's right when your client is a stock `requests` or `HttpClient` and you want the lib to handle headers for you.
+By default, `LocalProxy` slaps the preset's HTTP headers on every request. User-Agent, sec-ch-ua, Accept-Language, the lot. Right move when your client is stock `requests` or `HttpClient` because those clients ship a User-Agent like `python-requests/2.31.0` which would absolutely cook you on any modern target.
 
-It's wrong when your client already ships authentic Chrome headers. Playwright drives a real Chrome, sees real Chrome cookies, sends real Chrome headers in the right order. If you let `LocalProxy` rewrite those, you're stomping on real headers with preset headers and the result is a worse fingerprint, not better.
+Wrong move when your client's already shipping legit Chrome headers. Playwright runs a real Chrome, real Chrome cookies, real Chrome headers in the right order. If you let `LocalProxy` shove its own headers in, you're stepping on actual real-browser headers with preset stand-ins. The fingerprint gets worse, not better. Bruh.
 
-`WithProxyTLSOnly()` flips that. The proxy skips its own header set, passes the client's headers through unchanged, and only fingerprints the TLS layer. Combined with `X-HTTPCloak-Scheme: https`, you get:
+`WithProxyTLSOnly()` switches that off. The proxy keeps its hands off your headers, just passes them straight through, and only fingerprints the TLS layer. Combined with `X-HTTPCloak-Scheme: https`, you get the actual win:
 
 - Playwright's authentic headers, untouched
-- httpcloak's TLS handshake on the wire (uTLS, real Chrome cipher list, extension order, the lot)
+- httpcloak's TLS handshake on the wire (uTLS, real Chrome cipher list, extension order, the whole shape)
 
 Wire it up like this from a Node service running Undici:
 
@@ -236,7 +236,7 @@ proxy.close()
 </TabItem>
 </Tabs>
 
-When NOT to use `TLSOnly`: any time the client doesn't ship authentic browser headers. Stock `requests`, generic Go `net/http`, plain `curl` without `--user-agent`. In those cases let the preset headers do their job.
+When NOT to use `TLSOnly`: any time your client doesn't ship authentic browser headers. Stock `requests`, generic Go `net/http`, plain `curl` without `--user-agent`. Those clients leak `python-requests` or `Go-http-client` in their UA and there's no fingerprint trick that saves you from that. Let the preset headers do their job.
 
 ## Session registry
 
@@ -272,7 +272,7 @@ curl -x http://127.0.0.1:8080 \
 
 Unknown session IDs return a 400 from the proxy, so typos surface fast instead of silently falling back to the default session.
 
-The cache-key isolation thing matters more than it sounds. `RegisterSession` calls `session.SetSessionIdentifier(id)` under the hood. If you've also wired up a distributed TLS cache (next section), this stops alice's session tickets from accidentally getting reused on bob's connection. Without the identifier, two sessions hitting the same host would collide in the cache. With it, alice and bob each get their own cache namespace.
+The cache-key isolation thing matters way more than it sounds. `RegisterSession` calls `session.SetSessionIdentifier(id)` under the hood, which stops alice's TLS tickets from accidentally getting reused on bob's connection (assuming you've wired up the distributed cache, next section). Without the identifier, two sessions hitting the same host collide in the cache and you end up with bob looking like alice on the wire. Which is fine until alice gets banned and suddenly bob's banned too. Each registered session gets its own namespace, no cross-contamination.
 
 :::info
 The registry is a routing layer, not a state layer. Sessions you register stay normal `*Session` values. Same options, same cookie jar, same `Refresh()` semantics. You can swap their proxies on the fly with `SetTCPProxy`, the next request through the registry picks up the change.
@@ -280,9 +280,9 @@ The registry is a routing layer, not a state layer. Sessions you register stay n
 
 ## Distributed TLS session cache
 
-When you run more than one `LocalProxy` (say, behind a load balancer for horizontal scale), each instance starts cold. First request to any new host eats a full TLS handshake. Real Chrome avoids this by caching session tickets locally and resuming with 0-RTT on the next visit. The single-instance proxy does the same, but the cache is in-memory and per-instance. Two instances, two cold starts.
+Run more than one `LocalProxy` (load balancer, horizontal scale, whatever) and each instance starts cold. First request to any new host eats a full TLS handshake. Real Chrome dodges this by caching session tickets locally and resuming with 0-RTT next visit. Single-instance LocalProxy does the same. But the cache lives in process memory, so two instances means two cold starts, three means three. Doesn't scale.
 
-`WithProxySessionCache` plugs an external cache backend in. All instances share resumption state, the second-instance hit gets 0-RTT just like the first.
+`WithProxySessionCache` plugs in an external backend. All instances share resumption state, the second-instance hit gets 0-RTT just like the first one. Real Chrome behavior across a fleet, basically.
 
 The interface is small. `transport.SessionCacheBackend` only needs a `Get` and `Put`:
 
@@ -324,9 +324,9 @@ lp, _ := httpcloak.StartLocalProxy(8080,
 )
 ```
 
-The error callback fires on backend failures (network blip, Redis down). It's advisory, the proxy doesn't crash on cache errors, just logs and falls through to a fresh handshake. Pipe it to your logger or metrics system and forget about it.
+The error callback fires whenever the backend coughs (network blip, Redis OOM, whatever). It's advisory, not fatal. The proxy doesn't crash on cache misses, it just logs the error and falls back to a fresh handshake. Pipe the callback into your logger or metrics system and forget it exists.
 
-Cache keys include the session identifier when set (see registry section above), so a multi-tenant proxy where alice and bob share a Redis still keeps their tickets separated.
+Cache keys carry the session identifier when set (see registry section above), so a multi-tenant proxy where alice and bob both go through the same Redis stays clean. Their tickets never get crossed.
 
 ## Lifecycle and stats
 
@@ -355,7 +355,7 @@ Wire `Stop()` into your shutdown handler, scrape `Stats()` into Prometheus on a 
 
 ## Multi-proxy pattern
 
-You can run multiple `LocalProxy` instances in the same process on different ports, each pinned to a different fingerprint. Useful when one app needs to talk to two targets that expect different browsers, or when you want to A/B fingerprints behind feature flags.
+You can run multiple `LocalProxy` instances in the same process, different ports, each pinned to a different browser. Comes in handy when one app talks to two targets that expect different browsers, or when you want to A/B fingerprints behind a feature flag without redeploying.
 
 ```go
 chrome, _ := httpcloak.StartLocalProxy(8080, httpcloak.WithProxyPreset("chrome-latest"))
@@ -381,7 +381,7 @@ api = requests.get("https://api.example.com/...", proxies={"https": CHROME})
 legacy = requests.get("https://legacy.example.com/...", proxies={"https": FIREFOX})
 ```
 
-Each instance is independent. Independent connection pools, independent cookies, independent stats. Three proxies cost roughly 3x one proxy in memory and one extra goroutine per accept loop. Negligible at proxy scale.
+Each instance is its own thing. Own connection pool, own cookies, own stats counter. Three proxies cost roughly 3x the memory of one and one extra goroutine per accept loop, which is nothing at proxy scale. Don't lose sleep over it.
 
 ## Hitting the proxy from any language
 
