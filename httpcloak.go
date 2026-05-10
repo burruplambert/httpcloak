@@ -1154,6 +1154,42 @@ func Presets() []string {
 	return fingerprint.Available()
 }
 
+// ValidateSessionFile validates a session file without loading it.
+// Returns nil if the file at path is a valid httpcloak session blob,
+// or a descriptive error otherwise. Useful for pre-flight checks before
+// LoadSession on user-supplied paths.
+func ValidateSessionFile(path string) error {
+	return session.ValidateSessionFile(path)
+}
+
+// SetKeyLogWriter installs a process-global writer that the lib uses to
+// emit TLS keylog lines (NSS keylog format). Pass nil to disable.
+//
+// This is the io.Writer-flavoured sibling of WithSessionKeyLogFile, which
+// takes a file path. Use SetKeyLogWriter when the destination is something
+// other than a file: a ring buffer, an S3 multipart uploader, a syslog
+// pipe, etc. Setting a writer affects every TLS handshake the binary
+// performs from the moment it's set.
+func SetKeyLogWriter(w io.Writer) {
+	transport.SetKeyLogWriter(w)
+}
+
+// Manager is an in-process registry for many sessions at once. It's the
+// right tool for worker pools, multi-tenant scrapers, or any service that
+// needs to look up sessions by external ID with bounded concurrency and
+// idle eviction. Re-exported from the session subpackage so callers don't
+// have to import it directly. See the connection-lifecycle/session-manager
+// chapter for usage.
+type Manager = session.Manager
+
+// NewManager constructs a fresh session Manager with the package defaults
+// (max 100 concurrent sessions, 30-minute idle timeout, 1-minute cleanup
+// interval). Override the bounds with Manager.SetMaxSessions and
+// Manager.SetSessionTimeout.
+func NewManager() *Manager {
+	return session.NewManager()
+}
+
 // parseSignatureAlgorithms converts string names to tls.SignatureScheme values.
 func parseSignatureAlgorithms(names []string) []tls.SignatureScheme {
 	m := map[string]tls.SignatureScheme{
