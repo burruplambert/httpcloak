@@ -148,9 +148,7 @@ bool on = session.GetConditionalCache();
 
 ## Per-request override
 
-When the session-wide setting is fine and only one or two requests need to bypass the cache, the per-request flag is the right tool. It doesn't touch the session state, it doesn't affect other requests, and the cache map continues to grow / be consulted for every other call.
-
-Per-request override is wired on the lower-level `Request` / `RequestAsync` entry point in each binding.
+When the session-wide setting is fine and only one or two requests need to bypass the cache, the per-request flag is the right tool. It doesn't touch the session state, it doesn't affect other requests, and the cache map continues to grow / be consulted for every other call. Both `allowRedirects` and `disableConditionalCache` are exposed on every request method in every binding, sync and async alike.
 
 <Tabs groupId="lang">
 <TabItem value="go" label="Go">
@@ -159,25 +157,55 @@ Per-request override is wired on the lower-level `Request` / `RequestAsync` entr
 resp, err := s.Do(ctx, &httpcloak.Request{
     Method:                  "GET",
     URL:                     "https://example.com/page",
-    DisableConditionalCache: true,
+    DisableConditionalCache: true,        // skip ETag / If-Modified-Since for this call
+    FollowRedirects:         &noFollow,   // (*bool) per-request redirect override
 })
+```
+
+</TabItem>
+<TabItem value="python" label="Python">
+
+```python
+# Any request method: get, post, put, delete, patch, head, options, request
+# and their *_async siblings.
+r = s.get("https://example.com/page", disable_conditional_cache=True)
+r = s.get("https://example.com/redirect", allow_redirects=False)
+r = await s.post_async("https://example.com/api", json_data={"x": 1},
+                       disable_conditional_cache=True,
+                       allow_redirects=False)
+```
+
+</TabItem>
+<TabItem value="nodejs" label="Node.js">
+
+```js
+// Any request method: get, post, put, delete, patch, head, options, request,
+// getSync, postSync, requestSync, getStream, postStream, requestStream.
+const r = await s.get("https://example.com/page", { disableConditionalCache: true });
+const r2 = await s.get("https://example.com/redirect", { allowRedirects: false });
+const r3 = await s.post("https://example.com/api", {
+    json: { x: 1 },
+    disableConditionalCache: true,
+    allowRedirects: false,
+});
 ```
 
 </TabItem>
 <TabItem value="dotnet" label=".NET">
 
 ```csharp
-var r = session.Request("GET", "https://example.com/page",
-    disableConditionalCache: true);
-
-var r = await session.RequestAsync("GET", "https://example.com/page",
-    disableConditionalCache: true);
+// Every Get/Post/Put/Delete/Patch/Head/Options + *Async takes the two kwargs.
+var r = session.Get("https://example.com/page", disableConditionalCache: true);
+var r2 = session.Get("https://example.com/redirect", allowRedirects: false);
+var r3 = await session.PostJsonAsync("https://example.com/api", new { x = 1 },
+    disableConditionalCache: true,
+    allowRedirects: false);
 ```
 
 </TabItem>
 </Tabs>
 
-Python and Node expose the per-request override through the same lower-level `request` / `requestAsync` call when the use case warrants it; the runtime toggle covers the common "flip it for the next N requests then restore" pattern more cleanly.
+When both `allowRedirects` and the session-level setting disagree, the per-request value wins for that one call. When `disableConditionalCache` is true for a single call, neither validator-injection nor validator-storage happens for that request; the session's stored map is preserved.
 
 ## ClearCache vs SetConditionalCache
 

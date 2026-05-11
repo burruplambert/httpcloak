@@ -1613,7 +1613,7 @@ class Session {
    * @returns {Response} Response object
    */
   getSync(url, options = {}) {
-    const { headers = null, params = null, cookies = null, auth = null, fetchMode = null } = options;
+    const { headers = null, params = null, cookies = null, auth = null, fetchMode = null, allowRedirects = null, disableConditionalCache = false } = options;
 
     url = addParamsToUrl(url, params);
     let mergedHeaders = this._mergeHeaders(headers);
@@ -1629,6 +1629,12 @@ class Session {
     }
     if (fetchMode) {
       reqOptions.fetch_mode = fetchMode;
+    }
+    if (allowRedirects !== null && allowRedirects !== undefined) {
+      reqOptions.follow_redirects = !!allowRedirects;
+    }
+    if (disableConditionalCache) {
+      reqOptions.disable_conditional_cache = true;
     }
     const optionsJson = Object.keys(reqOptions).length > 0 ? JSON.stringify(reqOptions) : null;
 
@@ -1659,7 +1665,7 @@ class Session {
    * @returns {Response} Response object
    */
   postSync(url, options = {}) {
-    let { body = null, json = null, data = null, files = null, headers = null, params = null, cookies = null, auth = null, fetchMode = null } = options;
+    let { body = null, json = null, data = null, files = null, headers = null, params = null, cookies = null, auth = null, fetchMode = null, allowRedirects = null, disableConditionalCache = false } = options;
 
     url = addParamsToUrl(url, params);
     let mergedHeaders = this._mergeHeaders(headers);
@@ -1704,6 +1710,12 @@ class Session {
     if (fetchMode) {
       reqOptions.fetch_mode = fetchMode;
     }
+    if (allowRedirects !== null && allowRedirects !== undefined) {
+      reqOptions.follow_redirects = !!allowRedirects;
+    }
+    if (disableConditionalCache) {
+      reqOptions.disable_conditional_cache = true;
+    }
     const optionsJson = Object.keys(reqOptions).length > 0 ? JSON.stringify(reqOptions) : null;
 
     const bodyPtr = bodyBuffer || Buffer.alloc(0);
@@ -1728,7 +1740,7 @@ class Session {
    * @returns {Response} Response object
    */
   requestSync(method, url, options = {}) {
-    let { body = null, json = null, data = null, files = null, headers = null, params = null, cookies = null, auth = null, timeout = null, fetchMode = null } = options;
+    let { body = null, json = null, data = null, files = null, headers = null, params = null, cookies = null, auth = null, timeout = null, fetchMode = null, allowRedirects = null, disableConditionalCache = false } = options;
 
     url = addParamsToUrl(url, params);
     let mergedHeaders = this._mergeHeaders(headers);
@@ -1771,6 +1783,8 @@ class Session {
     if (mergedHeaders) requestConfig.headers = mergedHeaders;
     if (timeout) requestConfig.timeout = timeout;
     if (fetchMode) requestConfig.fetch_mode = fetchMode;
+    if (allowRedirects !== null && allowRedirects !== undefined) requestConfig.follow_redirects = !!allowRedirects;
+    if (disableConditionalCache) requestConfig.disable_conditional_cache = true;
 
     const bodyPtr = bodyBuffer || Buffer.alloc(0);
     const bodyLen = bodyBuffer ? bodyBuffer.length : 0;
@@ -1801,7 +1815,7 @@ class Session {
    * @returns {Promise<Response>} Response object
    */
   get(url, options = {}) {
-    const { headers = null, params = null, cookies = null, auth = null, fetchMode = null, timeout = null } = options;
+    const { headers = null, params = null, cookies = null, auth = null, fetchMode = null, timeout = null, allowRedirects = null, disableConditionalCache = false } = options;
 
     url = addParamsToUrl(url, params);
     let mergedHeaders = this._mergeHeaders(headers);
@@ -1824,6 +1838,12 @@ class Session {
       // httpcloak_request_async — that path also uses time.Second).
       reqOptions.timeout = timeout;
     }
+    if (allowRedirects !== null && allowRedirects !== undefined) {
+      reqOptions.follow_redirects = !!allowRedirects;
+    }
+    if (disableConditionalCache) {
+      reqOptions.disable_conditional_cache = true;
+    }
     const optionsJson = Object.keys(reqOptions).length > 0 ? JSON.stringify(reqOptions) : null;
 
     // Register async request with callback manager
@@ -1844,7 +1864,7 @@ class Session {
    * @returns {Promise<Response>} Response object
    */
   post(url, options = {}) {
-    let { body = null, json = null, data = null, files = null, headers = null, params = null, cookies = null, auth = null, fetchMode = null, timeout = null } = options;
+    let { body = null, json = null, data = null, files = null, headers = null, params = null, cookies = null, auth = null, fetchMode = null, timeout = null, allowRedirects = null, disableConditionalCache = false } = options;
 
     url = addParamsToUrl(url, params);
     let mergedHeaders = this._mergeHeaders(headers);
@@ -1895,6 +1915,12 @@ class Session {
       // Public API: seconds. clib post_async path enforces in seconds.
       reqOptions.timeout = timeout;
     }
+    if (allowRedirects !== null && allowRedirects !== undefined) {
+      reqOptions.follow_redirects = !!allowRedirects;
+    }
+    if (disableConditionalCache) {
+      reqOptions.disable_conditional_cache = true;
+    }
     const optionsJson = Object.keys(reqOptions).length > 0 ? JSON.stringify(reqOptions) : null;
 
     // Register async request with callback manager
@@ -1916,7 +1942,7 @@ class Session {
    * @returns {Promise<Response>} Response object
    */
   request(method, url, options = {}) {
-    let { body = null, json = null, data = null, files = null, headers = null, params = null, cookies = null, auth = null, timeout = null, fetchMode = null } = options;
+    let { body = null, json = null, data = null, files = null, headers = null, params = null, cookies = null, auth = null, timeout = null, fetchMode = null, allowRedirects = null, disableConditionalCache = false } = options;
 
     url = addParamsToUrl(url, params);
     let mergedHeaders = this._mergeHeaders(headers);
@@ -1963,6 +1989,8 @@ class Session {
     if (body) requestConfig.body = body;
     if (timeout) requestConfig.timeout = timeout;
     if (fetchMode) requestConfig.fetch_mode = fetchMode;
+    if (allowRedirects !== null && allowRedirects !== undefined) requestConfig.follow_redirects = !!allowRedirects;
+    if (disableConditionalCache) requestConfig.disable_conditional_cache = true;
 
     // Register async request with callback manager
     const manager = getAsyncManager();
@@ -2477,7 +2505,7 @@ class Session {
    *   stream.close();
    */
   getStream(url, options = {}) {
-    const { params, headers, cookies, timeout } = options;
+    const { params, headers, cookies, timeout, allowRedirects = null, disableConditionalCache = false } = options;
 
     // Add params to URL
     if (params) {
@@ -2503,6 +2531,12 @@ class Session {
     }
     if (timeout) {
       reqOptions.timeout = timeout;
+    }
+    if (allowRedirects !== null && allowRedirects !== undefined) {
+      reqOptions.follow_redirects = !!allowRedirects;
+    }
+    if (disableConditionalCache) {
+      reqOptions.disable_conditional_cache = true;
     }
     const optionsJson = Object.keys(reqOptions).length > 0 ? JSON.stringify(reqOptions) : null;
 
@@ -2543,7 +2577,7 @@ class Session {
    * @returns {StreamResponse} - Streaming response for chunked reading
    */
   postStream(url, options = {}) {
-    const { body: bodyOpt, json: jsonBody, form, params, headers, cookies, timeout } = options;
+    const { body: bodyOpt, json: jsonBody, form, params, headers, cookies, timeout, allowRedirects = null, disableConditionalCache = false } = options;
 
     // Add params to URL
     if (params) {
@@ -2583,6 +2617,12 @@ class Session {
     if (timeout) {
       reqOptions.timeout = timeout;
     }
+    if (allowRedirects !== null && allowRedirects !== undefined) {
+      reqOptions.follow_redirects = !!allowRedirects;
+    }
+    if (disableConditionalCache) {
+      reqOptions.disable_conditional_cache = true;
+    }
     const optionsJson = Object.keys(reqOptions).length > 0 ? JSON.stringify(reqOptions) : null;
 
     // Start stream
@@ -2621,7 +2661,7 @@ class Session {
    * @returns {StreamResponse} - Streaming response for chunked reading
    */
   requestStream(method, url, options = {}) {
-    const { body, params, headers, cookies, timeout } = options;
+    const { body, params, headers, cookies, timeout, allowRedirects = null, disableConditionalCache = false } = options;
 
     // Add params to URL
     if (params) {
@@ -2653,6 +2693,12 @@ class Session {
     }
     if (timeout) {
       requestConfig.timeout = timeout;
+    }
+    if (allowRedirects !== null && allowRedirects !== undefined) {
+      requestConfig.follow_redirects = !!allowRedirects;
+    }
+    if (disableConditionalCache) {
+      requestConfig.disable_conditional_cache = true;
     }
 
     // Start stream

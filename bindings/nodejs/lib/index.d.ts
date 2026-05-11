@@ -295,6 +295,21 @@ export interface RequestOptions {
    * Set this explicitly when the auto-sniff gets it wrong (e.g., POST to a CORS endpoint without a JSON Accept header).
    */
   fetchMode?: "cors" | "no-cors" | "navigate" | "websocket";
+
+  /**
+   * Per-request override for redirect following. true forces redirects on this
+   * call, false surfaces the 3xx back to the caller; null / undefined defers
+   * to the session-level setting (which itself defaults to follow).
+   */
+  allowRedirects?: boolean | null;
+
+  /**
+   * Per-request opt-out of the session's ETag / If-Modified-Since handling.
+   * When true, no cache validators are injected on the way out and the
+   * response's ETag / Last-Modified are not stored. Useful for a one-off
+   * fresh fetch without touching the session-wide setting.
+   */
+  disableConditionalCache?: boolean;
 }
 
 export class Session {

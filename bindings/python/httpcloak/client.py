@@ -1944,6 +1944,8 @@ class Session:
         auth: Optional[Tuple[str, str]] = None,
         timeout: Optional[int] = None,
         fetch_mode: Optional[str] = None,
+        allow_redirects: Optional[bool] = None,
+        disable_conditional_cache: bool = False,
     ) -> Response:
         """
         Perform a custom HTTP request.
@@ -2007,6 +2009,10 @@ class Session:
             request_config["timeout"] = int(timeout * 1000)
         if fetch_mode:
             request_config["fetch_mode"] = fetch_mode
+        if allow_redirects is not None:
+            request_config["follow_redirects"] = bool(allow_redirects)
+        if disable_conditional_cache:
+            request_config["disable_conditional_cache"] = True
 
         body_len = len(body_bytes) if body_bytes else 0
 
@@ -2036,9 +2042,11 @@ class Session:
         auth: Optional[Tuple[str, str]] = None,
         timeout: Optional[int] = None,
         fetch_mode: Optional[str] = None,
+        allow_redirects: Optional[bool] = None,
+        disable_conditional_cache: bool = False,
     ) -> Response:
         """Perform a PUT request."""
-        return self.request("PUT", url, params=params, data=data, json=json, files=files, headers=headers, cookies=cookies, auth=auth, timeout=timeout, fetch_mode=fetch_mode)
+        return self.request("PUT", url, params=params, data=data, json=json, files=files, headers=headers, cookies=cookies, auth=auth, timeout=timeout, fetch_mode=fetch_mode, allow_redirects=allow_redirects, disable_conditional_cache=disable_conditional_cache)
 
     def delete(
         self,
@@ -2049,9 +2057,11 @@ class Session:
         auth: Optional[Tuple[str, str]] = None,
         timeout: Optional[int] = None,
         fetch_mode: Optional[str] = None,
+        allow_redirects: Optional[bool] = None,
+        disable_conditional_cache: bool = False,
     ) -> Response:
         """Perform a DELETE request."""
-        return self.request("DELETE", url, params=params, headers=headers, cookies=cookies, auth=auth, timeout=timeout, fetch_mode=fetch_mode)
+        return self.request("DELETE", url, params=params, headers=headers, cookies=cookies, auth=auth, timeout=timeout, fetch_mode=fetch_mode, allow_redirects=allow_redirects, disable_conditional_cache=disable_conditional_cache)
 
     def patch(
         self,
@@ -2065,9 +2075,11 @@ class Session:
         auth: Optional[Tuple[str, str]] = None,
         timeout: Optional[int] = None,
         fetch_mode: Optional[str] = None,
+        allow_redirects: Optional[bool] = None,
+        disable_conditional_cache: bool = False,
     ) -> Response:
         """Perform a PATCH request."""
-        return self.request("PATCH", url, params=params, data=data, json=json, files=files, headers=headers, cookies=cookies, auth=auth, timeout=timeout, fetch_mode=fetch_mode)
+        return self.request("PATCH", url, params=params, data=data, json=json, files=files, headers=headers, cookies=cookies, auth=auth, timeout=timeout, fetch_mode=fetch_mode, allow_redirects=allow_redirects, disable_conditional_cache=disable_conditional_cache)
 
     def head(
         self,
@@ -2078,9 +2090,11 @@ class Session:
         auth: Optional[Tuple[str, str]] = None,
         timeout: Optional[int] = None,
         fetch_mode: Optional[str] = None,
+        allow_redirects: Optional[bool] = None,
+        disable_conditional_cache: bool = False,
     ) -> Response:
         """Perform a HEAD request."""
-        return self.request("HEAD", url, params=params, headers=headers, cookies=cookies, auth=auth, timeout=timeout, fetch_mode=fetch_mode)
+        return self.request("HEAD", url, params=params, headers=headers, cookies=cookies, auth=auth, timeout=timeout, fetch_mode=fetch_mode, allow_redirects=allow_redirects, disable_conditional_cache=disable_conditional_cache)
 
     def options(
         self,
@@ -2091,9 +2105,11 @@ class Session:
         auth: Optional[Tuple[str, str]] = None,
         timeout: Optional[int] = None,
         fetch_mode: Optional[str] = None,
+        allow_redirects: Optional[bool] = None,
+        disable_conditional_cache: bool = False,
     ) -> Response:
         """Perform an OPTIONS request."""
-        return self.request("OPTIONS", url, params=params, headers=headers, cookies=cookies, auth=auth, timeout=timeout, fetch_mode=fetch_mode)
+        return self.request("OPTIONS", url, params=params, headers=headers, cookies=cookies, auth=auth, timeout=timeout, fetch_mode=fetch_mode, allow_redirects=allow_redirects, disable_conditional_cache=disable_conditional_cache)
 
     # =========================================================================
     # Async Methods (Native - using Go goroutines)
@@ -2107,6 +2123,8 @@ class Session:
         cookies: Optional[Dict[str, str]] = None,
         auth: Optional[Tuple[str, str]] = None,
         fetch_mode: Optional[str] = None,
+        allow_redirects: Optional[bool] = None,
+        disable_conditional_cache: bool = False,
     ) -> Response:
         """
         Async GET request using native Go goroutines.
@@ -2137,6 +2155,10 @@ class Session:
             options["headers"] = merged_headers
         if fetch_mode:
             options["fetch_mode"] = fetch_mode
+        if allow_redirects is not None:
+            options["follow_redirects"] = bool(allow_redirects)
+        if disable_conditional_cache:
+            options["disable_conditional_cache"] = True
         options_json = json.dumps(options).encode("utf-8") if options else None
 
         # Start async request
@@ -2160,6 +2182,8 @@ class Session:
         cookies: Optional[Dict[str, str]] = None,
         auth: Optional[Tuple[str, str]] = None,
         fetch_mode: Optional[str] = None,
+        allow_redirects: Optional[bool] = None,
+        disable_conditional_cache: bool = False,
     ) -> Response:
         """
         Async POST request using native Go goroutines.
@@ -2211,6 +2235,10 @@ class Session:
             options["headers"] = merged_headers
         if fetch_mode:
             options["fetch_mode"] = fetch_mode
+        if allow_redirects is not None:
+            options["follow_redirects"] = bool(allow_redirects)
+        if disable_conditional_cache:
+            options["disable_conditional_cache"] = True
         options_json = json.dumps(options).encode("utf-8") if options else None
 
         # Start async request
@@ -2236,6 +2264,8 @@ class Session:
         cookies: Optional[Dict[str, str]] = None,
         auth: Optional[Tuple[str, str]] = None,
         fetch_mode: Optional[str] = None,
+        allow_redirects: Optional[bool] = None,
+        disable_conditional_cache: bool = False,
     ) -> Response:
         """
         Async custom HTTP request using native Go goroutines.
@@ -2290,6 +2320,10 @@ class Session:
             request_config["body"] = body
         if fetch_mode:
             request_config["fetch_mode"] = fetch_mode
+        if allow_redirects is not None:
+            request_config["follow_redirects"] = bool(allow_redirects)
+        if disable_conditional_cache:
+            request_config["disable_conditional_cache"] = True
 
         # Get async manager and register this request (each request gets unique ID)
         manager = _get_async_manager()
@@ -2807,6 +2841,8 @@ class Session:
         timeout: Optional[int] = None,
         stream: bool = False,
         fetch_mode: Optional[str] = None,
+        allow_redirects: Optional[bool] = None,
+        disable_conditional_cache: bool = False,
     ) -> Union[Response, StreamResponse]:
         """
         Perform a GET request.
@@ -2837,7 +2873,9 @@ class Session:
         effective_auth = auth if auth is not None else self.auth
 
         if stream:
-            return self._get_stream(url, params, headers, cookies, effective_auth, timeout)
+            return self._get_stream(url, params, headers, cookies, effective_auth, timeout,
+                                    allow_redirects=allow_redirects,
+                                    disable_conditional_cache=disable_conditional_cache)
 
         # Regular request (existing implementation)
         url = _add_params_to_url(url, params)
@@ -2846,7 +2884,10 @@ class Session:
         merged_headers = self._apply_cookies(merged_headers, cookies)
 
         if timeout:
-            return self.request("GET", url, headers=merged_headers, timeout=timeout, fetch_mode=fetch_mode)
+            return self.request("GET", url, headers=merged_headers, timeout=timeout,
+                                fetch_mode=fetch_mode,
+                                allow_redirects=allow_redirects,
+                                disable_conditional_cache=disable_conditional_cache)
 
         # Build options JSON with headers wrapper (clib expects {"headers": {...}})
         options = {}
@@ -2854,6 +2895,10 @@ class Session:
             options["headers"] = merged_headers
         if fetch_mode:
             options["fetch_mode"] = fetch_mode
+        if allow_redirects is not None:
+            options["follow_redirects"] = bool(allow_redirects)
+        if disable_conditional_cache:
+            options["disable_conditional_cache"] = True
         options_json = json.dumps(options).encode("utf-8") if options else None
 
         start_time = time.perf_counter()
@@ -3210,6 +3255,8 @@ class Session:
         cookies: Optional[Dict[str, str]] = None,
         auth: Optional[Tuple[str, str]] = None,
         timeout: Optional[int] = None,
+        allow_redirects: Optional[bool] = None,
+        disable_conditional_cache: bool = False,
     ) -> StreamResponse:
         """Internal method to perform a streaming GET request."""
         url = _add_params_to_url(url, params)
@@ -3223,6 +3270,10 @@ class Session:
             options["headers"] = merged_headers
         if timeout:
             options["timeout"] = timeout
+        if allow_redirects is not None:
+            options["follow_redirects"] = bool(allow_redirects)
+        if disable_conditional_cache:
+            options["disable_conditional_cache"] = True
         options_json = json.dumps(options).encode("utf-8") if options else None
 
         # Start stream
@@ -3277,6 +3328,8 @@ class Session:
         cookies: Optional[Dict[str, str]] = None,
         auth: Optional[Tuple[str, str]] = None,
         timeout: Optional[int] = None,
+        allow_redirects: Optional[bool] = None,
+        disable_conditional_cache: bool = False,
     ) -> StreamResponse:
         """
         Perform a streaming POST request.
@@ -3322,6 +3375,10 @@ class Session:
             options["headers"] = merged_headers
         if timeout:
             options["timeout"] = timeout
+        if allow_redirects is not None:
+            options["follow_redirects"] = bool(allow_redirects)
+        if disable_conditional_cache:
+            options["disable_conditional_cache"] = True
         options_json = json.dumps(options).encode("utf-8") if options else None
 
         # Start stream
