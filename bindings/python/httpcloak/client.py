@@ -1825,6 +1825,8 @@ class Session:
         auth: Optional[Tuple[str, str]] = None,
         timeout: Optional[int] = None,
         fetch_mode: Optional[str] = None,
+        allow_redirects: Optional[bool] = None,
+        disable_conditional_cache: bool = False,
     ) -> Response:
         """
         Perform a POST request.
@@ -1904,7 +1906,7 @@ class Session:
         merged_headers = self._apply_cookies(merged_headers, cookies)
 
         if timeout:
-            return self.request("POST", url, headers=merged_headers, data=body, timeout=timeout, fetch_mode=fetch_mode)
+            return self.request("POST", url, headers=merged_headers, data=body, timeout=timeout, fetch_mode=fetch_mode, allow_redirects=allow_redirects, disable_conditional_cache=disable_conditional_cache)
 
         # Build options JSON with headers wrapper (clib expects {"headers": {...}})
         options = {}
@@ -1912,6 +1914,10 @@ class Session:
             options["headers"] = merged_headers
         if fetch_mode:
             options["fetch_mode"] = fetch_mode
+        if allow_redirects is not None:
+            options["follow_redirects"] = bool(allow_redirects)
+        if disable_conditional_cache:
+            options["disable_conditional_cache"] = True
         options_json = json_module.dumps(options).encode("utf-8") if options else None
 
         body_len = len(body) if body else 0
