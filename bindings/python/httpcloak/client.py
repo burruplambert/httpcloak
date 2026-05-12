@@ -1188,6 +1188,10 @@ def _setup_lib(lib):
     lib.httpcloak_local_proxy_register_session.restype = c_void_p
     lib.httpcloak_local_proxy_unregister_session.argtypes = [c_int64, c_char_p]
     lib.httpcloak_local_proxy_unregister_session.restype = c_int
+    lib.httpcloak_local_proxy_list_sessions.argtypes = [c_int64]
+    lib.httpcloak_local_proxy_list_sessions.restype = c_void_p
+    lib.httpcloak_local_proxy_has_session.argtypes = [c_int64, c_char_p]
+    lib.httpcloak_local_proxy_has_session.restype = c_int
 
     # Session cache callbacks
     lib.httpcloak_set_session_cache_callbacks.argtypes = [
@@ -4256,6 +4260,42 @@ class LocalProxy:
             self._handle, session_id_bytes
         )
         return result == 1
+
+    def list_sessions(self) -> List[str]:
+        """
+        Return the IDs of every session currently registered on this proxy.
+
+        These are the same IDs that the X-HTTPCloak-Session header accepts
+        for per-request session routing. Useful for sanity checks, GC of
+        stale registrations in long-running processes, and operational
+        dashboards.
+        """
+        result_ptr = self._lib.httpcloak_local_proxy_list_sessions(self._handle)
+        if not result_ptr:
+            return []
+        try:
+            raw = cast(result_ptr, c_char_p).value
+            if raw is None:
+                return []
+            ids = json.loads(raw.decode("utf-8"))
+            if isinstance(ids, list):
+                return [str(x) for x in ids]
+            return []
+        finally:
+            self._lib.httpcloak_free_string(result_ptr)
+
+    def has_session(self, session_id: str) -> bool:
+        """
+        Return True if a session with the given ID is currently registered.
+
+        Cheaper than calling list_sessions() and scanning when callers only
+        need an existence check.
+        """
+        if not session_id:
+            return False
+        return self._lib.httpcloak_local_proxy_has_session(
+            self._handle, session_id.encode("utf-8")
+        ) == 1
 
     def close(self) -> None:
         """Stop the local proxy server."""

@@ -935,6 +935,8 @@ function getLib() {
       httpcloak_local_proxy_get_stats: nativeLibHandle.func("httpcloak_local_proxy_get_stats", HeapStr, ["int64"]),
       httpcloak_local_proxy_register_session: nativeLibHandle.func("httpcloak_local_proxy_register_session", HeapStr, ["int64", "str", "int64"]),
       httpcloak_local_proxy_unregister_session: nativeLibHandle.func("httpcloak_local_proxy_unregister_session", "int", ["int64", "str"]),
+      httpcloak_local_proxy_list_sessions: nativeLibHandle.func("httpcloak_local_proxy_list_sessions", HeapStr, ["int64"]),
+      httpcloak_local_proxy_has_session: nativeLibHandle.func("httpcloak_local_proxy_has_session", "int", ["int64", "str"]),
       // Session cache callbacks
       httpcloak_set_session_cache_callbacks: nativeLibHandle.func("httpcloak_set_session_cache_callbacks", "void", [
         koffi.pointer(SessionCacheGetProto),
@@ -3458,6 +3460,41 @@ class LocalProxy {
       sessionId
     );
     return result === 1;
+  }
+
+  /**
+   * Return the IDs of every session currently registered on this proxy.
+   *
+   * These are the same IDs the X-HTTPCloak-Session header accepts for
+   * per-request session routing. Useful for sanity checks, GC of stale
+   * registrations in long-running processes, and operational dashboards.
+   *
+   * @returns {string[]} List of registered session IDs (empty if none).
+   */
+  listSessions() {
+    const resultPtr = this._lib.httpcloak_local_proxy_list_sessions(this._handle);
+    const raw = resultToString(resultPtr);
+    if (!raw) return [];
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed.map(String) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Return true if a session with the given ID is currently registered.
+   *
+   * Cheaper than listSessions() + .includes() when callers only need an
+   * existence check.
+   *
+   * @param {string} sessionId
+   * @returns {boolean}
+   */
+  hasSession(sessionId) {
+    if (!sessionId) return false;
+    return this._lib.httpcloak_local_proxy_has_session(this._handle, sessionId) === 1;
   }
 
   /**

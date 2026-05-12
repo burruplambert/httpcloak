@@ -871,6 +871,22 @@ export class LocalProxy {
   unregisterSession(sessionId: string): boolean;
 
   /**
+   * Return the IDs of every session currently registered on this proxy.
+   * These are the same IDs the X-HTTPCloak-Session header accepts for
+   * per-request session routing.
+   *
+   * @returns List of registered session IDs (empty array if none).
+   */
+  listSessions(): string[];
+
+  /**
+   * Return true if a session with the given ID is currently registered.
+   * Cheaper than `listSessions().includes(id)` when callers only need an
+   * existence check (no JSON marshal across the FFI boundary).
+   */
+  hasSession(sessionId: string): boolean;
+
+  /**
    * Stop and close the proxy.
    * After closing, the LocalProxy instance cannot be reused.
    */

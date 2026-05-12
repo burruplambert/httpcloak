@@ -253,6 +253,12 @@ internal static class Native
     [DllImport(LibraryName, EntryPoint = "httpcloak_local_proxy_unregister_session", CallingConvention = CallingConvention.Cdecl)]
     public static extern int LocalProxyUnregisterSession(long proxyHandle, [MarshalAs(UnmanagedType.LPUTF8Str)] string sessionId);
 
+    [DllImport(LibraryName, EntryPoint = "httpcloak_local_proxy_list_sessions", CallingConvention = CallingConvention.Cdecl)]
+    public static extern IntPtr LocalProxyListSessions(long proxyHandle);
+
+    [DllImport(LibraryName, EntryPoint = "httpcloak_local_proxy_has_session", CallingConvention = CallingConvention.Cdecl)]
+    public static extern int LocalProxyHasSession(long proxyHandle, [MarshalAs(UnmanagedType.LPUTF8Str)] string sessionId);
+
     // Custom preset loading
     [DllImport(LibraryName, EntryPoint = "httpcloak_preset_load_file", CallingConvention = CallingConvention.Cdecl)]
     public static extern IntPtr PresetLoadFile([MarshalAs(UnmanagedType.LPUTF8Str)] string path);

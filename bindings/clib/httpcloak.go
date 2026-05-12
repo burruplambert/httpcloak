@@ -3029,6 +3029,52 @@ func httpcloak_local_proxy_unregister_session(proxyHandle C.int64_t, sessionID *
 	return 0 // Session not found
 }
 
+//export httpcloak_local_proxy_list_sessions
+// httpcloak_local_proxy_list_sessions returns a JSON array of the session IDs
+// currently registered on the given LocalProxy (the same IDs that the
+// X-HTTPCloak-Session header accepts). The caller owns the returned string and
+// must free it via httpcloak_free_string. Returns "[]" if no sessions are
+// registered, or nil if the proxy handle is invalid.
+func httpcloak_local_proxy_list_sessions(proxyHandle C.int64_t) *C.char {
+	localProxyMu.RLock()
+	proxy, exists := localProxies[int64(proxyHandle)]
+	localProxyMu.RUnlock()
+
+	if !exists || proxy == nil {
+		return nil
+	}
+
+	ids := proxy.ListSessions()
+	if ids == nil {
+		ids = []string{}
+	}
+	data, err := json.Marshal(ids)
+	if err != nil {
+		return nil
+	}
+	return C.CString(string(data))
+}
+
+//export httpcloak_local_proxy_has_session
+// httpcloak_local_proxy_has_session returns 1 if a session with the given ID
+// is currently registered on the LocalProxy, 0 otherwise. Cheaper than
+// list_sessions when callers only need an existence check (no JSON marshal).
+func httpcloak_local_proxy_has_session(proxyHandle C.int64_t, sessionID *C.char) C.int {
+	localProxyMu.RLock()
+	proxy, exists := localProxies[int64(proxyHandle)]
+	localProxyMu.RUnlock()
+
+	if !exists || proxy == nil {
+		return 0
+	}
+
+	id := C.GoString(sessionID)
+	if proxy.GetSession(id) != nil {
+		return 1
+	}
+	return 0
+}
+
 // ============================================================================
 // Streaming API
 // ============================================================================
