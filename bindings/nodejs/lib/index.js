@@ -1470,6 +1470,7 @@ class Session {
       withoutCookieJar = false,
       withoutConditionalCache = false,
       disableEch = false,
+      disableHttp3 = false,
       ja3 = null,
       akamai = null,
       extraFp = null,
@@ -1552,6 +1553,9 @@ class Session {
     }
     if (disableEch) {
       config.disable_ech = true;
+    }
+    if (disableHttp3) {
+      config.disable_http3 = true;
     }
     if (ja3) {
       config.ja3 = ja3;

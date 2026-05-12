@@ -316,6 +316,7 @@ type SessionConfig struct {
 	LocalAddress    string            `json:"local_address,omitempty"`     // Local IP to bind outgoing connections (IPv6 rotation)
 	KeyLogFile      string            `json:"key_log_file,omitempty"`      // Path to write TLS key log for Wireshark decryption
 	DisableECH            bool              `json:"disable_ech,omitempty"`             // Disable ECH lookup for faster first request
+	DisableHTTP3          bool              `json:"disable_http3,omitempty"`           // Disable HTTP/3 racing while keeping H1/H2 negotiation
 	EnableSpeculativeTLS bool              `json:"enable_speculative_tls,omitempty"` // Enable speculative TLS optimization for proxy connections
 	SwitchProtocol        string            `json:"switch_protocol,omitempty"`         // Protocol to switch to after Refresh()
 	WithoutCookieJar      bool              `json:"without_cookie_jar,omitempty"`      // Disable internal cookie jar (caller manages cookies via headers)
@@ -999,6 +1000,15 @@ func httpcloak_session_new(configJSON *C.char) C.int64_t {
 	case "h3", "http3", "3":
 		opts = append(opts, httpcloak.WithForceHTTP3())
 	// "auto" or empty = default behavior
+	}
+
+	// Explicit disable_http3 flag: disables H3 racing while keeping H1/H2
+	// auto-negotiation. Reachable indirectly via http_version="h2"/"h1" too
+	// (those imply WithDisableHTTP3 per options docs), but the explicit flag
+	// is cleaner for callers who just want "no H3" without committing to a
+	// specific lower version.
+	if config.DisableHTTP3 {
+		opts = append(opts, httpcloak.WithDisableHTTP3())
 	}
 
 	// Handle SSL verification

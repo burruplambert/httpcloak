@@ -63,6 +63,7 @@ public Session(
     bool withoutCookieJar = false,
     bool withoutConditionalCache = false,
     bool disableEch = false,
+    bool disableHttp3 = false,
     string? ja3 = null,
     string? akamai = null,
     Dictionary<string, object>? extraFp = null,

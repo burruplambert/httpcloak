@@ -1612,6 +1612,7 @@ class Session:
         without_cookie_jar: bool = False,
         without_conditional_cache: bool = False,
         disable_ech: bool = False,
+        disable_http3: bool = False,
         ja3: Optional[str] = None,
         akamai: Optional[str] = None,
         extra_fp: Optional[Dict[str, any]] = None,
@@ -1671,6 +1672,8 @@ class Session:
             config["without_conditional_cache"] = True
         if disable_ech:
             config["disable_ech"] = True
+        if disable_http3:
+            config["disable_http3"] = True
         if ja3:
             config["ja3"] = ja3
         if akamai:

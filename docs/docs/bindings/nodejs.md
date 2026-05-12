@@ -102,6 +102,7 @@ new Session(options?: SessionOptions);
   withoutCookieJar?: boolean;
   withoutConditionalCache?: boolean;
   disableEch?: boolean;
+  disableHttp3?: boolean;
   ja3?: string;
   akamai?: string;
   extraFp?: Record<string, any>;

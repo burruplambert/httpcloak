@@ -173,6 +173,7 @@ public sealed class Session : IDisposable
     /// <param name="withoutCookieJar">Disable internal cookie jar entirely — caller manages cookies via per-request headers (default: false)</param>
     /// <param name="withoutConditionalCache">Disable ETag / If-Modified-Since handling for the lifetime of the session — every request hits the origin fresh (default: false)</param>
     /// <param name="disableEch">Skip the ECH (Encrypted Client Hello) HTTPS RR lookup. Saves ~15-20ms on first connect at the cost of the privacy bump ECH gives you (default: false)</param>
+    /// <param name="disableHttp3">Disable HTTP/3 racing while keeping H1/H2 auto-negotiation. Use when QUIC is unreliable on the network or you need to bind to an address that can't UDP. Reachable indirectly via httpVersion="h2" too (default: false)</param>
     /// <param name="tcpTtl">TCP/IP TTL override: 128=Windows, 64=Linux/macOS (default: null, no spoofing)</param>
     /// <param name="tcpMss">TCP Maximum Segment Size override: typically 1460 (default: null)</param>
     /// <param name="tcpWindowSize">TCP Window Size override: 64240=Windows, 65535=Linux/macOS (default: null)</param>
@@ -205,6 +206,7 @@ public sealed class Session : IDisposable
         bool withoutCookieJar = false,
         bool withoutConditionalCache = false,
         bool disableEch = false,
+        bool disableHttp3 = false,
         string? ja3 = null,
         string? akamai = null,
         Dictionary<string, object>? extraFp = null,
@@ -243,6 +245,7 @@ public sealed class Session : IDisposable
             WithoutCookieJar = withoutCookieJar,
             WithoutConditionalCache = withoutConditionalCache,
             DisableEch = disableEch,
+            DisableHttp3 = disableHttp3,
             Ja3 = ja3,
             Akamai = akamai,
             ExtraFp = extraFp,
@@ -1560,16 +1563,16 @@ public sealed class Session : IDisposable
     {
         ThrowIfDisposed();
         var orderJson = order != null && order.Length > 0
-            ? System.Text.Json.JsonSerializer.Serialize(order)
+            ? JsonSerializer.Serialize(order, JsonContext.Default.StringArray)
             : "[]";
         IntPtr resultPtr = Native.SessionSetHeaderOrder(_handle, orderJson);
         var result = Native.PtrToStringAndFree(resultPtr);
         if (!string.IsNullOrEmpty(result) && result.Contains("error"))
         {
-            var data = System.Text.Json.JsonDocument.Parse(result);
-            if (data.RootElement.TryGetProperty("error", out var errorElement))
+            var errResp = JsonSerializer.Deserialize(result, JsonContext.Default.ErrorResponse);
+            if (errResp?.Error != null)
             {
-                throw new InvalidOperationException(errorElement.GetString());
+                throw new InvalidOperationException(errResp.Error);
             }
         }
     }
@@ -1585,7 +1588,7 @@ public sealed class Session : IDisposable
         var result = Native.PtrToStringAndFree(resultPtr);
         if (!string.IsNullOrEmpty(result))
         {
-            return System.Text.Json.JsonSerializer.Deserialize<string[]>(result) ?? Array.Empty<string>();
+            return JsonSerializer.Deserialize(result, JsonContext.Default.StringArray) ?? Array.Empty<string>();
         }
         return Array.Empty<string>();
     }
@@ -2691,7 +2694,7 @@ public sealed class StreamResponse : IDisposable
     private bool _disposed;
     private HttpCloakContentStream? _contentStream;
 
-    internal StreamResponse(long handle, StreamMetadata metadata)
+    internal StreamResponse(long handle, StreamMetadata metadata, TimeSpan elapsed = default)
     {
         _handle = handle;
         StatusCode = metadata.StatusCode;
@@ -2701,6 +2704,33 @@ public sealed class StreamResponse : IDisposable
         ContentLength = metadata.ContentLength;
         Cookies = metadata.Cookies?.Select(c => new Cookie(c.Name ?? "", c.Value ?? "", c.Domain ?? "", c.Path ?? "", c.Expires ?? "", c.MaxAge, c.Secure, c.HttpOnly, c.SameSite ?? "")).ToList()
             ?? new List<Cookie>();
+        Elapsed = elapsed;
+        // History is always empty for streams since the stream layer does not
+        // follow redirects (see session.go: "Streaming does NOT support
+        // redirects"). The property exists for symmetry with Response and
+        // FastResponse so callers can iterate `.History` without a null check.
+        History = new List<RedirectInfo>();
+        Encoding = DetectEncoding(Headers);
+    }
+
+    private static string? DetectEncoding(Dictionary<string, string[]> headers)
+    {
+        // Pull charset from Content-Type (case-insensitive, accepts both
+        // "text/html; charset=utf-8" and "text/html;charset=UTF-8" shapes).
+        if (headers == null) return null;
+        var ctKey = headers.Keys.FirstOrDefault(k => k.Equals("Content-Type", StringComparison.OrdinalIgnoreCase));
+        if (ctKey == null || !headers.TryGetValue(ctKey, out var values) || values.Length == 0) return null;
+        var ct = values[0];
+        if (string.IsNullOrEmpty(ct) || !ct.Contains("charset=", StringComparison.OrdinalIgnoreCase)) return null;
+        foreach (var part in ct.Split(';'))
+        {
+            var trimmed = part.Trim();
+            if (trimmed.StartsWith("charset=", StringComparison.OrdinalIgnoreCase))
+            {
+                return trimmed.Substring("charset=".Length).Trim().Trim('"');
+            }
+        }
+        return null;
     }
 
     /// <summary>HTTP status code.</summary>
@@ -2720,6 +2750,25 @@ public sealed class StreamResponse : IDisposable
 
     /// <summary>Cookies set by this response.</summary>
     public List<Cookie> Cookies { get; }
+
+    /// <summary>Time spent waiting for the response metadata. Body read time is not included.</summary>
+    public TimeSpan Elapsed { get; }
+
+    /// <summary>
+    /// Charset parsed from Content-Type (e.g. "utf-8", "iso-8859-1"). null if
+    /// the response declared no charset. Bytes from the stream are not
+    /// auto-decoded; this is a hint for callers that want to wrap the stream
+    /// in a <see cref="System.IO.StreamReader"/> with the right encoding.
+    /// </summary>
+    public string? Encoding { get; }
+
+    /// <summary>
+    /// Redirect chain leading to this response. Always empty for streams
+    /// because the stream layer does not follow redirects. Exposed for
+    /// symmetry with <see cref="Response"/> and <see cref="FastResponse"/>
+    /// so callers can iterate without a null check.
+    /// </summary>
+    public List<RedirectInfo> History { get; }
 
     /// <summary>True if status code is less than 400.</summary>
     public bool Ok => StatusCode < 400;
@@ -3235,6 +3284,10 @@ internal class SessionConfig
     [JsonPropertyName("disable_ech")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool DisableEch { get; set; }
+
+    [JsonPropertyName("disable_http3")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool DisableHttp3 { get; set; }
 
     [JsonPropertyName("ja3")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
