@@ -126,95 +126,135 @@ class Preset:
 
     Use these constants instead of typing preset strings manually:
         import httpcloak
-        httpcloak.configure(preset=httpcloak.Preset.CHROME_143)
+        httpcloak.configure(preset=httpcloak.Preset.CHROME_LATEST)
 
         # Or with Session
-        session = httpcloak.Session(preset=httpcloak.Preset.FIREFOX_133)
+        session = httpcloak.Session(preset=httpcloak.Preset.FIREFOX_LATEST)
 
-    All available presets:
-        Desktop Chrome: CHROME_146, CHROME_146_WINDOWS, CHROME_146_LINUX, CHROME_146_MACOS
-                        CHROME_145, CHROME_145_WINDOWS, CHROME_145_LINUX, CHROME_145_MACOS
-                        CHROME_144, CHROME_144_WINDOWS, CHROME_144_LINUX, CHROME_144_MACOS
-                        CHROME_143, CHROME_143_WINDOWS, CHROME_143_LINUX, CHROME_143_MACOS
-                        CHROME_141, CHROME_133
-        Mobile Chrome: CHROME_146_IOS, CHROME_145_IOS, CHROME_144_IOS, CHROME_143_IOS,
-                       CHROME_146_ANDROID, CHROME_145_ANDROID, CHROME_144_ANDROID, CHROME_143_ANDROID
-        Firefox: FIREFOX_133
-        Safari: SAFARI_18, SAFARI_17_IOS, SAFARI_18_IOS
+    The constants below mirror the runtime registry shipped by the Go core
+    (call `httpcloak.available_presets()` for the live list at any time).
+    Newest browsers first; the *_LATEST family auto-resolves to the newest
+    version the linked library ships, so client code stays current across
+    minor releases without per-binding constant bumps.
     """
-    # Chrome 146 (latest)
+    # Chrome latest (auto-resolves to newest shipped Chrome)
+    CHROME_LATEST = "chrome-latest"
+    CHROME_LATEST_WINDOWS = "chrome-latest-windows"
+    CHROME_LATEST_LINUX = "chrome-latest-linux"
+    CHROME_LATEST_MACOS = "chrome-latest-macos"
+    CHROME_LATEST_IOS = "chrome-latest-ios"
+    CHROME_LATEST_ANDROID = "chrome-latest-android"
+
+    # Chrome 148
+    CHROME_148 = "chrome-148"
+    CHROME_148_WINDOWS = "chrome-148-windows"
+    CHROME_148_LINUX = "chrome-148-linux"
+    CHROME_148_MACOS = "chrome-148-macos"
+    CHROME_148_IOS = "chrome-148-ios"
+    CHROME_148_ANDROID = "chrome-148-android"
+
+    # Chrome 147
+    CHROME_147 = "chrome-147"
+    CHROME_147_WINDOWS = "chrome-147-windows"
+    CHROME_147_LINUX = "chrome-147-linux"
+    CHROME_147_MACOS = "chrome-147-macos"
+    CHROME_147_IOS = "chrome-147-ios"
+    CHROME_147_ANDROID = "chrome-147-android"
+
+    # Chrome 146
     CHROME_146 = "chrome-146"
     CHROME_146_WINDOWS = "chrome-146-windows"
     CHROME_146_LINUX = "chrome-146-linux"
     CHROME_146_MACOS = "chrome-146-macos"
+    CHROME_146_IOS = "chrome-146-ios"
+    CHROME_146_ANDROID = "chrome-146-android"
 
     # Chrome 145
     CHROME_145 = "chrome-145"
     CHROME_145_WINDOWS = "chrome-145-windows"
     CHROME_145_LINUX = "chrome-145-linux"
     CHROME_145_MACOS = "chrome-145-macos"
+    CHROME_145_IOS = "chrome-145-ios"
+    CHROME_145_ANDROID = "chrome-145-android"
 
     # Chrome 144
     CHROME_144 = "chrome-144"
     CHROME_144_WINDOWS = "chrome-144-windows"
     CHROME_144_LINUX = "chrome-144-linux"
     CHROME_144_MACOS = "chrome-144-macos"
+    CHROME_144_IOS = "chrome-144-ios"
+    CHROME_144_ANDROID = "chrome-144-android"
 
     # Chrome 143
     CHROME_143 = "chrome-143"
     CHROME_143_WINDOWS = "chrome-143-windows"
     CHROME_143_LINUX = "chrome-143-linux"
     CHROME_143_MACOS = "chrome-143-macos"
+    CHROME_143_IOS = "chrome-143-ios"
+    CHROME_143_ANDROID = "chrome-143-android"
 
-    # Chrome 141
+    # Older Chrome (H1/H2 only, no H3)
     CHROME_141 = "chrome-141"
-
-    # Chrome 133
     CHROME_133 = "chrome-133"
 
-    # Mobile Chrome
-    CHROME_143_IOS = "chrome-143-ios"
-    CHROME_144_IOS = "chrome-144-ios"
-    CHROME_145_IOS = "chrome-145-ios"
-    CHROME_146_IOS = "chrome-146-ios"
-    CHROME_143_ANDROID = "chrome-143-android"
-    CHROME_144_ANDROID = "chrome-144-android"
-    CHROME_145_ANDROID = "chrome-145-android"
-    CHROME_146_ANDROID = "chrome-146-android"
-
     # Firefox
+    FIREFOX_LATEST = "firefox-latest"
+    FIREFOX_148 = "firefox-148"
     FIREFOX_133 = "firefox-133"
 
     # Safari (desktop and mobile)
+    SAFARI_LATEST = "safari-latest"
     SAFARI_18 = "safari-18"
     SAFARI_17_IOS = "safari-17-ios"
     SAFARI_18_IOS = "safari-18-ios"
+    SAFARI_LATEST_IOS = "safari-latest-ios"
 
-    # Backwards compatibility aliases (old naming convention)
+    # Backwards compatibility aliases (old naming convention used "ios-chrome" / "android-chrome" prefix)
     IOS_CHROME_143 = CHROME_143_IOS
     IOS_CHROME_144 = CHROME_144_IOS
     IOS_CHROME_145 = CHROME_145_IOS
     IOS_CHROME_146 = CHROME_146_IOS
+    IOS_CHROME_147 = CHROME_147_IOS
+    IOS_CHROME_148 = CHROME_148_IOS
+    IOS_CHROME_LATEST = CHROME_LATEST_IOS
     ANDROID_CHROME_143 = CHROME_143_ANDROID
     ANDROID_CHROME_144 = CHROME_144_ANDROID
     ANDROID_CHROME_145 = CHROME_145_ANDROID
     ANDROID_CHROME_146 = CHROME_146_ANDROID
+    ANDROID_CHROME_147 = CHROME_147_ANDROID
+    ANDROID_CHROME_148 = CHROME_148_ANDROID
+    ANDROID_CHROME_LATEST = CHROME_LATEST_ANDROID
     IOS_SAFARI_17 = SAFARI_17_IOS
     IOS_SAFARI_18 = SAFARI_18_IOS
+    IOS_SAFARI_LATEST = SAFARI_LATEST_IOS
 
     @classmethod
     def all(cls) -> List[str]:
-        """Return list of all available preset names."""
+        """
+        Return list of all built-in preset names known to this binding version.
+
+        For the authoritative live list (which may include custom presets loaded
+        at runtime), call `httpcloak.available_presets()` instead.
+        """
         return [
+            cls.CHROME_LATEST, cls.CHROME_LATEST_WINDOWS, cls.CHROME_LATEST_LINUX,
+            cls.CHROME_LATEST_MACOS, cls.CHROME_LATEST_IOS, cls.CHROME_LATEST_ANDROID,
+            cls.CHROME_148, cls.CHROME_148_WINDOWS, cls.CHROME_148_LINUX, cls.CHROME_148_MACOS,
+            cls.CHROME_148_IOS, cls.CHROME_148_ANDROID,
+            cls.CHROME_147, cls.CHROME_147_WINDOWS, cls.CHROME_147_LINUX, cls.CHROME_147_MACOS,
+            cls.CHROME_147_IOS, cls.CHROME_147_ANDROID,
             cls.CHROME_146, cls.CHROME_146_WINDOWS, cls.CHROME_146_LINUX, cls.CHROME_146_MACOS,
+            cls.CHROME_146_IOS, cls.CHROME_146_ANDROID,
             cls.CHROME_145, cls.CHROME_145_WINDOWS, cls.CHROME_145_LINUX, cls.CHROME_145_MACOS,
+            cls.CHROME_145_IOS, cls.CHROME_145_ANDROID,
             cls.CHROME_144, cls.CHROME_144_WINDOWS, cls.CHROME_144_LINUX, cls.CHROME_144_MACOS,
+            cls.CHROME_144_IOS, cls.CHROME_144_ANDROID,
             cls.CHROME_143, cls.CHROME_143_WINDOWS, cls.CHROME_143_LINUX, cls.CHROME_143_MACOS,
+            cls.CHROME_143_IOS, cls.CHROME_143_ANDROID,
             cls.CHROME_141, cls.CHROME_133,
-            cls.CHROME_146_IOS, cls.CHROME_145_IOS, cls.CHROME_144_IOS, cls.CHROME_143_IOS,
-            cls.CHROME_146_ANDROID, cls.CHROME_145_ANDROID, cls.CHROME_144_ANDROID, cls.CHROME_143_ANDROID,
-            cls.FIREFOX_133,
-            cls.SAFARI_18, cls.SAFARI_17_IOS, cls.SAFARI_18_IOS,
+            cls.FIREFOX_LATEST, cls.FIREFOX_148, cls.FIREFOX_133,
+            cls.SAFARI_LATEST, cls.SAFARI_18, cls.SAFARI_17_IOS, cls.SAFARI_18_IOS,
+            cls.SAFARI_LATEST_IOS,
         ]
 
 

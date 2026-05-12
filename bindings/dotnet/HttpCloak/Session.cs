@@ -2668,52 +2668,102 @@ public sealed class HttpCloakContentStream : Stream
 }
 
 /// <summary>
-/// Available browser presets.
+/// Available browser presets. Mirrors the runtime registry shipped by the linked
+/// libhttpcloak. Use Presets.ChromeLatest to auto-track newest stable Chrome,
+/// or pin to a specific major version for reproducibility.
 /// </summary>
 public static class Presets
 {
+    // Chrome latest (auto-resolves to newest shipped Chrome)
+    public const string ChromeLatest = "chrome-latest";
+    public const string ChromeLatestWindows = "chrome-latest-windows";
+    public const string ChromeLatestLinux = "chrome-latest-linux";
+    public const string ChromeLatestMacOS = "chrome-latest-macos";
+    public const string ChromeLatestIos = "chrome-latest-ios";
+    public const string ChromeLatestAndroid = "chrome-latest-android";
+
+    // Chrome 148
+    public const string Chrome148 = "chrome-148";
+    public const string Chrome148Windows = "chrome-148-windows";
+    public const string Chrome148Linux = "chrome-148-linux";
+    public const string Chrome148MacOS = "chrome-148-macos";
+    public const string Chrome148Ios = "chrome-148-ios";
+    public const string Chrome148Android = "chrome-148-android";
+
+    // Chrome 147
+    public const string Chrome147 = "chrome-147";
+    public const string Chrome147Windows = "chrome-147-windows";
+    public const string Chrome147Linux = "chrome-147-linux";
+    public const string Chrome147MacOS = "chrome-147-macos";
+    public const string Chrome147Ios = "chrome-147-ios";
+    public const string Chrome147Android = "chrome-147-android";
+
+    // Chrome 146
     public const string Chrome146 = "chrome-146";
     public const string Chrome146Windows = "chrome-146-windows";
     public const string Chrome146Linux = "chrome-146-linux";
     public const string Chrome146MacOS = "chrome-146-macos";
+    public const string Chrome146Ios = "chrome-146-ios";
+    public const string Chrome146Android = "chrome-146-android";
+
+    // Chrome 145
     public const string Chrome145 = "chrome-145";
     public const string Chrome145Windows = "chrome-145-windows";
     public const string Chrome145Linux = "chrome-145-linux";
     public const string Chrome145MacOS = "chrome-145-macos";
+    public const string Chrome145Ios = "chrome-145-ios";
+    public const string Chrome145Android = "chrome-145-android";
+
+    // Chrome 144
     public const string Chrome144 = "chrome-144";
     public const string Chrome144Windows = "chrome-144-windows";
     public const string Chrome144Linux = "chrome-144-linux";
     public const string Chrome144MacOS = "chrome-144-macos";
+    public const string Chrome144Ios = "chrome-144-ios";
+    public const string Chrome144Android = "chrome-144-android";
+
+    // Chrome 143
     public const string Chrome143 = "chrome-143";
     public const string Chrome143Windows = "chrome-143-windows";
     public const string Chrome143Linux = "chrome-143-linux";
     public const string Chrome143MacOS = "chrome-143-macos";
+    public const string Chrome143Ios = "chrome-143-ios";
+    public const string Chrome143Android = "chrome-143-android";
+
+    // Older Chrome (H1/H2 only, no H3)
     public const string Chrome141 = "chrome-141";
     public const string Chrome133 = "chrome-133";
+
+    // Firefox
+    public const string FirefoxLatest = "firefox-latest";
+    public const string Firefox148 = "firefox-148";
     public const string Firefox133 = "firefox-133";
+
+    // Safari (desktop and mobile)
+    public const string SafariLatest = "safari-latest";
     public const string Safari18 = "safari-18";
-    public const string Chrome143Ios = "chrome-143-ios";
-    public const string Chrome144Ios = "chrome-144-ios";
-    public const string Chrome145Ios = "chrome-145-ios";
-    public const string Chrome146Ios = "chrome-146-ios";
     public const string Safari17Ios = "safari-17-ios";
     public const string Safari18Ios = "safari-18-ios";
-    public const string Chrome143Android = "chrome-143-android";
-    public const string Chrome144Android = "chrome-144-android";
-    public const string Chrome145Android = "chrome-145-android";
-    public const string Chrome146Android = "chrome-146-android";
+    public const string SafariLatestIos = "safari-latest-ios";
 
-    // Backwards compatibility aliases (old naming convention)
+    // Backwards compatibility aliases (old "ios-chrome" / "android-chrome" naming)
     public const string IosChrome143 = Chrome143Ios;
     public const string IosChrome144 = Chrome144Ios;
     public const string IosChrome145 = Chrome145Ios;
     public const string IosChrome146 = Chrome146Ios;
+    public const string IosChrome147 = Chrome147Ios;
+    public const string IosChrome148 = Chrome148Ios;
+    public const string IosChromeLatest = ChromeLatestIos;
     public const string IosSafari17 = Safari17Ios;
     public const string IosSafari18 = Safari18Ios;
+    public const string IosSafariLatest = SafariLatestIos;
     public const string AndroidChrome143 = Chrome143Android;
     public const string AndroidChrome144 = Chrome144Android;
     public const string AndroidChrome145 = Chrome145Android;
     public const string AndroidChrome146 = Chrome146Android;
+    public const string AndroidChrome147 = Chrome147Android;
+    public const string AndroidChrome148 = Chrome148Android;
+    public const string AndroidChromeLatest = ChromeLatestAndroid;
 }
 
 /// <summary>

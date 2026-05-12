@@ -21,91 +21,136 @@ class HTTPCloakError extends Error {
 }
 
 /**
- * Available browser presets for TLS fingerprinting.
+ * Available browser presets for TLS fingerprinting. Mirrors the runtime
+ * registry shipped by the linked libhttpcloak. Use Preset.CHROME_LATEST to
+ * auto-track newest stable Chrome, or pin to a specific major version for
+ * reproducibility.
  *
- * Use these constants instead of typing preset strings manually:
  *   const httpcloak = require("httpcloak");
- *   httpcloak.configure({ preset: httpcloak.Preset.CHROME_143 });
+ *   httpcloak.configure({ preset: httpcloak.Preset.CHROME_LATEST });
  *
- *   // Or with Session
- *   const session = new httpcloak.Session({ preset: httpcloak.Preset.FIREFOX_133 });
+ *   const session = new httpcloak.Session({ preset: httpcloak.Preset.FIREFOX_LATEST });
  */
 const Preset = {
-  // Chrome 146 (latest)
+  // Chrome latest (auto-resolves to newest shipped Chrome)
+  CHROME_LATEST: "chrome-latest",
+  CHROME_LATEST_WINDOWS: "chrome-latest-windows",
+  CHROME_LATEST_LINUX: "chrome-latest-linux",
+  CHROME_LATEST_MACOS: "chrome-latest-macos",
+  CHROME_LATEST_IOS: "chrome-latest-ios",
+  CHROME_LATEST_ANDROID: "chrome-latest-android",
+
+  // Chrome 148
+  CHROME_148: "chrome-148",
+  CHROME_148_WINDOWS: "chrome-148-windows",
+  CHROME_148_LINUX: "chrome-148-linux",
+  CHROME_148_MACOS: "chrome-148-macos",
+  CHROME_148_IOS: "chrome-148-ios",
+  CHROME_148_ANDROID: "chrome-148-android",
+
+  // Chrome 147
+  CHROME_147: "chrome-147",
+  CHROME_147_WINDOWS: "chrome-147-windows",
+  CHROME_147_LINUX: "chrome-147-linux",
+  CHROME_147_MACOS: "chrome-147-macos",
+  CHROME_147_IOS: "chrome-147-ios",
+  CHROME_147_ANDROID: "chrome-147-android",
+
+  // Chrome 146
   CHROME_146: "chrome-146",
   CHROME_146_WINDOWS: "chrome-146-windows",
   CHROME_146_LINUX: "chrome-146-linux",
   CHROME_146_MACOS: "chrome-146-macos",
+  CHROME_146_IOS: "chrome-146-ios",
+  CHROME_146_ANDROID: "chrome-146-android",
 
   // Chrome 145
   CHROME_145: "chrome-145",
   CHROME_145_WINDOWS: "chrome-145-windows",
   CHROME_145_LINUX: "chrome-145-linux",
   CHROME_145_MACOS: "chrome-145-macos",
+  CHROME_145_IOS: "chrome-145-ios",
+  CHROME_145_ANDROID: "chrome-145-android",
 
   // Chrome 144
   CHROME_144: "chrome-144",
   CHROME_144_WINDOWS: "chrome-144-windows",
   CHROME_144_LINUX: "chrome-144-linux",
   CHROME_144_MACOS: "chrome-144-macos",
+  CHROME_144_IOS: "chrome-144-ios",
+  CHROME_144_ANDROID: "chrome-144-android",
 
   // Chrome 143
   CHROME_143: "chrome-143",
   CHROME_143_WINDOWS: "chrome-143-windows",
   CHROME_143_LINUX: "chrome-143-linux",
   CHROME_143_MACOS: "chrome-143-macos",
+  CHROME_143_IOS: "chrome-143-ios",
+  CHROME_143_ANDROID: "chrome-143-android",
 
-  // Chrome 141
+  // Older Chrome (H1/H2 only, no H3)
   CHROME_141: "chrome-141",
-
-  // Chrome 133
   CHROME_133: "chrome-133",
 
-  // Mobile Chrome
-  CHROME_143_IOS: "chrome-143-ios",
-  CHROME_144_IOS: "chrome-144-ios",
-  CHROME_145_IOS: "chrome-145-ios",
-  CHROME_146_IOS: "chrome-146-ios",
-  CHROME_143_ANDROID: "chrome-143-android",
-  CHROME_144_ANDROID: "chrome-144-android",
-  CHROME_145_ANDROID: "chrome-145-android",
-  CHROME_146_ANDROID: "chrome-146-android",
-
   // Firefox
+  FIREFOX_LATEST: "firefox-latest",
+  FIREFOX_148: "firefox-148",
   FIREFOX_133: "firefox-133",
 
   // Safari (desktop and mobile)
+  SAFARI_LATEST: "safari-latest",
   SAFARI_18: "safari-18",
   SAFARI_17_IOS: "safari-17-ios",
   SAFARI_18_IOS: "safari-18-ios",
+  SAFARI_LATEST_IOS: "safari-latest-ios",
 
-  // Backwards compatibility aliases (old naming convention)
+  // Backwards compatibility aliases (old "ios-chrome" / "android-chrome" naming)
   IOS_CHROME_143: "chrome-143-ios",
   IOS_CHROME_144: "chrome-144-ios",
   IOS_CHROME_145: "chrome-145-ios",
   IOS_CHROME_146: "chrome-146-ios",
+  IOS_CHROME_147: "chrome-147-ios",
+  IOS_CHROME_148: "chrome-148-ios",
+  IOS_CHROME_LATEST: "chrome-latest-ios",
   ANDROID_CHROME_143: "chrome-143-android",
   ANDROID_CHROME_144: "chrome-144-android",
   ANDROID_CHROME_145: "chrome-145-android",
   ANDROID_CHROME_146: "chrome-146-android",
+  ANDROID_CHROME_147: "chrome-147-android",
+  ANDROID_CHROME_148: "chrome-148-android",
+  ANDROID_CHROME_LATEST: "chrome-latest-android",
   IOS_SAFARI_17: "safari-17-ios",
   IOS_SAFARI_18: "safari-18-ios",
+  IOS_SAFARI_LATEST: "safari-latest-ios",
 
   /**
-   * Get all available preset names
-   * @returns {string[]} List of all preset names
+   * Get all built-in preset names known to this binding version.
+   *
+   * For the authoritative live list (which may include custom presets
+   * loaded at runtime), call `availablePresets()` instead.
+   *
+   * @returns {string[]} List of preset names
    */
   all() {
     return [
+      this.CHROME_LATEST, this.CHROME_LATEST_WINDOWS, this.CHROME_LATEST_LINUX,
+      this.CHROME_LATEST_MACOS, this.CHROME_LATEST_IOS, this.CHROME_LATEST_ANDROID,
+      this.CHROME_148, this.CHROME_148_WINDOWS, this.CHROME_148_LINUX, this.CHROME_148_MACOS,
+      this.CHROME_148_IOS, this.CHROME_148_ANDROID,
+      this.CHROME_147, this.CHROME_147_WINDOWS, this.CHROME_147_LINUX, this.CHROME_147_MACOS,
+      this.CHROME_147_IOS, this.CHROME_147_ANDROID,
       this.CHROME_146, this.CHROME_146_WINDOWS, this.CHROME_146_LINUX, this.CHROME_146_MACOS,
+      this.CHROME_146_IOS, this.CHROME_146_ANDROID,
       this.CHROME_145, this.CHROME_145_WINDOWS, this.CHROME_145_LINUX, this.CHROME_145_MACOS,
+      this.CHROME_145_IOS, this.CHROME_145_ANDROID,
       this.CHROME_144, this.CHROME_144_WINDOWS, this.CHROME_144_LINUX, this.CHROME_144_MACOS,
+      this.CHROME_144_IOS, this.CHROME_144_ANDROID,
       this.CHROME_143, this.CHROME_143_WINDOWS, this.CHROME_143_LINUX, this.CHROME_143_MACOS,
+      this.CHROME_143_IOS, this.CHROME_143_ANDROID,
       this.CHROME_141, this.CHROME_133,
-      this.CHROME_146_IOS, this.CHROME_145_IOS, this.CHROME_144_IOS, this.CHROME_143_IOS,
-      this.CHROME_146_ANDROID, this.CHROME_145_ANDROID, this.CHROME_144_ANDROID, this.CHROME_143_ANDROID,
-      this.FIREFOX_133,
-      this.SAFARI_18, this.SAFARI_17_IOS, this.SAFARI_18_IOS,
+      this.FIREFOX_LATEST, this.FIREFOX_148, this.FIREFOX_133,
+      this.SAFARI_LATEST, this.SAFARI_18, this.SAFARI_17_IOS, this.SAFARI_18_IOS,
+      this.SAFARI_LATEST_IOS,
     ];
   },
 };
