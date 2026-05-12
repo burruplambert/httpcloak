@@ -1290,6 +1290,14 @@ type RequestOptions struct {
 	// session's per-URL cache. Default false leaves the session-level
 	// behaviour intact.
 	DisableConditionalCache bool `json:"disable_conditional_cache,omitempty"`
+	// BodyEncoding controls how the request body string is interpreted by
+	// post_async / get_async style entry points where the body is passed as
+	// a separate C string. "" (default) treats the body as UTF-8 text.
+	// "base64" base64-decodes the body before sending. Bindings must set
+	// this to "base64" whenever the user-supplied body contains arbitrary
+	// bytes (Buffer / bytes / Stream), otherwise NUL bytes terminate the
+	// C string early and binary uploads are silently truncated/mangled.
+	BodyEncoding string `json:"body_encoding,omitempty"`
 }
 
 //export httpcloak_get
@@ -1654,7 +1662,16 @@ func httpcloak_post_async(handle C.int64_t, url *C.char, body *C.char, optionsJS
 
 		var bodyReader io.Reader
 		if bodyStr != "" {
-			bodyReader = bytes.NewReader([]byte(bodyStr))
+			rawBody, decodeErr := decodeRequestBody(bodyStr, options.BodyEncoding)
+			if decodeErr != nil {
+				errResp := ErrorResponse{Error: "invalid base64 body: " + decodeErr.Error()}
+				errJSON, _ := json.Marshal(errResp)
+				invokeCallback(int64(callbackID), "", string(errJSON))
+				return
+			}
+			if len(rawBody) > 0 {
+				bodyReader = bytes.NewReader(rawBody)
+			}
 		}
 
 		req := &httpcloak.Request{

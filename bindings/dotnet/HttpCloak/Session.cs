@@ -172,6 +172,7 @@ public sealed class Session : IDisposable
     /// <param name="switchProtocol">Protocol to switch to after Refresh(): "h1", "h2", "h3" (default: null, no switch)</param>
     /// <param name="withoutCookieJar">Disable internal cookie jar entirely — caller manages cookies via per-request headers (default: false)</param>
     /// <param name="withoutConditionalCache">Disable ETag / If-Modified-Since handling for the lifetime of the session — every request hits the origin fresh (default: false)</param>
+    /// <param name="disableEch">Skip the ECH (Encrypted Client Hello) HTTPS RR lookup. Saves ~15-20ms on first connect at the cost of the privacy bump ECH gives you (default: false)</param>
     /// <param name="tcpTtl">TCP/IP TTL override: 128=Windows, 64=Linux/macOS (default: null, no spoofing)</param>
     /// <param name="tcpMss">TCP Maximum Segment Size override: typically 1460 (default: null)</param>
     /// <param name="tcpWindowSize">TCP Window Size override: 64240=Windows, 65535=Linux/macOS (default: null)</param>
@@ -203,6 +204,7 @@ public sealed class Session : IDisposable
         string? switchProtocol = null,
         bool withoutCookieJar = false,
         bool withoutConditionalCache = false,
+        bool disableEch = false,
         string? ja3 = null,
         string? akamai = null,
         Dictionary<string, object>? extraFp = null,
@@ -240,6 +242,7 @@ public sealed class Session : IDisposable
             SwitchProtocol = switchProtocol,
             WithoutCookieJar = withoutCookieJar,
             WithoutConditionalCache = withoutConditionalCache,
+            DisableEch = disableEch,
             Ja3 = ja3,
             Akamai = akamai,
             ExtraFp = extraFp,
@@ -2895,6 +2898,10 @@ internal class SessionConfig
     [JsonPropertyName("without_conditional_cache")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool WithoutConditionalCache { get; set; }
+
+    [JsonPropertyName("disable_ech")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool DisableEch { get; set; }
 
     [JsonPropertyName("ja3")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

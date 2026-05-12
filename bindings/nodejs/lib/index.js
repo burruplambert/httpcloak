@@ -837,6 +837,7 @@ function getLib() {
       httpcloak_session_get_follow_redirects: nativeLibHandle.func("httpcloak_session_get_follow_redirects", "int", ["int64"]),
       httpcloak_session_set_max_redirects: nativeLibHandle.func("httpcloak_session_set_max_redirects", "void", ["int64", "int"]),
       httpcloak_session_get_max_redirects: nativeLibHandle.func("httpcloak_session_get_max_redirects", "int", ["int64"]),
+      httpcloak_session_set_identifier: nativeLibHandle.func("httpcloak_session_set_identifier", "void", ["int64", "str"]),
       httpcloak_free_string: httpcloakFreeString,
       httpcloak_version: nativeLibHandle.func("httpcloak_version", HeapStr, []),
       httpcloak_available_presets: nativeLibHandle.func("httpcloak_available_presets", HeapStr, []),
@@ -1370,6 +1371,7 @@ class Session {
       switchProtocol = null,
       withoutCookieJar = false,
       withoutConditionalCache = false,
+      disableEch = false,
       ja3 = null,
       akamai = null,
       extraFp = null,
@@ -1449,6 +1451,9 @@ class Session {
     }
     if (withoutConditionalCache) {
       config.without_conditional_cache = true;
+    }
+    if (disableEch) {
+      config.disable_ech = true;
     }
     if (ja3) {
       config.ja3 = ja3;
@@ -1869,11 +1874,18 @@ class Session {
     url = addParamsToUrl(url, params);
     let mergedHeaders = this._mergeHeaders(headers);
 
+    // bodyEncoding tells clib whether `body` is plain text or base64-encoded
+    // binary. Default "" = text. Anything that carries arbitrary bytes
+    // (Buffer, multipart) flows through as base64 so NUL bytes don't truncate
+    // the C string at the cgo boundary.
+    let bodyEncoding = "";
+
     // Handle multipart file upload
     if (files !== null) {
       const formData = (data !== null && typeof data === "object") ? data : null;
       const multipart = encodeMultipart(formData, files);
-      body = multipart.body.toString("latin1");
+      body = multipart.body.toString("base64");
+      bodyEncoding = "base64";
       mergedHeaders = mergedHeaders || {};
       mergedHeaders["Content-Type"] = multipart.contentType;
     }
@@ -1893,9 +1905,11 @@ class Session {
         mergedHeaders["Content-Type"] = "application/x-www-form-urlencoded";
       }
     }
-    // Handle Buffer body
+    // Handle Buffer body (binary payload). base64-encode so NUL bytes and
+    // non-UTF-8 sequences survive the cgo C-string round-trip intact.
     else if (Buffer.isBuffer(body)) {
-      body = body.toString("utf8");
+      body = body.toString("base64");
+      bodyEncoding = "base64";
     }
 
     // Use request auth if provided, otherwise fall back to session auth
@@ -1920,6 +1934,9 @@ class Session {
     }
     if (disableConditionalCache) {
       reqOptions.disable_conditional_cache = true;
+    }
+    if (bodyEncoding) {
+      reqOptions.body_encoding = bodyEncoding;
     }
     const optionsJson = Object.keys(reqOptions).length > 0 ? JSON.stringify(reqOptions) : null;
 
@@ -1947,11 +1964,17 @@ class Session {
     url = addParamsToUrl(url, params);
     let mergedHeaders = this._mergeHeaders(headers);
 
+    // bodyEncoding tells clib whether `body` is text or base64 binary.
+    // Binary payloads (Buffer / multipart) flow through as base64 so they
+    // survive JSON serialization + the cgo C-string boundary intact.
+    let bodyEncoding = "";
+
     // Handle multipart file upload
     if (files !== null) {
       const formData = (data !== null && typeof data === "object") ? data : null;
       const multipart = encodeMultipart(formData, files);
-      body = multipart.body.toString("latin1");
+      body = multipart.body.toString("base64");
+      bodyEncoding = "base64";
       mergedHeaders = mergedHeaders || {};
       mergedHeaders["Content-Type"] = multipart.contentType;
     }
@@ -1971,9 +1994,11 @@ class Session {
         mergedHeaders["Content-Type"] = "application/x-www-form-urlencoded";
       }
     }
-    // Handle Buffer body
+    // Handle Buffer body (binary payload). base64-encode so non-UTF-8 bytes
+    // and NUL bytes survive JSON.stringify + the C boundary.
     else if (Buffer.isBuffer(body)) {
-      body = body.toString("utf8");
+      body = body.toString("base64");
+      bodyEncoding = "base64";
     }
 
     // Use request auth if provided, otherwise fall back to session auth
@@ -1987,6 +2012,7 @@ class Session {
     };
     if (mergedHeaders) requestConfig.headers = mergedHeaders;
     if (body) requestConfig.body = body;
+    if (bodyEncoding) requestConfig.body_encoding = bodyEncoding;
     if (timeout) requestConfig.timeout = timeout;
     if (fetchMode) requestConfig.fetch_mode = fetchMode;
     if (allowRedirects !== null && allowRedirects !== undefined) requestConfig.follow_redirects = !!allowRedirects;

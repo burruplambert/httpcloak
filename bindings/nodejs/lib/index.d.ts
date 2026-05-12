@@ -245,6 +245,8 @@ export interface SessionOptions {
   withoutCookieJar?: boolean;
   /** Disable ETag / If-Modified-Since handling for the lifetime of the session (default: false) */
   withoutConditionalCache?: boolean;
+  /** Skip the ECH (Encrypted Client Hello) HTTPS RR lookup. Saves ~15-20ms on first connect (default: false) */
+  disableEch?: boolean;
   /** Custom JA3 fingerprint string (e.g., "771,4865-4866-4867-...,0-23-65281-...,29-23-24,0") */
   ja3?: string;
   /** Custom Akamai HTTP/2 fingerprint string (e.g., "1:65536;2:0;4:6291456;6:262144|15663105|0|m,a,s,p") */

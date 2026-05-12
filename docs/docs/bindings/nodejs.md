@@ -100,6 +100,8 @@ new Session(options?: SessionOptions);
   enableSpeculativeTls?: boolean;
   switchProtocol?: string;
   withoutCookieJar?: boolean;
+  withoutConditionalCache?: boolean;
+  disableEch?: boolean;
   ja3?: string;
   akamai?: string;
   extraFp?: Record<string, any>;

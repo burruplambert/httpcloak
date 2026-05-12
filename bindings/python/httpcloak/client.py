@@ -1465,6 +1465,8 @@ class Session:
         prefer_ipv4: Prefer IPv4 addresses over IPv6 (default: False)
         connect_to: Domain fronting map {request_host: connect_host} - DNS resolves connect_host but SNI/Host uses request_host
         ech_config_domain: Domain to fetch ECH config from (e.g., "cloudflare-ech.com" for any CF domain)
+        disable_ech: Skip the ECH (Encrypted Client Hello) HTTPS RR lookup entirely (default: False).
+            Saves ~15-20ms on first connect at the cost of the privacy bump ECH provides.
         tls_only: TLS-only mode - skip preset HTTP headers, only apply TLS fingerprint (default: False)
         quic_idle_timeout: QUIC connection idle timeout in seconds (default: 30). Set higher for long-lived H3 connections.
         local_address: Local IP address to bind outgoing connections to (e.g., "192.168.1.100" or "::1")
@@ -1527,6 +1529,7 @@ class Session:
         switch_protocol: Optional[str] = None,
         without_cookie_jar: bool = False,
         without_conditional_cache: bool = False,
+        disable_ech: bool = False,
         ja3: Optional[str] = None,
         akamai: Optional[str] = None,
         extra_fp: Optional[Dict[str, any]] = None,
@@ -1584,6 +1587,8 @@ class Session:
             config["without_cookie_jar"] = True
         if without_conditional_cache:
             config["without_conditional_cache"] = True
+        if disable_ech:
+            config["disable_ech"] = True
         if ja3:
             config["ja3"] = ja3
         if akamai:
@@ -2291,10 +2296,12 @@ class Session:
         merged_headers = self._merge_headers(headers)
 
         body = None
+        body_encoding = ""
         if files is not None:
             form_data = data if isinstance(data, dict) else None
             body_bytes, content_type = _encode_multipart(data=form_data, files=files)
-            body = body_bytes.decode("latin-1")
+            body = base64.b64encode(body_bytes).decode("ascii")
+            body_encoding = "base64"
             merged_headers = merged_headers or {}
             merged_headers["Content-Type"] = content_type
         elif json_data is not None:
@@ -2307,7 +2314,8 @@ class Session:
                 merged_headers = merged_headers or {}
                 merged_headers.setdefault("Content-Type", "application/x-www-form-urlencoded")
             elif isinstance(data, bytes):
-                body = data.decode("utf-8")
+                body = base64.b64encode(data).decode("ascii")
+                body_encoding = "base64"
             else:
                 body = data
 
@@ -2324,6 +2332,8 @@ class Session:
             request_config["headers"] = merged_headers
         if body:
             request_config["body"] = body
+        if body_encoding:
+            request_config["body_encoding"] = body_encoding
         if fetch_mode:
             request_config["fetch_mode"] = fetch_mode
         if allow_redirects is not None:
@@ -3311,6 +3321,13 @@ class Session:
                 cookies_list.append(Cookie(
                     name=cookie_data.get("name", ""),
                     value=cookie_data.get("value", ""),
+                    domain=cookie_data.get("domain", ""),
+                    path=cookie_data.get("path", ""),
+                    expires=cookie_data.get("expires", ""),
+                    max_age=cookie_data.get("max_age", 0),
+                    secure=cookie_data.get("secure", False),
+                    http_only=cookie_data.get("http_only", False),
+                    same_site=cookie_data.get("same_site", ""),
                 ))
 
         return StreamResponse(
@@ -3417,6 +3434,13 @@ class Session:
                 cookies_list.append(Cookie(
                     name=cookie_data.get("name", ""),
                     value=cookie_data.get("value", ""),
+                    domain=cookie_data.get("domain", ""),
+                    path=cookie_data.get("path", ""),
+                    expires=cookie_data.get("expires", ""),
+                    max_age=cookie_data.get("max_age", 0),
+                    secure=cookie_data.get("secure", False),
+                    http_only=cookie_data.get("http_only", False),
+                    same_site=cookie_data.get("same_site", ""),
                 ))
 
         return StreamResponse(
@@ -3506,6 +3530,13 @@ class Session:
                 cookies_list.append(Cookie(
                     name=cookie_data.get("name", ""),
                     value=cookie_data.get("value", ""),
+                    domain=cookie_data.get("domain", ""),
+                    path=cookie_data.get("path", ""),
+                    expires=cookie_data.get("expires", ""),
+                    max_age=cookie_data.get("max_age", 0),
+                    secure=cookie_data.get("secure", False),
+                    http_only=cookie_data.get("http_only", False),
+                    same_site=cookie_data.get("same_site", ""),
                 ))
 
         return StreamResponse(
