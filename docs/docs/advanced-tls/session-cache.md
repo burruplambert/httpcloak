@@ -187,11 +187,30 @@ What the bindings do expose is a process-global cache backend:
 
 - Python: `httpcloak.SessionCacheBackend(get=..., put=..., delete=..., on_error=...)` plus `.register()`. After `register()`, every `Session` and `LocalProxy` constructed in the process uses the registered backend. See `bindings/python/httpcloak/client.py` for the full signature.
 - Node.js: `new SessionCacheBackend({ get, put, delete, onError })` plus `.register()`. Both sync and async callbacks supported.
-- .NET: not exposed today. The path for distributed TLS cache from .NET is to run a Go-side `LocalProxy` with `WithProxySessionCache` and point the .NET `HttpClient` at it.
+- .NET: implement `ISessionCache` and pass it to `new SessionCacheBackend(impl)`, then call `Register()`. The wrapper pins the six callback delegates as instance fields so the GC can't collect them while the Go side still holds function pointers; `Dispose()` (or `using`) unregisters cleanly. `HttpCloakCache.ConfigureSessionCache(impl)` is a one-liner shorthand for construct+register, and `HttpCloakCache.ClearSessionCache()` drops the active backend.
 
-The process-global pattern works the same as the per-session call from the cache's perspective. Same key formats, same value shape, same TTL semantics. The only difference is registration scope. If you need different cache backends for different sessions in the same Python or Node process, the workaround is to run two LocalProxy processes, each with its own `WithProxySessionCache`, and route the right session through the right proxy.
+```csharp
+public sealed class RedisCache : ISessionCache
+{
+    private readonly IDatabase _db;
+    public RedisCache(IDatabase db) => _db = db;
+    public string? Get(string key) => _db.StringGet(key);
+    public int Put(string key, string value, long ttl)
+    {
+        _db.StringSet(key, value, TimeSpan.FromSeconds(ttl));
+        return 0;
+    }
+    public int Delete(string key) { _db.KeyDelete(key); return 0; }
+    public void OnError(string op, string key, string err) => Log.Warn($"{op} {key}: {err}");
+}
 
-For namespacing across multiple "personas" sharing one backend, the bindings expose `Session.set_session_identifier(id)` (Python) / `session.setSessionIdentifier(id)` (Node) and the `RegisterSession` method on `LocalProxy` calls it automatically.
+using var backend = new SessionCacheBackend(new RedisCache(redisDb));
+backend.Register();
+```
+
+The process-global pattern works the same as the per-session call from the cache's perspective. Same key formats, same value shape, same TTL semantics. The only difference is registration scope. If you need different cache backends for different sessions in the same Python or Node or .NET process, the workaround is to run two LocalProxy processes, each with its own `WithProxySessionCache`, and route the right session through the right proxy.
+
+For namespacing across multiple "personas" sharing one backend, the bindings expose `Session.set_session_identifier(id)` (Python) / `session.setSessionIdentifier(id)` (Node) / `Session.SetSessionIdentifier(id)` (.NET) and the `RegisterSession` method on `LocalProxy` calls it automatically.
 
 ## Operational notes
 

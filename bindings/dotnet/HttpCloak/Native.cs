@@ -344,4 +344,68 @@ internal static class Native
 
         return Marshal.PtrToStringUTF8(ptr);
     }
+
+    // =========================================================================
+    // Distributed session cache callbacks (sync flavor).
+    // Each delegate's IntPtr arguments are raw const char* pointers from the Go
+    // side; the managed body marshals via Marshal.PtrToStringUTF8. The Get-type
+    // delegates return IntPtr to a malloc'd C string (the Go side copies via
+    // C.GoString and never frees), so the SessionCacheBackend wrapper holds the
+    // last-returned pointer in a field and frees it on the next invocation.
+    // =========================================================================
+
+    /// <summary>
+    /// Sync session cache GET callback. Returns IntPtr.Zero for "not found",
+    /// or a pointer to a UTF-8 C string containing the JSON-serialised
+    /// transport.TLSSessionState.
+    /// </summary>
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate IntPtr SessionCacheGetCallback(IntPtr key);
+
+    /// <summary>
+    /// Sync session cache PUT callback. Returns 0 on success, non-zero on
+    /// failure.
+    /// </summary>
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate int SessionCachePutCallback(IntPtr key, IntPtr valueJson, long ttlSeconds);
+
+    /// <summary>
+    /// Sync session cache DELETE callback. Returns 0 on success, non-zero on
+    /// failure.
+    /// </summary>
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate int SessionCacheDeleteCallback(IntPtr key);
+
+    /// <summary>
+    /// Sync ECH cache GET callback. Returns IntPtr.Zero for "not found", or
+    /// a pointer to a UTF-8 C string containing the base64-encoded ECH config.
+    /// </summary>
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate IntPtr EchCacheGetCallback(IntPtr key);
+
+    /// <summary>
+    /// Sync ECH cache PUT callback. Returns 0 on success, non-zero on failure.
+    /// </summary>
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate int EchCachePutCallback(IntPtr key, IntPtr valueBase64, long ttlSeconds);
+
+    /// <summary>
+    /// Cache error callback. Fired when the backend reports an error from any
+    /// op (get / put / delete). Receives the operation name, key and error
+    /// message strings.
+    /// </summary>
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate void SessionCacheErrorCallback(IntPtr operation, IntPtr key, IntPtr error);
+
+    [DllImport(LibraryName, EntryPoint = "httpcloak_set_session_cache_callbacks", CallingConvention = CallingConvention.Cdecl)]
+    public static extern void SetSessionCacheCallbacks(
+        SessionCacheGetCallback get,
+        SessionCachePutCallback put,
+        SessionCacheDeleteCallback delete,
+        EchCacheGetCallback echGet,
+        EchCachePutCallback echPut,
+        SessionCacheErrorCallback onError);
+
+    [DllImport(LibraryName, EntryPoint = "httpcloak_clear_session_cache_callbacks", CallingConvention = CallingConvention.Cdecl)]
+    public static extern void ClearSessionCacheCallbacks();
 }

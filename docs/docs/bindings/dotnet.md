@@ -412,11 +412,11 @@ HttpCloak.CustomPresets     // Describe / LoadFromJson / LoadFromFile / Unregist
 HttpCloak.Presets           // PascalCase string constants (Presets.Chrome146, Presets.Firefox133, ...)
 ```
 
-The `Presets` static class lags the registry by a release or two; the constants currently top out at `Presets.Chrome146` and the family of older PascalCase names. Newer presets land as plain string literals first (`new Session(preset: "chrome-148-windows")`) and get a typed constant in a follow-up. `HttpCloakInfo.AvailablePresets()` returns a `Dictionary<string, PresetInfo>` keyed by the canonical preset name (use `.ContainsKey("chrome-148")` to probe).
+The `Presets` static class mirrors the runtime registry. `Presets.ChromeLatest` (and the platform variants `ChromeLatestWindows`, `ChromeLatestLinux`, etc.) auto-resolves to the newest shipped Chrome; pin to a specific major with `Presets.Chrome148Windows` if you need byte-for-byte reproducibility. Firefox, Safari and the mobile families are similarly enumerated. For the authoritative live list including any custom presets loaded at runtime, `HttpCloakInfo.AvailablePresets()` returns a `Dictionary<string, PresetInfo>` keyed by the canonical preset name.
 
-`SessionCacheBackend` is Python and Node only; the .NET binding doesn't ship a managed wrapper today. The C entry points exist in `libhttpcloak`, so a future binding update can fold it in. Until then, the in-memory per-session ticket cache works as expected and only the cross-process distributed-cache use case isn't reachable from .NET.
+`SessionCacheBackend` plugs a distributed TLS session cache (Redis, Memcached, your own store) into the binding via an `ISessionCache` interface. Construct it with your implementation and call `Register()`, or use the `HttpCloakCache.ConfigureSessionCache(impl)` shorthand. The wrapper pins the six callback delegates as instance fields, swallows user-side exceptions back to "not found" / non-zero, and frees its trailing string buffers on `Dispose`. Full design in [Session cache](/advanced-tls/session-cache).
 
-`LocalProxy` runs a local HTTP proxy server that applies the fingerprint to any HTTP client pointed at it. `PresetPool` and JSON loading are covered in [JSON preset builder](/fingerprinting/json-preset-builder). `SessionCacheBackend` plugs into [Session save and restore](/connection-lifecycle/session-save-restore).
+`LocalProxy` runs a local HTTP proxy server that applies the fingerprint to any HTTP client pointed at it. `PresetPool` and JSON loading are covered in [JSON preset builder](/fingerprinting/json-preset-builder).
 
 ## P/Invoke pitfalls
 
