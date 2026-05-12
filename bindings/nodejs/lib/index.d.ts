@@ -737,16 +737,20 @@ export interface LocalProxyOptions {
 }
 
 export interface LocalProxyStats {
-  /** Total number of requests processed */
-  totalRequests: number;
-  /** Number of active connections */
-  activeConnections: number;
-  /** Number of failed requests */
-  failedRequests: number;
-  /** Bytes sent */
-  bytesSent: number;
-  /** Bytes received */
-  bytesReceived: number;
+  /** Whether the proxy is currently accepting connections */
+  running: boolean;
+  /** TCP port the proxy is bound to */
+  port: number;
+  /** Live count of in-flight connections */
+  active_conns: number;
+  /** Lifetime request counter since the proxy started */
+  total_requests: number;
+  /** Preset name the proxy was started with */
+  preset: string;
+  /** Max concurrent connections configured at start time */
+  max_connections: number;
+  /** Number of sessions currently registered via registerSession() */
+  registered_sessions: number;
 }
 
 /**
@@ -860,8 +864,30 @@ export class LocalProxy {
 /** Get the httpcloak library version */
 export function version(): string;
 
-/** Get list of available browser presets */
-export function availablePresets(): string[];
+/**
+ * Get available browser presets keyed by preset name.
+ *
+ * Each entry carries the protocols the preset supports (some H1/H2 only, some H1/H2/H3).
+ * The shape is `{ [presetName: string]: { protocols: string[] } }`.
+ *
+ * @example
+ * const presets = availablePresets();
+ * Object.entries(presets).filter(([, info]) => info.protocols.includes("h3"));
+ */
+export function availablePresets(): Record<string, { protocols: string[] }>;
+
+/**
+ * Return a fully-resolved JSON dump of a preset's TLS / H2 / H3 / header configuration.
+ *
+ * Useful for inspecting what a preset name actually does at the wire level, or for
+ * dumping a built-in preset, mutating it, and loading it back with `loadPresetFromJSON`
+ * under a new name.
+ *
+ * @param name - Preset name (e.g. "chrome-148-windows", "firefox-148", "chrome-latest")
+ * @returns JSON string. Parse with `JSON.parse` to get the structured form.
+ * @throws {HTTPCloakError} If the preset name is not registered.
+ */
+export function describePreset(name: string): string;
 
 /**
  * Configure the DNS servers used for ECH (Encrypted Client Hello) config queries.

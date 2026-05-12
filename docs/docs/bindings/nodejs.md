@@ -352,16 +352,59 @@ Setting `ja3` auto-enables TLS-only mode. See [Custom JA3](/fingerprinting/custo
 
 ```ts
 import {
+  // Classes
+  Session,
   LocalProxy,
   PresetPool,
   SessionCacheBackend,
+  Response,
+  FastResponse,
+  StreamResponse,
+  Cookie,
+  RedirectInfo,
   HTTPCloakError,
+
+  // Preset constants
+  Preset,
+
+  // Module-level convenience
+  get, post, put, patch, head, options, request,
+  // `delete` is reserved in ESM; the CJS export is `delete`, the ESM is `delete as del`
+  configure,
+
+  // Custom preset loading
+  describePreset,
+  loadPreset,
+  loadPresetFromJSON,
+  unregisterPreset,
+
+  // Distributed session cache
   configureSessionCache,
   clearSessionCache,
+
+  // ECH DNS configuration (global)
+  setEchDnsServers,
+  getEchDnsServers,
+
+  // Introspection
+  availablePresets,
+  version,
 } from "httpcloak";
 ```
 
-`LocalProxy` runs an HTTP proxy server that applies the fingerprint to any HTTP client pointed at it. Undici, fetch, curl, anything that speaks HTTP-proxy.
+What each piece does:
+
+- `LocalProxy` runs an HTTP proxy server that applies the fingerprint to any HTTP client pointed at it. Undici, fetch, curl, anything that speaks HTTP-proxy. See [Local proxy server](/recipes/local-proxy-server).
+- `PresetPool` rotates a list of preset names per-request for warm-pool-style traffic shaping. See [Preset pool rotation](/recipes/preset-pool-rotation).
+- `SessionCacheBackend` plugs a distributed TLS session cache (e.g. Redis) so multiple Node processes share resumption tickets. See [Session cache](/advanced-tls/session-cache).
+- `Cookie` and `RedirectInfo` are the structured types attached to `Response.cookies` and `Response.history`. The full field set is in [Cookie jar](/cookies-and-state/cookie-jar).
+- `describePreset(name)` returns the JSON dump of a preset's TLS / H2 / H3 / header config. Useful for cloning a built-in preset, mutating, and re-registering. See [JSON preset builder](/fingerprinting/json-preset-builder).
+- `loadPreset(filePath)` / `loadPresetFromJSON(jsonString)` register a custom preset at runtime; both return the name to pass to a `Session` constructor. `unregisterPreset(name)` removes one.
+- `setEchDnsServers(["8.8.8.8:53", ...])` overrides the DNS resolvers used for ECH HTTPS RR lookups (default: Google, Cloudflare, Quad9). Pass `null` to reset. `getEchDnsServers()` returns the current list.
+- `availablePresets()` returns `{ [name]: { protocols: ["h1","h2","h3"] } }` so you can filter by supported protocol.
+- `version()` returns the linked native library version.
+
+Module-level `get/post/...` use a process-wide implicit session configured via `configure({...})`. They're handy for one-off scripts; use `Session` directly for anything long-lived.
 
 ## See also
 

@@ -370,7 +370,7 @@ Wire `Stop()` into your shutdown handler, scrape `Stats()` into Prometheus on a 
 The binding Stats shapes differ from Go and from each other:
 
 - **.NET `GetStats()`** returns a `LocalProxyStats` class with `Running`, `Port`, `ActiveConnections`, `TotalRequests`, `Preset`, `MaxConnections`. The `registered_sessions` field is not deserialized into the typed object; if you need it from .NET, parse the underlying JSON yourself.
-- **Node `getStats()`** returns a `LocalProxyStats` interface with `totalRequests`, `activeConnections`, `failedRequests`, `bytesSent`, `bytesReceived`. Different field set entirely; the binding tracks request-level counters that the Go map doesn't expose at the same shape. Don't expect the Go keys above to round-trip.
+- **Node `getStats()`** returns the Go map JSON.parse'd as-is, with the snake_case keys: `running`, `port`, `active_conns`, `total_requests`, `preset`, `max_connections`, `registered_sessions`. The `LocalProxyStats` TS interface mirrors these field names exactly.
 - **Python `get_stats()`** returns a dict mirroring the Go map keys.
 
 ## Multi-proxy pattern

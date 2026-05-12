@@ -9,7 +9,7 @@ This chapter covers session-level observability: the methods that report what a 
 
 What this chapter doesn't cover: per-request timing data lives in [Hooks](../requests-and-responses/hooks), which fire around request boundaries and carry timing fields the session-level snapshot doesn't have. Metrics emission to Prometheus, OpenTelemetry, statsd or anything similar is out of scope. Build it on top of `Stats()`. The library itself stays free of opinions about a metrics backend.
 
-Most of the methods covered here (`Stats`, `IdleTime`, `IsActive`, `Touch`, `ClearCache`, `GetTransport`) are Go-only at the moment. The bindings (Python, Node, .NET) expose `SetSessionIdentifier` and a separate `LocalProxy.GetStats()`, but Session-level inspection from the bindings hasn't been wired through cgo yet. The Bindings section at the end maps the surface explicitly. Code examples in this chapter are Go unless noted; binding callers needing Session counters today either work through `LocalProxy` (proxy-level stats are available everywhere) or run a small Go-side service that exposes counters over HTTP.
+Most of the methods covered here (`Stats`, `IdleTime`, `IsActive`, `Touch`, `GetTransport`) are Go-only at the moment. The bindings (Python, Node, .NET) expose `SetSessionIdentifier`, `ClearCache`, and a separate `LocalProxy.GetStats()`, but the rest of the Session-level inspection surface hasn't been wired through cgo yet. The Bindings section at the end maps the surface explicitly. Code examples in this chapter are Go unless noted; binding callers needing Session counters today either work through `LocalProxy` (proxy-level stats are available everywhere) or run a small Go-side service that exposes counters over HTTP.
 
 ## Stats and SessionStats
 
@@ -162,7 +162,7 @@ Most of the methods in this chapter are Go-only at the moment. The bindings expo
 | `IdleTime() time.Duration` | not exposed | not exposed | not exposed |
 | `IsActive() bool` | not exposed | not exposed | not exposed |
 | `Touch()` | not exposed | not exposed | not exposed |
-| `ClearCache()` | not exposed | not exposed | not exposed |
+| `ClearCache()` | `session.clear_cache()` | `session.clearCache()` | `Session.ClearCache()` |
 | `SetSessionIdentifier(id)` | `session.set_session_identifier(id)` | `session.setSessionIdentifier(id)` | `Session.SetSessionIdentifier(id)` |
 | `GetTransport() *transport.Transport` | not exposed | not exposed | not exposed |
 

@@ -61,6 +61,7 @@ public Session(
     bool enableSpeculativeTls = false,
     string? switchProtocol = null,
     bool withoutCookieJar = false,
+    bool withoutConditionalCache = false,
     string? ja3 = null,
     string? akamai = null,
     Dictionary<string, object>? extraFp = null,
@@ -145,14 +146,16 @@ StreamResponse RequestStream(string method, string url, string? body = null, ...
 
 ```csharp
 FastResponse GetFast(string url, Dictionary<string, string>? headers = null);
-FastResponse PostFast(string url, byte[]? body = null, Dictionary<string, string>? headers = null, string? contentType = null);
-FastResponse RequestFast(string method, string url, byte[]? body = null, Dictionary<string, string>? headers = null, string? contentType = null, int? timeout = null);
-FastResponse PutFast(string url, byte[]? body = null, Dictionary<string, string>? headers = null, string? contentType = null, int? timeout = null);
+FastResponse PostFast(string url, byte[]? body = null, Dictionary<string, string>? headers = null);
+FastResponse RequestFast(string method, string url, byte[]? body = null, Dictionary<string, string>? headers = null, int? timeout = null);
+FastResponse PutFast(string url, byte[]? body = null, Dictionary<string, string>? headers = null, int? timeout = null);
 FastResponse DeleteFast(string url, Dictionary<string, string>? headers = null, int? timeout = null);
-FastResponse PatchFast(string url, byte[]? body = null, Dictionary<string, string>? headers = null, string? contentType = null, int? timeout = null);
+FastResponse PatchFast(string url, byte[]? body = null, Dictionary<string, string>? headers = null, int? timeout = null);
 ```
 
-`GetFast` and `PostFast` don't accept a `timeout` parameter; they use the session-level default. `RequestFast`, `PutFast`, `DeleteFast`, and `PatchFast` do take an optional per-call `timeout` (seconds).
+`GetFast` and `PostFast` don't accept a `timeout` parameter; they use the session-level default. `RequestFast`, `PutFast`, `DeleteFast`, and `PatchFast` do take an optional per-call `timeout` (seconds). All variants also accept the usual extras (`parameters`, `cookies`, `auth`, `fetchMode`); they're omitted from the signatures here for brevity and match the regular-method shape one-for-one.
+
+To set the request `Content-Type`, pass it via the `headers` dictionary (`new Dictionary<string, string> { ["Content-Type"] = "application/json" }`). There's no dedicated `contentType` parameter.
 
 `FastResponse` skips a few allocations and exposes `Content` as a `byte[]` that's already been copied out of the pooled native buffer at the C boundary. There's no `Release()` method and no `IDisposable` to pair with `using`; the `byte[]` is GC-managed like any other .NET array. The class is a value-shaped record you read and let the garbage collector recycle.
 
