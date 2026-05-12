@@ -1311,6 +1311,101 @@ public sealed class Session : IDisposable
     }
 
     /// <summary>
+    /// Stream an arbitrary-sized body to the wire without buffering it in
+    /// managed memory. Each chunk yielded by the enumerable flows straight
+    /// through to the Go-side io.Pipe; the entire response is read back when
+    /// the enumerable completes. On any exception the partial upload is
+    /// cancelled and the underlying connection torn down before re-throwing.
+    /// </summary>
+    /// <param name="method">HTTP method (typically POST / PUT / PATCH).</param>
+    /// <param name="url">Request URL.</param>
+    /// <param name="chunks">Body chunks. Empty chunks are skipped.</param>
+    /// <param name="headers">Custom headers.</param>
+    /// <param name="contentType">Content-Type for the upload (default: application/octet-stream).</param>
+    /// <param name="timeout">Per-request timeout in milliseconds. 0 = session default.</param>
+    public Response UploadStream(string method, string url, IEnumerable<byte[]> chunks, Dictionary<string, string>? headers = null, string contentType = "application/octet-stream", int? timeout = null)
+    {
+        ThrowIfDisposed();
+
+        var opts = new Dictionary<string, object>
+        {
+            ["method"] = method.ToUpperInvariant(),
+            ["content_type"] = contentType,
+        };
+        if (headers != null && headers.Count > 0) opts["headers"] = headers;
+        if (timeout.HasValue && timeout.Value > 0) opts["timeout"] = timeout.Value;
+
+        // Use System.Text.Json with a relaxed serializer; this is an internal
+        // wire-format payload, not user-facing surface, so plain JsonSerializer
+        // is fine here (no AOT-safe source-gen path needed because the dict is
+        // dynamic by shape).
+        string optsJson = System.Text.Json.JsonSerializer.Serialize(opts, new System.Text.Json.JsonSerializerOptions
+        {
+            Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        });
+
+        long uploadHandle = Native.UploadStart(_handle, url, optsJson);
+        if (uploadHandle <= 0)
+        {
+            throw new HttpCloakException("Failed to start streaming upload");
+        }
+
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            foreach (var chunk in chunks)
+            {
+                if (chunk == null || chunk.Length == 0) continue;
+                int written;
+                unsafe
+                {
+                    fixed (byte* ptr = chunk)
+                    {
+                        written = Native.UploadWriteRaw(uploadHandle, (IntPtr)ptr, chunk.Length);
+                    }
+                }
+                if (written < 0)
+                {
+                    throw new HttpCloakException("Failed to write upload chunk");
+                }
+            }
+
+            IntPtr resultPtr = Native.UploadFinish(uploadHandle);
+            stopwatch.Stop();
+            string? json = Native.PtrToStringAndFree(resultPtr);
+            if (string.IsNullOrEmpty(json))
+            {
+                throw new HttpCloakException("Empty response from streaming upload");
+            }
+
+            if (json.Contains("\"error\""))
+            {
+                var errResp = JsonSerializer.Deserialize(json, JsonContext.Default.ErrorResponse);
+                if (errResp?.Error != null)
+                {
+                    throw new HttpCloakException(errResp.Error);
+                }
+            }
+
+            var responseData = JsonSerializer.Deserialize(json, JsonContext.Default.ResponseData)
+                ?? throw new HttpCloakException("Failed to parse upload response");
+            return new Response(responseData, stopwatch.Elapsed);
+        }
+        catch
+        {
+            try { Native.UploadCancel(uploadHandle); } catch { /* best-effort */ }
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Convenience wrapper: streaming POST. Same semantics as
+    /// <see cref="UploadStream"/>("POST", ...).
+    /// </summary>
+    public Response PostUpload(string url, IEnumerable<byte[]> chunks, Dictionary<string, string>? headers = null, string contentType = "application/octet-stream", int? timeout = null)
+        => UploadStream("POST", url, chunks, headers, contentType, timeout);
+
+    /// <summary>
     /// Toggle the session's ETag / If-Modified-Since handling at runtime.
     /// When disabled, the session stops injecting cache validators on outgoing
     /// requests and stops storing them from responses; the existing cache map

@@ -906,6 +906,15 @@ function getLib() {
       httpcloak_stream_get_metadata: nativeLibHandle.func("httpcloak_stream_get_metadata", HeapStr, ["int64"]),
       httpcloak_stream_read: nativeLibHandle.func("httpcloak_stream_read", HeapStr, ["int64", "int64"]),
       httpcloak_stream_close: nativeLibHandle.func("httpcloak_stream_close", "void", ["int64"]),
+      // Chunked upload state machine (mirrors Python's stream_upload). Lets
+      // bindings ship arbitrarily-large bodies without buffering in memory:
+      // upload_start opens a pipe to the Go side, upload_write_raw streams
+      // chunks straight to the wire, upload_finish reads the response,
+      // upload_cancel tears down a partial upload on error.
+      httpcloak_upload_start: nativeLibHandle.func("httpcloak_upload_start", "int64", ["int64", "str", "str"]),
+      httpcloak_upload_write_raw: nativeLibHandle.func("httpcloak_upload_write_raw", "int", ["int64", "void*", "int"]),
+      httpcloak_upload_finish: nativeLibHandle.func("httpcloak_upload_finish", HeapStr, ["int64"]),
+      httpcloak_upload_cancel: nativeLibHandle.func("httpcloak_upload_cancel", "void", ["int64"]),
       // Raw response functions for fast-path (zero-copy)
       httpcloak_get_raw: nativeLibHandle.func("httpcloak_get_raw", "int64", ["int64", "str", "str"]),
       httpcloak_post_raw: nativeLibHandle.func("httpcloak_post_raw", "int64", ["int64", "str", "void*", "int", "str"]),
@@ -3181,6 +3190,84 @@ class Session {
    */
   patchFast(url, options = {}) {
     return this.requestFast("PATCH", url, options);
+  }
+
+  /**
+   * Stream an arbitrary-sized body to the wire without buffering in memory.
+   *
+   * `chunks` is anything iterable that yields Buffer-shaped objects: an
+   * AsyncIterable&lt;Buffer&gt; (e.g. an `fs.createReadStream(path)`), an
+   * Iterable&lt;Buffer&gt; (e.g. an array), or a sync generator that yields
+   * Buffers. String chunks are auto-encoded as UTF-8.
+   *
+   * The Go side opens an `io.Pipe()` for the body when uploadStart returns;
+   * each chunk is written straight through with no base64 / no JSON wrapping.
+   * On error the partial upload is cancelled and the underlying connection
+   * closed; on success uploadFinish reads the full response and parses it
+   * into a regular `Response` (same shape as a normal post()).
+   *
+   * @param {string} method  HTTP method (POST / PUT / PATCH typically)
+   * @param {string} url
+   * @param {AsyncIterable&lt;Buffer&gt;|Iterable&lt;Buffer&gt;} chunks  Body chunks
+   * @param {Object} [options]
+   * @param {Object} [options.headers]
+   * @param {string} [options.contentType="application/octet-stream"]
+   * @param {number} [options.timeout]  Per-request timeout in ms
+   * @returns {Promise<Response>}
+   */
+  async uploadStream(method, url, chunks, options = {}) {
+    const { headers = null, contentType = "application/octet-stream", timeout = null } = options;
+    const mergedHeaders = this._mergeHeaders(headers) || {};
+    const optsJson = JSON.stringify({
+      method: method.toUpperCase(),
+      headers: mergedHeaders,
+      content_type: contentType,
+      ...(timeout ? { timeout } : {}),
+    });
+
+    const uploadHandle = this._lib.httpcloak_upload_start(this._handle, url, optsJson);
+    if (uploadHandle <= 0) {
+      throw new HTTPCloakError("Failed to start streaming upload");
+    }
+
+    const startTime = Date.now();
+    try {
+      for await (const chunk of chunks) {
+        const buf = Buffer.isBuffer(chunk)
+          ? chunk
+          : typeof chunk === "string"
+            ? Buffer.from(chunk, "utf8")
+            : Buffer.from(chunk);
+        if (buf.length === 0) continue;
+        const written = this._lib.httpcloak_upload_write_raw(uploadHandle, buf, buf.length);
+        if (written < 0) {
+          throw new HTTPCloakError("Failed to write upload chunk");
+        }
+      }
+
+      const resultPtr = this._lib.httpcloak_upload_finish(uploadHandle);
+      const elapsed = Date.now() - startTime;
+      const raw = resultToString(resultPtr);
+      if (!raw) {
+        throw new HTTPCloakError("Empty response from streaming upload");
+      }
+      const data = JSON.parse(raw);
+      if (data.error) {
+        throw new HTTPCloakError(data.error);
+      }
+      return new Response(data, elapsed);
+    } catch (err) {
+      try { this._lib.httpcloak_upload_cancel(uploadHandle); } catch { /* best-effort */ }
+      throw err;
+    }
+  }
+
+  /**
+   * Convenience wrapper: streaming POST. Same semantics as
+   * {@link uploadStream}('POST', ...).
+   */
+  postUpload(url, chunks, options = {}) {
+    return this.uploadStream("POST", url, chunks, options);
   }
 }
 

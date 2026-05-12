@@ -128,6 +128,23 @@ internal static class Native
     [DllImport(LibraryName, EntryPoint = "httpcloak_session_touch", CallingConvention = CallingConvention.Cdecl)]
     public static extern void SessionTouch(long handle);
 
+    // Chunked upload state machine (mirrors Python's stream_upload). Lets
+    // callers ship arbitrarily-large bodies without buffering in managed
+    // memory: UploadStart opens an io.Pipe on the Go side, UploadWriteRaw
+    // streams chunks straight to the wire, UploadFinish reads the response,
+    // UploadCancel tears down a partial upload on error.
+    [DllImport(LibraryName, EntryPoint = "httpcloak_upload_start", CallingConvention = CallingConvention.Cdecl)]
+    public static extern long UploadStart(long sessionHandle, [MarshalAs(UnmanagedType.LPUTF8Str)] string url, [MarshalAs(UnmanagedType.LPUTF8Str)] string optionsJson);
+
+    [DllImport(LibraryName, EntryPoint = "httpcloak_upload_write_raw", CallingConvention = CallingConvention.Cdecl)]
+    public static extern int UploadWriteRaw(long uploadHandle, IntPtr buffer, int len);
+
+    [DllImport(LibraryName, EntryPoint = "httpcloak_upload_finish", CallingConvention = CallingConvention.Cdecl)]
+    public static extern IntPtr UploadFinish(long uploadHandle);
+
+    [DllImport(LibraryName, EntryPoint = "httpcloak_upload_cancel", CallingConvention = CallingConvention.Cdecl)]
+    public static extern void UploadCancel(long uploadHandle);
+
     [DllImport(LibraryName, EntryPoint = "httpcloak_session_set_conditional_cache", CallingConvention = CallingConvention.Cdecl)]
     public static extern void SessionSetConditionalCache(long handle, int enabled);
 

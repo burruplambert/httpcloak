@@ -787,6 +787,37 @@ export class Session {
    * @returns FastResponse with Buffer body
    */
   patchFast(url: string, options?: RequestOptions): FastResponse;
+
+  /**
+   * Stream an arbitrary-sized body to the wire without buffering it in memory.
+   * `chunks` is any iterable / async-iterable yielding Buffer / Uint8Array /
+   * string chunks; the Go side opens an io.Pipe for the body and each chunk
+   * flows straight through with no base64 wrap and no JSON envelope.
+   *
+   * @param method  Typically "POST", "PUT" or "PATCH".
+   * @param url
+   * @param chunks  Iterable or async-iterable of body chunks.
+   * @param options.headers Headers (Content-Type defaults to application/octet-stream).
+   * @param options.contentType Optional explicit Content-Type override.
+   * @param options.timeout Per-request timeout in milliseconds.
+   * @returns Resolves to a regular `Response` once the upload completes.
+   */
+  uploadStream(
+    method: string,
+    url: string,
+    chunks: AsyncIterable<Buffer | Uint8Array | string> | Iterable<Buffer | Uint8Array | string>,
+    options?: { headers?: Record<string, string>; contentType?: string; timeout?: number }
+  ): Promise<Response>;
+
+  /**
+   * Convenience wrapper: streaming POST. Same semantics as
+   * `uploadStream("POST", url, chunks, options)`.
+   */
+  postUpload(
+    url: string,
+    chunks: AsyncIterable<Buffer | Uint8Array | string> | Iterable<Buffer | Uint8Array | string>,
+    options?: { headers?: Record<string, string>; contentType?: string; timeout?: number }
+  ): Promise<Response>;
 }
 
 export interface LocalProxyOptions {
