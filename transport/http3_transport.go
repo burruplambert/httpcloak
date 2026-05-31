@@ -244,9 +244,13 @@ type HTTP3Transport struct {
 	config *TransportConfig
 
 	// ECH config cache - stores ECH configs per host for session resumption
-	// When resuming a session, we must use the same ECH config that was used
-	// to create the original session ticket, not a fresh one from DNS
-	echConfigCache   map[string][]byte
+	// Per-host ECH config cache. Entries carry an expiry so a long-lived
+	// transport refetches periodically instead of pinning one config forever;
+	// pinning forever strands the session on a stale config after the CDN
+	// rotates ECH keys, which the server rejects with illegal_parameter on every
+	// handshake until restart. Also invalidated on a handshake rejection for
+	// fast self-healing (see invalidateECHConfig).
+	echConfigCache   map[string]*echCachedConfig
 	echConfigCacheMu sync.RWMutex
 
 	// Skip TLS certificate verification (for testing)
@@ -365,7 +369,7 @@ func NewHTTP3TransportWithTransportConfig(preset *fingerprint.Preset, dnsCache *
 		sessionCache:   sessionCache,
 		shuffleSeed:    shuffleSeed,
 		config:         config,
-		echConfigCache: make(map[string][]byte), // Cache for ECH configs (for session resumption)
+		echConfigCache: make(map[string]*echCachedConfig), // Cache for ECH configs (for session resumption)
 	}
 
 	// Get the ClientHelloID for TLS fingerprinting in QUIC
@@ -519,7 +523,7 @@ func NewHTTP3TransportWithConfig(preset *fingerprint.Preset, dnsCache *dns.Cache
 		shuffleSeed:    shuffleSeed,
 		proxyConfig:    proxyConfig,
 		config:         config,
-		echConfigCache: make(map[string][]byte),
+		echConfigCache: make(map[string]*echCachedConfig),
 	}
 
 	// Apply localAddr from config
@@ -643,7 +647,7 @@ func NewHTTP3TransportWithMASQUE(preset *fingerprint.Preset, dnsCache *dns.Cache
 		shuffleSeed:    shuffleSeed,
 		proxyConfig:    proxyConfig,
 		config:         config,
-		echConfigCache: make(map[string][]byte),
+		echConfigCache: make(map[string]*echCachedConfig),
 	}
 
 	// Apply localAddr from config
@@ -1352,6 +1356,13 @@ func (t *HTTP3Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	_ = dialsBefore
 	_ = dialsAfter
 
+	// A handshake-level rejection on H3 usually means the cached ECH config went
+	// stale (e.g. the CDN rotated ECH keys). Drop it so the next request refetches
+	// a fresh config instead of spamming the same failure until a process restart.
+	if isECHRejectionError(err) {
+		t.invalidateECHConfig(connectHost)
+	}
+
 	return resp, err
 }
 
@@ -1532,6 +1543,33 @@ func is0RTTRejectedError(err error) bool {
 	return strings.Contains(err.Error(), "0-RTT rejected")
 }
 
+// isECHRejectionError reports whether a QUIC dial error looks like a TLS
+// handshake rejection of the ClientHello, which on H3 most often means the
+// cached ECH config went stale (e.g. the CDN rotated its ECH keys). Matched
+// narrowly on handshake/TLS signals so plain network timeouts (which the cache
+// TTL handles anyway) do not churn the ECH cache.
+func isECHRejectionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	for _, m := range []string{
+		"CRYPTO_ERROR",
+		"illegal parameter",
+		"bad_record_mac",
+		"decrypt_error",
+		"decode_error",
+		"handshake failure",
+		"ECH",
+		"encrypted_client_hello",
+	} {
+		if strings.Contains(s, m) {
+			return true
+		}
+	}
+	return false
+}
+
 // recreateTransport recreates the HTTP/3 transport after 0-RTT rejection
 // This is called from RoundTrip when the server rejects early data
 func (t *HTTP3Transport) recreateTransport() {
@@ -1579,7 +1617,7 @@ func (t *HTTP3Transport) GetECHConfigCache() map[string][]byte {
 	// Return a copy to avoid race conditions
 	result := make(map[string][]byte, len(t.echConfigCache))
 	for k, v := range t.echConfigCache {
-		result[k] = v
+		result[k] = v.config
 	}
 	return result
 }
@@ -1591,9 +1629,22 @@ func (t *HTTP3Transport) SetECHConfigCache(configs map[string][]byte) {
 	t.echConfigCacheMu.Lock()
 	defer t.echConfigCacheMu.Unlock()
 
+	exp := time.Now().Add(echTransportCacheTTL)
 	for k, v := range configs {
-		t.echConfigCache[k] = v
+		t.echConfigCache[k] = &echCachedConfig{config: v, expiresAt: exp}
 	}
+}
+
+// invalidateECHConfig drops the cached ECH config for a host on both the
+// transport and the shared DNS cache, so the next dial refetches a fresh one.
+// Called after a handshake rejection that suggests the config went stale (for
+// example the CDN rotated ECH keys), so a long-lived session self-heals instead
+// of spamming the same failure until restart.
+func (t *HTTP3Transport) invalidateECHConfig(host string) {
+	t.echConfigCacheMu.Lock()
+	delete(t.echConfigCache, host)
+	t.echConfigCacheMu.Unlock()
+	dns.InvalidateECHConfig(host)
 }
 
 // Connect establishes a QUIC connection to the host without making a request.
@@ -1658,6 +1709,11 @@ func (t *HTTP3Transport) Connect(ctx context.Context, host, port string) error {
 	// Try to establish QUIC connection
 	conn, err := quic.DialAddr(ctx, resolvedAddr, tlsCfg, quicCfg)
 	if err != nil {
+		// Stale ECH (e.g. CDN key rotation) shows up here as a handshake
+		// rejection; drop the cached config so the next probe refetches.
+		if isECHRejectionError(err) {
+			t.invalidateECHConfig(host)
+		}
 		return fmt.Errorf("QUIC dial failed: %w", err)
 	}
 
@@ -1747,19 +1803,32 @@ func (t *HTTP3Transport) getConnectHost(requestHost string) string {
 	return requestHost
 }
 
-// getECHConfig returns the ECH config for a host
+// echCachedConfig is a per-host ECH config with an expiry, so a long-lived
+// transport refetches periodically instead of pinning one config forever.
+type echCachedConfig struct {
+	config    []byte
+	expiresAt time.Time
+}
+
+// echTransportCacheTTL bounds how long the transport reuses a cached ECH config
+// before re-consulting DNS. Short enough to pick up a CDN key rotation without
+// waiting for a process restart; the underlying DNS cache still honors the
+// record's own TTL, so this is just an upper bound on staleness.
+const echTransportCacheTTL = 5 * time.Minute
+
+// getECHConfig returns the ECH config for a host, refetching once the cached
+// entry expires. (The cache mainly keeps the same config across the connections
+// of one logical request; it must NOT pin a stale config forever, or a CDN ECH
+// key rotation strands the session on a retired key until restart.)
 func (t *HTTP3Transport) getECHConfig(ctx context.Context, targetHost string) []byte {
-	// First, check if we have a cached ECH config for this host
-	// This is critical for session resumption - we must use the same ECH config
-	// that was used when creating the original session ticket
 	t.echConfigCacheMu.RLock()
-	if cachedConfig, ok := t.echConfigCache[targetHost]; ok {
+	if cached, ok := t.echConfigCache[targetHost]; ok && time.Now().Before(cached.expiresAt) {
 		t.echConfigCacheMu.RUnlock()
-		return cachedConfig
+		return cached.config
 	}
 	t.echConfigCacheMu.RUnlock()
 
-	// No cached config - fetch from DNS or config
+	// No fresh cached config - fetch from DNS or config
 	var echConfig []byte
 	if t.config == nil {
 		echConfig, _ = dns.FetchECHConfigs(ctx, targetHost)
@@ -1767,10 +1836,12 @@ func (t *HTTP3Transport) getECHConfig(ctx context.Context, targetHost string) []
 		echConfig = t.config.GetECHConfig(ctx, targetHost)
 	}
 
-	// Cache the ECH config for future use (session resumption)
 	if echConfig != nil {
 		t.echConfigCacheMu.Lock()
-		t.echConfigCache[targetHost] = echConfig
+		t.echConfigCache[targetHost] = &echCachedConfig{
+			config:    echConfig,
+			expiresAt: time.Now().Add(echTransportCacheTTL),
+		}
 		t.echConfigCacheMu.Unlock()
 	}
 
