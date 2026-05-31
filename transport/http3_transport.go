@@ -1240,6 +1240,28 @@ func (t *HTTP3Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 	}
 
+	// Cookie crumbling (H3/QPACK). Chrome and Firefox split the Cookie header
+	// into one QPACK field per cookie-pair (Chromium ValueSplittingHeaderList,
+	// CookieCrumbling::kEnabled). quic-go's request writer emits one field per
+	// header value and does NOT crumble, so we pre-split the single joined Cookie
+	// value into crumbs here; quic-go then writes one "cookie" field per crumb,
+	// contiguous in the cookie header-order slot and already marked never-indexed.
+	// Gated by the preset's cookie-split flag (false => crumble): Chrome and
+	// Firefox crumble, Safari/WebKit sends a single field. Safe to mutate
+	// req.Header: each request is per-call, and raceH3H2 dispatches a request to
+	// exactly one protocol (doHTTP3 OR doHTTP2), never both concurrently.
+	if !t.preset.H2DisableCookieSplit() {
+		if cookies := req.Header.Values("Cookie"); len(cookies) > 0 {
+			crumbs := make([]string, 0, len(cookies))
+			for _, c := range cookies {
+				crumbs = append(crumbs, crumbleCookie(c)...)
+			}
+			if len(crumbs) > 0 {
+				req.Header["Cookie"] = crumbs
+			}
+		}
+	}
+
 	// For domain fronting: swap req.URL.Host to connectHost so http3.Transport
 	// pools connections by connect host (multiple request hosts share one QUIC connection).
 	// Preserve original host in req.Host for the :authority pseudo-header.

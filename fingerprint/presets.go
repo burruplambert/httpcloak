@@ -134,7 +134,7 @@ type H2FingerprintConfig struct {
 	HPACKIndexingPolicy string   // "chrome"/"never"/"always"/"default". "" = "chrome".
 	HPACKNeverIndex     []string // Headers never HPACK-indexed. nil = Chrome default.
 	StreamPriorityMode  string   // "chrome"/"default". "" = "chrome".
-	DisableCookieSplit  *bool    // nil = true (Chrome sends single cookie entry).
+	DisableCookieSplit  *bool    // nil = true (single field). Chrome+Firefox crumble (false); Safari single (true).
 	SettingsOrder       []uint16 // H2 SETTINGS frame ID order. nil = dynamic from HTTP2Settings.
 	PseudoHeaderOrder   []string // Pseudo-header order. nil = heuristic (Chrome m,a,s,p / Safari m,s,p,a).
 
@@ -357,13 +357,16 @@ func (p *Preset) H2StreamPriorityMode() string {
 	return "chrome"
 }
 
-// H2DisableCookieSplit returns whether to disable cookie splitting.
-// Chrome sends cookies as one HPACK entry (true), Firefox splits per RFC 9113 (false).
+// H2DisableCookieSplit reports whether to send the Cookie header as a single
+// field instead of crumbling it into one field per cookie-pair. Chrome and
+// Firefox crumble (false) per RFC 9113 8.2.3 / Chromium HpackEncoder
+// CookieToCrumbs; Safari/WebKit sends a single field (true). Used for both the
+// H2 (sardanioss/net HPACK encoder) and H3 (pre-split in HTTP3Transport) paths.
 func (p *Preset) H2DisableCookieSplit() bool {
 	if p.H2Config != nil && p.H2Config.DisableCookieSplit != nil {
 		return *p.H2Config.DisableCookieSplit
 	}
-	return true // Chrome default
+	return true // conservative single-field fallback; built-in presets set this explicitly
 }
 
 // H2SettingsOrder returns the explicit H2 SETTINGS frame ID order.
@@ -609,7 +612,7 @@ func (p *Preset) H3QUICInitialConnectionReceiveWindow() uint64 {
 
 // chromeH2Config returns the explicit H2 fingerprint config for Chrome presets.
 func chromeH2Config() *H2FingerprintConfig {
-	t := true
+	f := false
 	return &H2FingerprintConfig{
 		HPACKHeaderOrder: []string{
 			"cache-control",
@@ -624,9 +627,13 @@ func chromeH2Config() *H2FingerprintConfig {
 		},
 		HPACKIndexingPolicy: "chrome",
 		StreamPriorityMode:  "chrome",
-		DisableCookieSplit:  &t,
-		SettingsOrder:       []uint16{1, 2, 4, 6},
-		PseudoHeaderOrder:   []string{":method", ":authority", ":scheme", ":path"},
+		// Chrome crumbles the Cookie header into one field per cookie-pair on the
+		// wire (Chromium HpackEncoder::CookieToCrumbs; crumble_cookies_ defaults
+		// true and Chrome's production SpdyFramer never calls DisableCookieCrumbling).
+		// false => crumble. Verified against live Chromium/QUICHE main 2026-05.
+		DisableCookieSplit: &f,
+		SettingsOrder:      []uint16{1, 2, 4, 6},
+		PseudoHeaderOrder:  []string{":method", ":authority", ":scheme", ":path"},
 	}
 }
 
