@@ -875,22 +875,12 @@ func (t *Transport) Do(ctx context.Context, req *Request) (*Response, error) {
 			}
 
 			if SupportsQUIC(effectiveProxyURL) {
-				// SOCKS5 or MASQUE proxy - prefer HTTP/3 for best fingerprinting
-				resp, err := t.doHTTP3(ctx, req)
-				if err == nil {
-					return resp, nil
-				}
-				// Fallback to HTTP/2 if HTTP/3 fails
-				resp, err = t.doHTTP2(ctx, req)
-				if err == nil {
-					return resp, nil
-				}
-				// Reuse TLS conn if proxy negotiated h1.1 instead of h2
-				var alpnErr *ALPNMismatchError
-				if errors.As(err, &alpnErr) {
-					return t.doHTTP1WithTLSConn(ctx, req, alpnErr)
-				}
-				return t.doHTTP1(ctx, req)
+				// SOCKS5 or MASQUE proxy. Race H3 and H2 instead of trying H3
+				// first: when QUIC cannot actually relay through the proxy, the
+				// sequential path idles ~5s on the QUIC handshake before falling
+				// back. doAuto's racer (proxy-aware Connect probes) picks the
+				// first protocol to connect and caches the decision per host.
+				return t.doAuto(ctx, req)
 			}
 			// HTTP proxy - only supports H2/H1
 			resp, err := t.doHTTP2(ctx, req)
@@ -956,7 +946,7 @@ func (t *Transport) doAuto(ctx context.Context, req *Request) (*Response, error)
 	}
 
 	// Race HTTP/3 and HTTP/2 in parallel if H3 is supported
-	if t.preset.SupportHTTP3 {
+	if t.preset.SupportHTTP3 && t.h3Transport != nil {
 		resp, protocol, err := t.raceH3H2(ctx, req)
 		if err == nil {
 			t.protocolSupportMu.Lock()
@@ -1016,6 +1006,129 @@ type connectResult struct {
 	err      error
 }
 
+// cacheProtocol records the best-known protocol for a host so subsequent
+// requests skip the connection race.
+func (t *Transport) cacheProtocol(host string, p Protocol) {
+	t.protocolSupportMu.Lock()
+	t.protocolSupport[host] = p
+	t.protocolSupportMu.Unlock()
+}
+
+// connectDecision is the outcome of racing H3 and H2 connection probes. Exactly
+// one of the fields is meaningful: err (context cancelled before any result),
+// alpnErr (the H2 attempt negotiated HTTP/1.1; the live TLS conn is held for
+// reuse), or protocol (H3 or H2 connected first; H2 is also the default when
+// neither wins so the caller falls back through H2 -> H1).
+type connectDecision struct {
+	protocol Protocol
+	alpnErr  *ALPNMismatchError
+	err      error
+}
+
+// raceConnectProtocol races H3 and H2 connection probes and reports which
+// established first, performing no application request. Keeping the request out
+// of the race means it is safe for both buffered and streaming dispatch (the
+// request is sent exactly once, on the winner) and for non-idempotent methods.
+//
+// Both Connect() probes tunnel through the configured proxy when one is set, so
+// this never makes a direct (real-IP) dial. It eliminates the multi-second
+// stall that a sequential "try H3 first" path pays whenever QUIC is blocked or
+// the proxy cannot relay UDP: H2 simply wins the race in well under a second.
+func (t *Transport) raceConnectProtocol(ctx context.Context, host, port string) connectDecision {
+	return raceTwoProbes(ctx, 6*time.Second,
+		func(c context.Context) error { return t.h3Transport.Connect(c, host, port) },
+		func(c context.Context) error { return t.h2Transport.Connect(c, host, port) },
+	)
+}
+
+// raceTwoProbes runs the H3 and H2 connection probes concurrently under a
+// shared cancellable context and returns as soon as one connects, or when the
+// H2 probe reports an ALPN downgrade to HTTP/1.1, or when the budget elapses
+// (default to H2 then). The losing probe is cancelled. budget bounds the wait
+// so a blocked H3 probe cannot stall the caller. Split out from
+// raceConnectProtocol so the race/timeout logic is unit-testable with injected
+// probes.
+func raceTwoProbes(ctx context.Context, budget time.Duration, h3Probe, h2Probe func(context.Context) error) connectDecision {
+	raceCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	winnerCh := make(chan Protocol, 1)
+	alpnErrCh := make(chan *ALPNMismatchError, 1)
+	doneCh := make(chan struct{})
+
+	// Race HTTP/3 connection
+	go func() {
+		if err := h3Probe(raceCtx); err == nil {
+			select {
+			case winnerCh <- ProtocolHTTP3:
+			default:
+			}
+		}
+	}()
+
+	// Race HTTP/2 connection
+	go func() {
+		err := h2Probe(raceCtx)
+		if err == nil {
+			select {
+			case winnerCh <- ProtocolHTTP2:
+			default:
+			}
+		} else {
+			// ALPN negotiated HTTP/1.1 - preserve the connection for reuse
+			var alpnErr *ALPNMismatchError
+			if errors.As(err, &alpnErr) {
+				select {
+				case alpnErrCh <- alpnErr:
+				default:
+				}
+			}
+		}
+	}()
+
+	// Bound the race: H3 typically idles out in ~5s when blocked, H2 connects
+	// in <1s. Context-aware so we never outlive the parent.
+	go func() {
+		select {
+		case <-time.After(budget):
+		case <-raceCtx.Done():
+		}
+		close(doneCh)
+	}()
+
+	select {
+	case p := <-winnerCh:
+		cancel() // stop the other attempt
+		// Discard an ALPN-mismatch conn we won't use
+		select {
+		case alpnErr := <-alpnErrCh:
+			alpnErr.TLSConn.Close()
+		default:
+		}
+		return connectDecision{protocol: p}
+	case alpnErr := <-alpnErrCh:
+		cancel()
+		return connectDecision{alpnErr: alpnErr}
+	case <-doneCh:
+		cancel()
+		select {
+		case alpnErr := <-alpnErrCh:
+			return connectDecision{alpnErr: alpnErr}
+		default:
+		}
+		// No winner and no ALPN mismatch: default to H2 (caller tries H2 -> H1).
+		return connectDecision{protocol: ProtocolHTTP2}
+	case <-ctx.Done():
+		cancel()
+		select {
+		case alpnErr := <-alpnErrCh:
+			alpnErr.TLSConn.Close()
+		default:
+		}
+		return connectDecision{err: ctx.Err()}
+	}
+}
+
 // raceH3H2 races HTTP/3 and HTTP/2 connections in parallel, then makes the request
 // on whichever protocol connects first. This eliminates the 5-second delay when
 // HTTP/3 (QUIC) is blocked by firewalls or VPNs.
@@ -1032,114 +1145,23 @@ func (t *Transport) raceH3H2(ctx context.Context, req *Request) (*Response, Prot
 		port = "443"
 	}
 
-	// Create cancellable context for the race
-	raceCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	// Channel to receive the winning protocol
-	winnerCh := make(chan Protocol, 1)
-	// Channel to receive ALPNMismatchError for connection reuse
-	alpnErrCh := make(chan *ALPNMismatchError, 1)
-	doneCh := make(chan struct{})
-
-	// Race HTTP/3 connection
-	go func() {
-		err := t.h3Transport.Connect(raceCtx, host, port)
-		if err == nil {
-			select {
-			case winnerCh <- ProtocolHTTP3:
-			default:
-			}
-		}
-	}()
-
-	// Race HTTP/2 connection
-	go func() {
-		err := t.h2Transport.Connect(raceCtx, host, port)
-		if err == nil {
-			select {
-			case winnerCh <- ProtocolHTTP2:
-			default:
-			}
-		} else {
-			// Check if ALPN negotiated HTTP/1.1 - preserve the connection for reuse
-			var alpnErr *ALPNMismatchError
-			if errors.As(err, &alpnErr) {
-				select {
-				case alpnErrCh <- alpnErr:
-				default:
-				}
-			}
-		}
-	}()
-
-	// Goroutine to signal when both attempts are likely done
-	go func() {
-		// Give both a chance to connect (with H3 timeout being the limiting factor)
-		// H3 typically times out in 5s if blocked, H2 connects in <1s
-		// Use context-aware wait so we don't outlive the parent context
-		select {
-		case <-time.After(6 * time.Second):
-		case <-raceCtx.Done():
-		}
-		close(doneCh)
-	}()
-
-	// Wait for a winner or timeout
-	var winningProtocol Protocol
-	select {
-	case winningProtocol = <-winnerCh:
-		// We have a winner!
-		cancel() // Cancel the other connection attempt
-		// Close any ALPN mismatch connection that we won't use
-		select {
-		case alpnErr := <-alpnErrCh:
-			alpnErr.TLSConn.Close()
-		default:
-		}
-	case alpnErr := <-alpnErrCh:
-		// ALPN negotiated HTTP/1.1 instead of H2 - reuse the connection
-		cancel()
-		resp, err := t.doHTTP1WithTLSConn(ctx, req, alpnErr)
+	// Race the connection probes (proxy-aware), then send the request once on
+	// whichever protocol established first.
+	decision := t.raceConnectProtocol(ctx, host, port)
+	if decision.err != nil {
+		return nil, ProtocolHTTP2, decision.err
+	}
+	if decision.alpnErr != nil {
+		// ALPN negotiated HTTP/1.1 instead of H2 - reuse the live connection.
+		resp, err := t.doHTTP1WithTLSConn(ctx, req, decision.alpnErr)
 		return resp, ProtocolHTTP1, err
-	case <-doneCh:
-		// Timeout - check if we have an ALPN mismatch connection to reuse
-		cancel()
-		select {
-		case alpnErr := <-alpnErrCh:
-			resp, err := t.doHTTP1WithTLSConn(ctx, req, alpnErr)
-			return resp, ProtocolHTTP1, err
-		default:
-		}
-		// No ALPN mismatch, try H2 directly
-		resp, err := t.doHTTP2(ctx, req)
-		if err != nil {
-			// Check for ALPN mismatch
-			var alpnErr *ALPNMismatchError
-			if errors.As(err, &alpnErr) {
-				resp, err := t.doHTTP1WithTLSConn(ctx, req, alpnErr)
-				return resp, ProtocolHTTP1, err
-			}
-			resp, err = t.doHTTP1(ctx, req)
-			return resp, ProtocolHTTP1, err
-		}
-		return resp, ProtocolHTTP2, nil
-	case <-ctx.Done():
-		// Close any ALPN mismatch connection
-		select {
-		case alpnErr := <-alpnErrCh:
-			alpnErr.TLSConn.Close()
-		default:
-		}
-		return nil, ProtocolHTTP2, ctx.Err()
 	}
 
-	// Make the actual request using the winning protocol
-	switch winningProtocol {
+	switch decision.protocol {
 	case ProtocolHTTP3:
 		resp, err := t.doHTTP3(ctx, req)
 		return resp, ProtocolHTTP3, err
-	case ProtocolHTTP2:
+	default: // ProtocolHTTP2 (also the no-winner default)
 		resp, err := t.doHTTP2(ctx, req)
 		if err != nil {
 			// Check for ALPN mismatch - reuse connection
@@ -1153,9 +1175,6 @@ func (t *Transport) raceH3H2(ctx context.Context, req *Request) (*Response, Prot
 			return resp, ProtocolHTTP1, err
 		}
 		return resp, ProtocolHTTP2, nil
-	default:
-		resp, err := t.doHTTP2(ctx, req)
-		return resp, ProtocolHTTP2, err
 	}
 }
 

@@ -122,12 +122,10 @@ func (t *Transport) DoStream(ctx context.Context, req *Request) (*StreamResponse
 			effectiveProxyURL = t.proxy.UDPProxy
 		}
 		if SupportsQUIC(effectiveProxyURL) {
-			resp, err := t.doStreamHTTP3(ctx, req)
-			if err == nil {
-				return resp, nil
-			}
-			// Fallback to HTTP/2
-			return t.doStreamHTTP2(ctx, req)
+			// Race H3/H2 rather than trying H3 first: a proxy that cannot relay
+			// QUIC would otherwise stall ~5s on the H3 handshake before falling
+			// back. doStreamAuto probes both (proxy-aware) and dispatches once.
+			return t.doStreamAuto(ctx, req)
 		}
 		// HTTP/HTTPS proxy - use HTTP/2
 		return t.doStreamHTTP2(ctx, req)
@@ -142,15 +140,64 @@ func (t *Transport) DoStream(ctx context.Context, req *Request) (*StreamResponse
 	case ProtocolHTTP3:
 		return t.doStreamHTTP3(ctx, req)
 	default:
-		// Auto mode: try H3 -> H2 with fallback
-		if t.h3Transport != nil {
-			resp, err := t.doStreamHTTP3(ctx, req)
-			if err == nil {
+		// Auto mode: race H3 and H2 connection probes, dispatch on the winner.
+		return t.doStreamAuto(ctx, req)
+	}
+}
+
+// doStreamAuto selects a protocol for a streaming request without paying the
+// sequential "try H3 first" stall. It reuses any cached per-host protocol
+// decision (shared with the buffered doAuto path); otherwise it races proxy-
+// aware connection probes and dispatches the single stream on the winner.
+// Only the probe is raced, never the request, so the body is sent exactly once
+// (safe for non-idempotent methods).
+func (t *Transport) doStreamAuto(ctx context.Context, req *Request) (*StreamResponse, error) {
+	host := extractHost(req.URL)
+
+	// Reuse a prior decision for this host.
+	t.protocolSupportMu.RLock()
+	known, ok := t.protocolSupport[host]
+	t.protocolSupportMu.RUnlock()
+	if ok {
+		switch known {
+		case ProtocolHTTP3:
+			if resp, err := t.doStreamHTTP3(ctx, req); err == nil {
 				return resp, nil
 			}
+			return t.doStreamHTTP2(ctx, req)
+		case ProtocolHTTP2, ProtocolHTTP1:
+			return t.doStreamHTTP2(ctx, req)
 		}
-		return t.doStreamHTTP2(ctx, req)
 	}
+
+	// No cached decision yet: race a connection probe when H3 is viable.
+	if t.preset.SupportHTTP3 && t.h3Transport != nil {
+		port := "443"
+		if u, err := url.Parse(req.URL); err == nil && u.Port() != "" {
+			port = u.Port()
+		}
+		decision := t.raceConnectProtocol(ctx, host, port)
+		switch {
+		case decision.err != nil:
+			return nil, decision.err
+		case decision.alpnErr != nil:
+			// Streaming has no H1-conn-reuse path; drop the probe conn and let
+			// the H2 attempt below negotiate on its own.
+			decision.alpnErr.TLSConn.Close()
+		case decision.protocol == ProtocolHTTP3:
+			if resp, err := t.doStreamHTTP3(ctx, req); err == nil {
+				t.cacheProtocol(host, ProtocolHTTP3)
+				return resp, nil
+			}
+			// H3 lost after winning the probe; fall through to H2.
+		}
+	}
+
+	resp, err := t.doStreamHTTP2(ctx, req)
+	if err == nil {
+		t.cacheProtocol(host, ProtocolHTTP2)
+	}
+	return resp, err
 }
 
 // doStreamHTTP1 executes a streaming request over HTTP/1.1

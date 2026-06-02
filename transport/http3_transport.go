@@ -1650,6 +1650,14 @@ func (t *HTTP3Transport) invalidateECHConfig(host string) {
 // Connect establishes a QUIC connection to the host without making a request.
 // This is used for protocol racing - the first protocol to connect wins.
 func (t *HTTP3Transport) Connect(ctx context.Context, host, port string) error {
+	// Proxied transports MUST probe through the proxy. The direct quic.DialAddr
+	// probe below would dial the target straight from the local socket, leaking
+	// the real client IP and never actually testing whether QUIC relays through
+	// the proxy. Route through the same dial path doHTTP3 uses for real requests.
+	if t.masqueConn != nil || t.udpbaraTunnel != nil {
+		return t.connectViaProxy(ctx, host, port)
+	}
+
 	// Use connect host for DNS resolution (may differ for domain fronting)
 	connectHost := t.getConnectHost(host)
 	addr := net.JoinHostPort(connectHost, port)
@@ -1729,6 +1737,54 @@ func (t *HTTP3Transport) Connect(ctx context.Context, host, port string) error {
 	_ = conn.CloseWithError(0, "connect probe")
 	_ = addr // suppress unused warning
 
+	return nil
+}
+
+// connectViaProxy runs the H3 reachability probe THROUGH the configured proxy
+// (SOCKS5 UDP relay or MASQUE), mirroring the dial path doHTTP3 uses for real
+// requests. This is what makes raceH3H2 safe over a proxy: the probe tunnels
+// instead of dialing the target directly, so no real-IP leak and the race
+// actually learns whether QUIC relays through the proxy. The dialFunc selection
+// must stay in sync with Refresh()/recreateTransport().
+func (t *HTTP3Transport) connectViaProxy(ctx context.Context, host, port string) error {
+	var dialFunc func(context.Context, string, *tls.Config, *quic.Config) (*quic.Conn, error)
+	if t.masqueConn != nil {
+		dialFunc = t.dialQUICWithMASQUE
+	} else {
+		dialFunc = t.dialQUICWithProxy
+	}
+
+	// Match the key log writer selection used by the direct probe / dial path.
+	var keyLogWriter io.Writer
+	if t.config != nil && t.config.KeyLogWriter != nil {
+		keyLogWriter = t.config.KeyLogWriter
+	} else {
+		keyLogWriter = GetKeyLogWriter()
+	}
+
+	// SNI = request host, h3 ALPN. dialQUICWithMASQUE clones this and overrides
+	// ServerName; dialQUICWithProxy clones t.tlsConfig and ignores this. Both
+	// build their own quic.Config, so the cfg arg is unused (pass nil).
+	tlsCfg := &tls.Config{
+		ServerName:         host,
+		NextProtos:         []string{"h3"},
+		InsecureSkipVerify: t.insecureSkipVerify,
+		KeyLogWriter:       keyLogWriter,
+	}
+
+	conn, err := dialFunc(ctx, net.JoinHostPort(host, port), tlsCfg, nil)
+	if err != nil {
+		// A handshake rejection here usually means stale ECH (CDN key rotation);
+		// drop the cached config so the next probe refetches.
+		if isECHRejectionError(err) {
+			t.invalidateECHConfig(host)
+		}
+		return fmt.Errorf("QUIC dial via proxy failed: %w", err)
+	}
+
+	// Probe only: tear down so the real request dials its own connection. The
+	// per-connection cleanup goroutine in the dial func removes proxy state.
+	_ = conn.CloseWithError(0, "connect probe")
 	return nil
 }
 
