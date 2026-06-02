@@ -501,6 +501,19 @@ func (s *Session) requestWithRedirects(ctx context.Context, req *transport.Reque
 				newReq.Headers[k] = v
 			}
 
+			// Synthesize the next-hop Referer to match Chrome's default
+			// strict-origin-when-cross-origin policy. A browser sends a Referer
+			// on every redirect hop except an https->http downgrade; httpcloak
+			// previously carried a stale copied value (or none at all), which a
+			// server inspecting the redirect chain can use to fingerprint it.
+			// Drop any copied Referer (either casing) first so we don't emit a
+			// duplicate, then set the policy-correct value.
+			delete(newReq.Headers, "Referer")
+			delete(newReq.Headers, "referer")
+			if ref := redirectReferer(req.URL, schemeDowngrade, crossOrigin); ref != "" {
+				newReq.Headers["Referer"] = []string{ref}
+			}
+
 			// 307/308 preserve body
 			if resp.StatusCode == 307 || resp.StatusCode == 308 {
 				newReq.Body = req.Body
@@ -1545,6 +1558,31 @@ func parseOrigin(urlStr string) (scheme, host, port string) {
 		}
 	}
 	return scheme, host, port
+}
+
+// redirectReferer returns the Referer value to send on the next redirect hop,
+// following Chrome's default strict-origin-when-cross-origin policy. prevURL is
+// the URL that issued the 3xx. Returns "" when no Referer should be sent.
+//   - https -> http downgrade: omit (no Referer)
+//   - same-origin: the full previous URL
+//   - cross-origin (same secure scheme): the previous URL's ORIGIN only,
+//     serialized with a trailing slash (e.g. "https://example.com/")
+func redirectReferer(prevURL string, schemeDowngrade, crossOrigin bool) string {
+	if schemeDowngrade {
+		return ""
+	}
+	if !crossOrigin {
+		return prevURL
+	}
+	scheme, host, port := parseOrigin(prevURL)
+	if scheme == "" || host == "" {
+		return ""
+	}
+	origin := scheme + "://" + host
+	if !((scheme == "https" && port == "443") || (scheme == "http" && port == "80")) {
+		origin += ":" + port
+	}
+	return origin + "/"
 }
 
 // sameOrigin reports whether two URLs share scheme+host+port.
