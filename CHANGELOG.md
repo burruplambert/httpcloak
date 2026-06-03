@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.7] - 2026-06-03
+
 ### Fixed
 
 - **Redirects now send a browser-like Referer on each hop (#70)**: when a session followed a redirect it carried whatever Referer was already on the request (usually none) instead of synthesizing one from the previous URL the way a browser does, so a server inspecting the Referer across a redirect chain could tell httpcloak apart from a real browser. The session now follows Chrome's default `strict-origin-when-cross-origin` policy on every hop: a same-origin redirect sends the full previous URL (with the fragment and any credentials stripped and a default port dropped, exactly as Chrome serializes it), a cross-origin redirect on the same secure scheme sends the previous origin only (for example `https://example.com/`), and an https to http downgrade sends no Referer at all. Verified end to end against a redirecting server.
