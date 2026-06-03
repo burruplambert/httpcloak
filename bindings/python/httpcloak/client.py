@@ -3603,6 +3603,8 @@ class Session:
         cookies: Optional[Dict[str, str]] = None,
         auth: Optional[Tuple[str, str]] = None,
         timeout: Optional[int] = None,
+        allow_redirects: Optional[bool] = None,
+        disable_conditional_cache: bool = False,
     ) -> StreamResponse:
         """
         Perform a streaming HTTP request with any method.
@@ -3640,6 +3642,10 @@ class Session:
                 request_config["body"] = data
         if timeout:
             request_config["timeout"] = timeout
+        if allow_redirects is not None:
+            request_config["follow_redirects"] = bool(allow_redirects)
+        if disable_conditional_cache:
+            request_config["disable_conditional_cache"] = True
 
         # Start stream
         stream_handle = self._lib.httpcloak_stream_request(
@@ -3697,6 +3703,8 @@ class Session:
         cookies: Optional[Dict[str, str]] = None,
         auth: Optional[Tuple[str, str]] = None,
         timeout: Optional[int] = None,
+        allow_redirects: Optional[bool] = None,
+        disable_conditional_cache: bool = False,
     ) -> StreamResponse:
         """
         Perform a streaming GET request.
@@ -3708,6 +3716,8 @@ class Session:
             cookies: Cookies to send with this request
             auth: Basic auth tuple (username, password)
             timeout: Request timeout in milliseconds
+            allow_redirects: Override the session redirect policy for this request
+            disable_conditional_cache: Skip ETag / If-Modified-Since for this request
 
         Returns:
             StreamResponse for streaming the response body
@@ -3720,6 +3730,8 @@ class Session:
         return self._get_stream(
             url, params=params, headers=headers,
             cookies=cookies, auth=auth, timeout=timeout,
+            allow_redirects=allow_redirects,
+            disable_conditional_cache=disable_conditional_cache,
         )
 
     def put_stream(
@@ -3732,6 +3744,8 @@ class Session:
         cookies: Optional[Dict[str, str]] = None,
         auth: Optional[Tuple[str, str]] = None,
         timeout: Optional[int] = None,
+        allow_redirects: Optional[bool] = None,
+        disable_conditional_cache: bool = False,
     ) -> StreamResponse:
         """
         Perform a streaming PUT request.
@@ -3770,6 +3784,8 @@ class Session:
         return self.request_stream(
             "PUT", url, data=body, headers=merged_headers,
             cookies=cookies, auth=auth, timeout=timeout,
+            allow_redirects=allow_redirects,
+            disable_conditional_cache=disable_conditional_cache,
         )
 
     def delete_stream(
@@ -3780,6 +3796,8 @@ class Session:
         cookies: Optional[Dict[str, str]] = None,
         auth: Optional[Tuple[str, str]] = None,
         timeout: Optional[int] = None,
+        allow_redirects: Optional[bool] = None,
+        disable_conditional_cache: bool = False,
     ) -> StreamResponse:
         """
         Perform a streaming DELETE request.
@@ -3798,6 +3816,8 @@ class Session:
         return self.request_stream(
             "DELETE", url, params=params, headers=headers,
             cookies=cookies, auth=auth, timeout=timeout,
+            allow_redirects=allow_redirects,
+            disable_conditional_cache=disable_conditional_cache,
         )
 
     def patch_stream(
@@ -3810,6 +3830,8 @@ class Session:
         cookies: Optional[Dict[str, str]] = None,
         auth: Optional[Tuple[str, str]] = None,
         timeout: Optional[int] = None,
+        allow_redirects: Optional[bool] = None,
+        disable_conditional_cache: bool = False,
     ) -> StreamResponse:
         """
         Perform a streaming PATCH request.
@@ -3848,6 +3870,8 @@ class Session:
         return self.request_stream(
             "PATCH", url, data=body, headers=merged_headers,
             cookies=cookies, auth=auth, timeout=timeout,
+            allow_redirects=allow_redirects,
+            disable_conditional_cache=disable_conditional_cache,
         )
 
 
