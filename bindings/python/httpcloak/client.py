@@ -145,6 +145,12 @@ class Preset:
     CHROME_LATEST_IOS = "chrome-latest-ios"
     CHROME_LATEST_ANDROID = "chrome-latest-android"
 
+    # Chrome 149 (desktop; wire fingerprint identical to 148)
+    CHROME_149 = "chrome-149"
+    CHROME_149_WINDOWS = "chrome-149-windows"
+    CHROME_149_LINUX = "chrome-149-linux"
+    CHROME_149_MACOS = "chrome-149-macos"
+
     # Chrome 148
     CHROME_148 = "chrome-148"
     CHROME_148_WINDOWS = "chrome-148-windows"
@@ -239,6 +245,7 @@ class Preset:
         return [
             cls.CHROME_LATEST, cls.CHROME_LATEST_WINDOWS, cls.CHROME_LATEST_LINUX,
             cls.CHROME_LATEST_MACOS, cls.CHROME_LATEST_IOS, cls.CHROME_LATEST_ANDROID,
+            cls.CHROME_149, cls.CHROME_149_WINDOWS, cls.CHROME_149_LINUX, cls.CHROME_149_MACOS,
             cls.CHROME_148, cls.CHROME_148_WINDOWS, cls.CHROME_148_LINUX, cls.CHROME_148_MACOS,
             cls.CHROME_148_IOS, cls.CHROME_148_ANDROID,
             cls.CHROME_147, cls.CHROME_147_WINDOWS, cls.CHROME_147_LINUX, cls.CHROME_147_MACOS,

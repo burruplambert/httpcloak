@@ -1064,6 +1064,28 @@ export function request(method: string, url: string, options?: RequestOptions): 
 
 /** Available browser presets */
 export const Preset: {
+  CHROME_LATEST: string;
+  CHROME_LATEST_WINDOWS: string;
+  CHROME_LATEST_LINUX: string;
+  CHROME_LATEST_MACOS: string;
+  CHROME_LATEST_IOS: string;
+  CHROME_LATEST_ANDROID: string;
+  CHROME_149: string;
+  CHROME_149_WINDOWS: string;
+  CHROME_149_LINUX: string;
+  CHROME_149_MACOS: string;
+  CHROME_148: string;
+  CHROME_148_WINDOWS: string;
+  CHROME_148_LINUX: string;
+  CHROME_148_MACOS: string;
+  CHROME_148_IOS: string;
+  CHROME_148_ANDROID: string;
+  CHROME_147: string;
+  CHROME_147_WINDOWS: string;
+  CHROME_147_LINUX: string;
+  CHROME_147_MACOS: string;
+  CHROME_147_IOS: string;
+  CHROME_147_ANDROID: string;
   CHROME_146: string;
   CHROME_146_WINDOWS: string;
   CHROME_146_LINUX: string;

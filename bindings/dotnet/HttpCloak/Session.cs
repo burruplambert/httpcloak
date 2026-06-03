@@ -3014,6 +3014,12 @@ public static class Presets
     public const string ChromeLatestIos = "chrome-latest-ios";
     public const string ChromeLatestAndroid = "chrome-latest-android";
 
+    // Chrome 149 (desktop; wire fingerprint identical to 148)
+    public const string Chrome149 = "chrome-149";
+    public const string Chrome149Windows = "chrome-149-windows";
+    public const string Chrome149Linux = "chrome-149-linux";
+    public const string Chrome149MacOS = "chrome-149-macos";
+
     // Chrome 148
     public const string Chrome148 = "chrome-148";
     public const string Chrome148Windows = "chrome-148-windows";

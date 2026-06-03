@@ -40,6 +40,12 @@ const Preset = {
   CHROME_LATEST_IOS: "chrome-latest-ios",
   CHROME_LATEST_ANDROID: "chrome-latest-android",
 
+  // Chrome 149 (desktop; wire fingerprint identical to 148)
+  CHROME_149: "chrome-149",
+  CHROME_149_WINDOWS: "chrome-149-windows",
+  CHROME_149_LINUX: "chrome-149-linux",
+  CHROME_149_MACOS: "chrome-149-macos",
+
   // Chrome 148
   CHROME_148: "chrome-148",
   CHROME_148_WINDOWS: "chrome-148-windows",

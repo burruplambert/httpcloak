@@ -2079,6 +2079,52 @@ func AndroidChrome148() *Preset {
 	return AndroidChrome147()
 }
 
+// Chrome149Windows returns Chrome 149 on Windows. The wire-level fingerprint is
+// byte-identical to 148 (verified against a real Chrome 149 capture: JA4
+// t13d1516h2_8daaf6152771_d8a2da3f94cd, peetprint
+// 1d4ffe9b0e34acac0bd883fa7f79d7b5, and Akamai H2
+// 1:65536;2:0;4:6291456;6:262144|15663105|0|m,a,s,p all match 148). The only
+// diff is two header values: the User-Agent version bump and a sec-ch-ua brand
+// rotation (Google Chrome moved to first position, GREASE brand became
+// "Not)A;Brand" v="24"). Embedded JSON overrides just those; everything else
+// inherits from chrome-148-windows. Falls back to Chrome148Windows if the JSON
+// didn't load.
+func Chrome149Windows() *Preset {
+	if p := LookupCustom("chrome-149-windows"); p != nil {
+		return p
+	}
+	return Chrome148Windows()
+}
+
+// Chrome149Linux returns Chrome 149 on Linux. See Chrome149Windows.
+func Chrome149Linux() *Preset {
+	if p := LookupCustom("chrome-149-linux"); p != nil {
+		return p
+	}
+	return Chrome148Linux()
+}
+
+// Chrome149macOS returns Chrome 149 on macOS. See Chrome149Windows.
+func Chrome149macOS() *Preset {
+	if p := LookupCustom("chrome-149-macos"); p != nil {
+		return p
+	}
+	return Chrome148macOS()
+}
+
+// Chrome149 returns the Chrome 149 fingerprint preset auto-detected from the
+// running OS.
+func Chrome149() *Preset {
+	switch GetPlatformInfo().Platform {
+	case "Windows":
+		return Chrome149Windows()
+	case "macOS":
+		return Chrome149macOS()
+	default:
+		return Chrome149Linux()
+	}
+}
+
 // IOSChrome143 returns Chrome 143 on iOS fingerprint preset
 // Note: iOS Chrome uses WebKit (Apple requirement), so it has Safari's TLS AND HTTP/2 fingerprint
 // WebKit doesn't support Client Hints, so no sec-ch-ua headers
@@ -2647,12 +2693,17 @@ var presets = map[string]func() *Preset{
 	"chrome-148-linux":   Chrome148Linux,
 	"chrome-148-macos":   Chrome148macOS,
 	"chrome-148-android": AndroidChrome148,
+	"chrome-149":         Chrome149,
+	"chrome-149-windows": Chrome149Windows,
+	"chrome-149-linux":   Chrome149Linux,
+	"chrome-149-macos":   Chrome149macOS,
 
-	// -latest aliases (always point to the newest version)
-	"chrome-latest":         Chrome148,
-	"chrome-latest-windows": Chrome148Windows,
-	"chrome-latest-linux":   Chrome148Linux,
-	"chrome-latest-macos":   Chrome148macOS,
+	// -latest aliases (always point to the newest version). Desktop tracks 149;
+	// mobile stays on 148 until Chrome 149 mobile captures are confirmed.
+	"chrome-latest":         Chrome149,
+	"chrome-latest-windows": Chrome149Windows,
+	"chrome-latest-linux":   Chrome149Linux,
+	"chrome-latest-macos":   Chrome149macOS,
 	"firefox-latest":        Firefox148,
 	"safari-latest":         Safari18,
 	"chrome-latest-ios":     IOSChrome148,
