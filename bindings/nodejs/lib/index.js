@@ -889,6 +889,10 @@ function getLib() {
       httpcloak_session_touch: nativeLibHandle.func("httpcloak_session_touch", "void", ["int64"]),
       httpcloak_session_set_conditional_cache: nativeLibHandle.func("httpcloak_session_set_conditional_cache", "void", ["int64", "int"]),
       httpcloak_session_get_conditional_cache: nativeLibHandle.func("httpcloak_session_get_conditional_cache", "int", ["int64"]),
+      httpcloak_session_set_client_hints: nativeLibHandle.func("httpcloak_session_set_client_hints", "void", ["int64", "int"]),
+      httpcloak_session_get_client_hints: nativeLibHandle.func("httpcloak_session_get_client_hints", "int", ["int64"]),
+      httpcloak_session_set_high_entropy_client_hints: nativeLibHandle.func("httpcloak_session_set_high_entropy_client_hints", "void", ["int64", "int"]),
+      httpcloak_session_get_high_entropy_client_hints: nativeLibHandle.func("httpcloak_session_get_high_entropy_client_hints", "int", ["int64"]),
       httpcloak_session_set_follow_redirects: nativeLibHandle.func("httpcloak_session_set_follow_redirects", "void", ["int64", "int"]),
       httpcloak_session_get_follow_redirects: nativeLibHandle.func("httpcloak_session_get_follow_redirects", "int", ["int64"]),
       httpcloak_session_set_max_redirects: nativeLibHandle.func("httpcloak_session_set_max_redirects", "void", ["int64", "int"]),
@@ -1476,6 +1480,8 @@ class Session {
       switchProtocol = null,
       withoutCookieJar = false,
       withoutConditionalCache = false,
+      withoutClientHints = false,
+      withoutHighEntropyClientHints = false,
       disableEch = false,
       disableHttp3 = false,
       ja3 = null,
@@ -1557,6 +1563,14 @@ class Session {
     }
     if (withoutConditionalCache) {
       config.without_conditional_cache = true;
+    }
+    // Full strip: drop ALL sec-ch-ua client hints, including the always-on trio.
+    if (withoutClientHints) {
+      config.without_client_hints = true;
+    }
+    // High-entropy strip: keep the always-on trio, drop only the Accept-CH hints.
+    if (withoutHighEntropyClientHints) {
+      config.without_high_entropy_client_hints = true;
     }
     if (disableEch) {
       config.disable_ech = true;
@@ -1727,7 +1741,7 @@ class Session {
    * @returns {Response} Response object
    */
   getSync(url, options = {}) {
-    const { headers = null, params = null, cookies = null, auth = null, fetchMode = null, allowRedirects = null, disableConditionalCache = false } = options;
+    const { headers = null, params = null, cookies = null, auth = null, fetchMode = null, allowRedirects = null, disableConditionalCache = false, disableClientHints = false, disableHighEntropyClientHints = false } = options;
 
     url = addParamsToUrl(url, params);
     let mergedHeaders = this._mergeHeaders(headers);
@@ -1749,6 +1763,12 @@ class Session {
     }
     if (disableConditionalCache) {
       reqOptions.disable_conditional_cache = true;
+    }
+    if (disableClientHints) {
+      reqOptions.disable_client_hints = true;
+    }
+    if (disableHighEntropyClientHints) {
+      reqOptions.disable_high_entropy_client_hints = true;
     }
     const optionsJson = Object.keys(reqOptions).length > 0 ? JSON.stringify(reqOptions) : null;
 
@@ -1779,7 +1799,7 @@ class Session {
    * @returns {Response} Response object
    */
   postSync(url, options = {}) {
-    let { body = null, json = null, data = null, files = null, headers = null, params = null, cookies = null, auth = null, fetchMode = null, allowRedirects = null, disableConditionalCache = false } = options;
+    let { body = null, json = null, data = null, files = null, headers = null, params = null, cookies = null, auth = null, fetchMode = null, allowRedirects = null, disableConditionalCache = false, disableClientHints = false, disableHighEntropyClientHints = false } = options;
 
     url = addParamsToUrl(url, params);
     let mergedHeaders = this._mergeHeaders(headers);
@@ -1830,6 +1850,12 @@ class Session {
     if (disableConditionalCache) {
       reqOptions.disable_conditional_cache = true;
     }
+    if (disableClientHints) {
+      reqOptions.disable_client_hints = true;
+    }
+    if (disableHighEntropyClientHints) {
+      reqOptions.disable_high_entropy_client_hints = true;
+    }
     const optionsJson = Object.keys(reqOptions).length > 0 ? JSON.stringify(reqOptions) : null;
 
     const bodyPtr = bodyBuffer || Buffer.alloc(0);
@@ -1854,7 +1880,7 @@ class Session {
    * @returns {Response} Response object
    */
   requestSync(method, url, options = {}) {
-    let { body = null, json = null, data = null, files = null, headers = null, params = null, cookies = null, auth = null, timeout = null, fetchMode = null, allowRedirects = null, disableConditionalCache = false } = options;
+    let { body = null, json = null, data = null, files = null, headers = null, params = null, cookies = null, auth = null, timeout = null, fetchMode = null, allowRedirects = null, disableConditionalCache = false, disableClientHints = false, disableHighEntropyClientHints = false } = options;
 
     url = addParamsToUrl(url, params);
     let mergedHeaders = this._mergeHeaders(headers);
@@ -1899,6 +1925,8 @@ class Session {
     if (fetchMode) requestConfig.fetch_mode = fetchMode;
     if (allowRedirects !== null && allowRedirects !== undefined) requestConfig.follow_redirects = !!allowRedirects;
     if (disableConditionalCache) requestConfig.disable_conditional_cache = true;
+    if (disableClientHints) requestConfig.disable_client_hints = true;
+    if (disableHighEntropyClientHints) requestConfig.disable_high_entropy_client_hints = true;
 
     const bodyPtr = bodyBuffer || Buffer.alloc(0);
     const bodyLen = bodyBuffer ? bodyBuffer.length : 0;
@@ -1929,7 +1957,7 @@ class Session {
    * @returns {Promise<Response>} Response object
    */
   get(url, options = {}) {
-    const { headers = null, params = null, cookies = null, auth = null, fetchMode = null, timeout = null, allowRedirects = null, disableConditionalCache = false, signal = null } = options;
+    const { headers = null, params = null, cookies = null, auth = null, fetchMode = null, timeout = null, allowRedirects = null, disableConditionalCache = false, disableClientHints = false, disableHighEntropyClientHints = false, signal = null } = options;
 
     url = addParamsToUrl(url, params);
     let mergedHeaders = this._mergeHeaders(headers);
@@ -1958,6 +1986,12 @@ class Session {
     if (disableConditionalCache) {
       reqOptions.disable_conditional_cache = true;
     }
+    if (disableClientHints) {
+      reqOptions.disable_client_hints = true;
+    }
+    if (disableHighEntropyClientHints) {
+      reqOptions.disable_high_entropy_client_hints = true;
+    }
     const optionsJson = Object.keys(reqOptions).length > 0 ? JSON.stringify(reqOptions) : null;
 
     // Register async request with callback manager
@@ -1978,7 +2012,7 @@ class Session {
    * @returns {Promise<Response>} Response object
    */
   post(url, options = {}) {
-    let { body = null, json = null, data = null, files = null, headers = null, params = null, cookies = null, auth = null, fetchMode = null, timeout = null, allowRedirects = null, disableConditionalCache = false, signal = null } = options;
+    let { body = null, json = null, data = null, files = null, headers = null, params = null, cookies = null, auth = null, fetchMode = null, timeout = null, allowRedirects = null, disableConditionalCache = false, disableClientHints = false, disableHighEntropyClientHints = false, signal = null } = options;
 
     url = addParamsToUrl(url, params);
     let mergedHeaders = this._mergeHeaders(headers);
@@ -2044,6 +2078,12 @@ class Session {
     if (disableConditionalCache) {
       reqOptions.disable_conditional_cache = true;
     }
+    if (disableClientHints) {
+      reqOptions.disable_client_hints = true;
+    }
+    if (disableHighEntropyClientHints) {
+      reqOptions.disable_high_entropy_client_hints = true;
+    }
     if (bodyEncoding) {
       reqOptions.body_encoding = bodyEncoding;
     }
@@ -2068,7 +2108,7 @@ class Session {
    * @returns {Promise<Response>} Response object
    */
   request(method, url, options = {}) {
-    let { body = null, json = null, data = null, files = null, headers = null, params = null, cookies = null, auth = null, timeout = null, fetchMode = null, allowRedirects = null, disableConditionalCache = false, signal = null } = options;
+    let { body = null, json = null, data = null, files = null, headers = null, params = null, cookies = null, auth = null, timeout = null, fetchMode = null, allowRedirects = null, disableConditionalCache = false, disableClientHints = false, disableHighEntropyClientHints = false, signal = null } = options;
 
     url = addParamsToUrl(url, params);
     let mergedHeaders = this._mergeHeaders(headers);
@@ -2126,6 +2166,8 @@ class Session {
     if (fetchMode) requestConfig.fetch_mode = fetchMode;
     if (allowRedirects !== null && allowRedirects !== undefined) requestConfig.follow_redirects = !!allowRedirects;
     if (disableConditionalCache) requestConfig.disable_conditional_cache = true;
+    if (disableClientHints) requestConfig.disable_client_hints = true;
+    if (disableHighEntropyClientHints) requestConfig.disable_high_entropy_client_hints = true;
 
     // Register async request with callback manager
     const manager = getAsyncManager();
@@ -2357,6 +2399,44 @@ class Session {
    */
   getConditionalCache() {
     return this._lib.httpcloak_session_get_conditional_cache(this._handle) !== 0;
+  }
+
+  /**
+   * Toggle the session's client-hints handling at runtime (full strip).
+   * When disabled, the session drops ALL sec-ch-ua client hints, including
+   * the always-on trio (sec-ch-ua, sec-ch-ua-mobile, sec-ch-ua-platform).
+   * The change takes effect on the next request and persists until set again.
+   * @param {boolean} enabled
+   */
+  setClientHints(enabled) {
+    this._lib.httpcloak_session_set_client_hints(this._handle, enabled ? 1 : 0);
+  }
+
+  /**
+   * Return the session's current client-hints state.
+   * @returns {boolean}
+   */
+  getClientHints() {
+    return this._lib.httpcloak_session_get_client_hints(this._handle) !== 0;
+  }
+
+  /**
+   * Toggle the session's high-entropy client-hints handling at runtime.
+   * When disabled, the session keeps the always-on trio but drops only the
+   * high-entropy Accept-CH hints (e.g. sec-ch-ua-platform-version, -arch,
+   * -model, -bitness, -full-version-list). Takes effect on the next request.
+   * @param {boolean} enabled
+   */
+  setHighEntropyClientHints(enabled) {
+    this._lib.httpcloak_session_set_high_entropy_client_hints(this._handle, enabled ? 1 : 0);
+  }
+
+  /**
+   * Return the session's current high-entropy client-hints state.
+   * @returns {boolean}
+   */
+  getHighEntropyClientHints() {
+    return this._lib.httpcloak_session_get_high_entropy_client_hints(this._handle) !== 0;
   }
 
   /**
@@ -2689,7 +2769,7 @@ class Session {
    *   stream.close();
    */
   getStream(url, options = {}) {
-    const { params, headers, cookies, timeout, allowRedirects = null, disableConditionalCache = false } = options;
+    const { params, headers, cookies, timeout, allowRedirects = null, disableConditionalCache = false, disableClientHints = false, disableHighEntropyClientHints = false } = options;
 
     // Add params to URL
     if (params) {
@@ -2721,6 +2801,12 @@ class Session {
     }
     if (disableConditionalCache) {
       reqOptions.disable_conditional_cache = true;
+    }
+    if (disableClientHints) {
+      reqOptions.disable_client_hints = true;
+    }
+    if (disableHighEntropyClientHints) {
+      reqOptions.disable_high_entropy_client_hints = true;
     }
     const optionsJson = Object.keys(reqOptions).length > 0 ? JSON.stringify(reqOptions) : null;
 
@@ -2761,7 +2847,7 @@ class Session {
    * @returns {StreamResponse} - Streaming response for chunked reading
    */
   postStream(url, options = {}) {
-    const { body: bodyOpt, json: jsonBody, form, params, headers, cookies, timeout, allowRedirects = null, disableConditionalCache = false } = options;
+    const { body: bodyOpt, json: jsonBody, form, params, headers, cookies, timeout, allowRedirects = null, disableConditionalCache = false, disableClientHints = false, disableHighEntropyClientHints = false } = options;
 
     // Add params to URL
     if (params) {
@@ -2807,6 +2893,12 @@ class Session {
     if (disableConditionalCache) {
       reqOptions.disable_conditional_cache = true;
     }
+    if (disableClientHints) {
+      reqOptions.disable_client_hints = true;
+    }
+    if (disableHighEntropyClientHints) {
+      reqOptions.disable_high_entropy_client_hints = true;
+    }
     const optionsJson = Object.keys(reqOptions).length > 0 ? JSON.stringify(reqOptions) : null;
 
     // Start stream
@@ -2845,7 +2937,7 @@ class Session {
    * @returns {StreamResponse} - Streaming response for chunked reading
    */
   requestStream(method, url, options = {}) {
-    const { body, params, headers, cookies, timeout, allowRedirects = null, disableConditionalCache = false } = options;
+    const { body, params, headers, cookies, timeout, allowRedirects = null, disableConditionalCache = false, disableClientHints = false, disableHighEntropyClientHints = false } = options;
 
     // Add params to URL
     if (params) {
@@ -2883,6 +2975,12 @@ class Session {
     }
     if (disableConditionalCache) {
       requestConfig.disable_conditional_cache = true;
+    }
+    if (disableClientHints) {
+      requestConfig.disable_client_hints = true;
+    }
+    if (disableHighEntropyClientHints) {
+      requestConfig.disable_high_entropy_client_hints = true;
     }
 
     // Start stream

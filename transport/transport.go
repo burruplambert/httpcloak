@@ -203,6 +203,19 @@ type Request struct {
 	// from the response. Session-layer concept; the transport itself does not
 	// consult this field.
 	DisableConditionalCache bool
+
+	// DisableClientHints, when true, strips ALL preset UA client hints for this
+	// request: the always-on sec-ch-ua / sec-ch-ua-mobile / sec-ch-ua-platform
+	// trio is not applied by the transport, and the session layer skips the
+	// high-entropy hints too. Headers the caller sets explicitly still pass
+	// through (the user-override loop runs after the preset headers). The session
+	// also sets this when client hints are disabled session-wide.
+	DisableClientHints bool
+
+	// DisableHighEntropyClientHints, when true, keeps the always-on sec-ch-ua
+	// trio but tells the session layer to skip the high-entropy hints for this
+	// request. Session-layer concept; the transport does not consult this field.
+	DisableHighEntropyClientHints bool
 }
 
 // RedirectInfo contains information about a redirect response
@@ -1247,7 +1260,7 @@ func (t *Transport) doHTTP1(ctx context.Context, req *Request) (*Response, error
 
 	// Set preset headers (with ordering for fingerprinting)
 	// Pass "h1" protocol so Chrome presets don't send Priority header on HTTP/1.1
-	applyPresetHeaders(httpReq, t.preset, t.getHeaderOrder(), t.getCustomPseudoOrder(), effectiveTLSOnly, "h1", req.Headers)
+	applyPresetHeaders(httpReq, t.preset, t.getHeaderOrder(), t.getCustomPseudoOrder(), effectiveTLSOnly, "h1", req.Headers, req.DisableClientHints)
 
 	// Override with custom headers (multi-value support)
 	// Use Set for first value to replace preset headers, Add for additional values
@@ -1361,7 +1374,7 @@ func (t *Transport) doHTTP1WithTLSConn(ctx context.Context, req *Request, alpnEr
 	}
 
 	// Set preset headers - pass "h1" protocol so Chrome presets don't send Priority header
-	applyPresetHeaders(httpReq, t.preset, t.getHeaderOrder(), t.getCustomPseudoOrder(), effectiveTLSOnly, "h1", req.Headers)
+	applyPresetHeaders(httpReq, t.preset, t.getHeaderOrder(), t.getCustomPseudoOrder(), effectiveTLSOnly, "h1", req.Headers, req.DisableClientHints)
 
 	// Override with custom headers (multi-value support)
 	// Use Set for first value to replace preset headers, Add for additional values
@@ -1482,7 +1495,7 @@ func (t *Transport) doHTTP2(ctx context.Context, req *Request) (*Response, error
 	}
 
 	// Set preset headers (with ordering for fingerprinting)
-	applyPresetHeaders(httpReq, t.preset, t.getHeaderOrder(), t.getCustomPseudoOrder(), effectiveTLSOnly, "h2", req.Headers)
+	applyPresetHeaders(httpReq, t.preset, t.getHeaderOrder(), t.getCustomPseudoOrder(), effectiveTLSOnly, "h2", req.Headers, req.DisableClientHints)
 
 	// Override with custom headers (multi-value support)
 	// Use Set for first value to replace preset headers, Add for additional values
@@ -1618,7 +1631,7 @@ func (t *Transport) doHTTP3(ctx context.Context, req *Request) (*Response, error
 	}
 
 	// Set preset headers (with ordering for fingerprinting)
-	applyPresetHeaders(httpReq, t.preset, t.getHeaderOrder(), t.getCustomPseudoOrder(), effectiveTLSOnly, "h3", req.Headers)
+	applyPresetHeaders(httpReq, t.preset, t.getHeaderOrder(), t.getCustomPseudoOrder(), effectiveTLSOnly, "h3", req.Headers, req.DisableClientHints)
 
 	// Override with custom headers (multi-value support)
 	// Use Set for first value to replace preset headers, Add for additional values
@@ -1802,17 +1815,29 @@ func (t *Transport) SetSessionIdentifier(sessionId string) {
 // If tlsOnly is true, skips applying preset headers but still sets header order for fingerprinting.
 // The protocol parameter ("h1", "h2", "h3") is used for protocol-specific header handling.
 // userHeaders are the user-provided request headers, used for auto-detecting CORS mode.
-func applyPresetHeaders(httpReq *http.Request, preset *fingerprint.Preset, customHeaderOrder []string, customPseudoOrder []string, tlsOnly bool, protocol string, userHeaders map[string][]string) {
+// isClientHintHeader reports whether a header key is a UA client hint
+// (sec-ch-ua and the sec-ch-ua-* family). Case-insensitive.
+func isClientHintHeader(key string) bool {
+	return len(key) >= 7 && strings.EqualFold(key[:7], "sec-ch-")
+}
+
+func applyPresetHeaders(httpReq *http.Request, preset *fingerprint.Preset, customHeaderOrder []string, customPseudoOrder []string, tlsOnly bool, protocol string, userHeaders map[string][]string, stripClientHints bool) {
 	// In TLS-only mode, skip applying preset headers but still set header order
 	if !tlsOnly {
 		if len(preset.HeaderOrder) > 0 {
 			// Use ordered headers for HTTP/2 and HTTP/3 fingerprinting
 			for _, hp := range preset.HeaderOrder {
+				if stripClientHints && isClientHintHeader(hp.Key) {
+					continue // full opt-out: don't apply the preset sec-ch-* trio
+				}
 				httpReq.Header.Set(hp.Key, hp.Value)
 			}
 		} else {
 			// Fallback to unordered headers map
 			for key, value := range preset.Headers {
+				if stripClientHints && isClientHintHeader(key) {
+					continue
+				}
 				httpReq.Header.Set(key, value)
 			}
 		}

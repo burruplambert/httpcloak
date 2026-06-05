@@ -151,6 +151,18 @@ internal static class Native
     [DllImport(LibraryName, EntryPoint = "httpcloak_session_get_conditional_cache", CallingConvention = CallingConvention.Cdecl)]
     public static extern int SessionGetConditionalCache(long handle);
 
+    [DllImport(LibraryName, EntryPoint = "httpcloak_session_set_client_hints", CallingConvention = CallingConvention.Cdecl)]
+    public static extern void SessionSetClientHints(long handle, int enabled);
+
+    [DllImport(LibraryName, EntryPoint = "httpcloak_session_get_client_hints", CallingConvention = CallingConvention.Cdecl)]
+    public static extern int SessionGetClientHints(long handle);
+
+    [DllImport(LibraryName, EntryPoint = "httpcloak_session_set_high_entropy_client_hints", CallingConvention = CallingConvention.Cdecl)]
+    public static extern void SessionSetHighEntropyClientHints(long handle, int enabled);
+
+    [DllImport(LibraryName, EntryPoint = "httpcloak_session_get_high_entropy_client_hints", CallingConvention = CallingConvention.Cdecl)]
+    public static extern int SessionGetHighEntropyClientHints(long handle);
+
     [DllImport(LibraryName, EntryPoint = "httpcloak_session_set_follow_redirects", CallingConvention = CallingConvention.Cdecl)]
     public static extern void SessionSetFollowRedirects(long handle, int enabled);
 

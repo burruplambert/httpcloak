@@ -265,7 +265,7 @@ func (t *Transport) doStreamHTTP1(ctx context.Context, req *Request) (*StreamRes
 	}
 
 	// Set preset headers
-	applyPresetHeaders(httpReq, t.preset, t.getHeaderOrder(), t.getCustomPseudoOrder(), effectiveTLSOnly, "h1", req.Headers)
+	applyPresetHeaders(httpReq, t.preset, t.getHeaderOrder(), t.getCustomPseudoOrder(), effectiveTLSOnly, "h1", req.Headers, req.DisableClientHints)
 
 	// Override with custom headers (multi-value support)
 	// Use Set for first value to replace preset headers, Add for additional values
@@ -364,7 +364,7 @@ func (t *Transport) doStreamHTTP2(ctx context.Context, req *Request) (*StreamRes
 	}
 
 	// Set preset headers
-	applyPresetHeaders(httpReq, t.preset, t.getHeaderOrder(), t.getCustomPseudoOrder(), effectiveTLSOnly, "h2", req.Headers)
+	applyPresetHeaders(httpReq, t.preset, t.getHeaderOrder(), t.getCustomPseudoOrder(), effectiveTLSOnly, "h2", req.Headers, req.DisableClientHints)
 
 	// Override with custom headers (multi-value support)
 	// Use Set for first value to replace preset headers, Add for additional values
@@ -463,7 +463,7 @@ func (t *Transport) doStreamHTTP3(ctx context.Context, req *Request) (*StreamRes
 	}
 
 	// Set preset headers
-	applyPresetHeaders(httpReq, t.preset, t.getHeaderOrder(), t.getCustomPseudoOrder(), effectiveTLSOnly, "h3", req.Headers)
+	applyPresetHeaders(httpReq, t.preset, t.getHeaderOrder(), t.getCustomPseudoOrder(), effectiveTLSOnly, "h3", req.Headers, req.DisableClientHints)
 
 	// Override with custom headers (multi-value support)
 	// Use Set for first value to replace preset headers, Add for additional values

@@ -188,6 +188,16 @@ type Request struct {
 	// cache. Useful for forcing a fresh fetch without touching the session-wide
 	// setting.
 	DisableConditionalCache bool
+
+	// DisableClientHints, when true, strips ALL UA client hints for this request:
+	// the always-on sec-ch-ua / sec-ch-ua-mobile / sec-ch-ua-platform trio and the
+	// high-entropy hints. Headers you set explicitly still pass through.
+	DisableClientHints bool
+
+	// DisableHighEntropyClientHints, when true, keeps the always-on sec-ch-ua trio
+	// but suppresses the high-entropy hints (full-version-list, arch,
+	// platform-version, bitness, model, wow64) for this single request.
+	DisableHighEntropyClientHints bool
 }
 
 // RedirectInfo contains information about a redirect response
@@ -392,6 +402,8 @@ type sessionConfig struct {
 	switchProtocol        string // Protocol to switch to after Refresh() (e.g. "h1", "h2", "h3")
 	withoutCookieJar      bool   // Disable internal cookie jar entirely (caller manages cookies via headers)
 	withoutConditionalCache bool // Disable ETag / If-Modified-Since handling entirely
+	withoutClientHints    bool   // Disable all UA client hints (trio + high-entropy)
+	withoutHighEntropyClientHints bool // Disable only the high-entropy UA client hints
 
 	// Distributed session cache
 	sessionCacheBackend       transport.SessionCacheBackend
@@ -616,6 +628,29 @@ func WithoutConditionalCache() SessionOption {
 	}
 }
 
+// WithoutClientHints disables ALL UA client hints for the session: the always-on
+// sec-ch-ua / sec-ch-ua-mobile / sec-ch-ua-platform trio AND the high-entropy
+// hints. Only sec-ch-* headers you set explicitly are sent. Toggle at runtime
+// with Session.SetClientHintsEnabled, or for a single request via
+// Request.DisableClientHints. Note that real Chrome always sends the trio over
+// HTTPS, so this trades fidelity for control.
+func WithoutClientHints() SessionOption {
+	return func(c *sessionConfig) {
+		c.withoutClientHints = true
+	}
+}
+
+// WithoutHighEntropyClientHints keeps the always-on sec-ch-ua trio but suppresses
+// the high-entropy hints (sec-ch-ua-full-version-list, -arch, -platform-version,
+// -bitness, -model, -wow64) that Chrome only sends after a host advertises
+// Accept-CH. Toggle at runtime with Session.SetHighEntropyClientHintsEnabled, or
+// for a single request via Request.DisableHighEntropyClientHints.
+func WithoutHighEntropyClientHints() SessionOption {
+	return func(c *sessionConfig) {
+		c.withoutHighEntropyClientHints = true
+	}
+}
+
 // WithConnectTo sets a host mapping for domain fronting.
 // Requests to requestHost will connect to connectHost instead.
 // The TLS SNI and Host header will still use requestHost.
@@ -777,6 +812,8 @@ func NewSession(preset string, opts ...SessionOption) *Session {
 		SwitchProtocol:          cfg.switchProtocol,
 		WithoutCookieJar:        cfg.withoutCookieJar,
 		WithoutConditionalCache: cfg.withoutConditionalCache,
+		WithoutClientHints:            cfg.withoutClientHints,
+		WithoutHighEntropyClientHints: cfg.withoutHighEntropyClientHints,
 	}
 
 	// Retry configuration
@@ -843,6 +880,8 @@ func (s *Session) Do(ctx context.Context, req *Request) (*Response, error) {
 		TLSOnly:                 req.TLSOnly,
 		FollowRedirects:         req.FollowRedirects,
 		DisableConditionalCache: req.DisableConditionalCache,
+		DisableClientHints:            req.DisableClientHints,
+		DisableHighEntropyClientHints: req.DisableHighEntropyClientHints,
 		Timeout:                 req.Timeout,
 	}
 
@@ -887,6 +926,8 @@ func (s *Session) DoWithBody(ctx context.Context, req *Request, bodyReader io.Re
 		TLSOnly:                 req.TLSOnly,
 		FollowRedirects:         req.FollowRedirects,
 		DisableConditionalCache: req.DisableConditionalCache,
+		DisableClientHints:            req.DisableClientHints,
+		DisableHighEntropyClientHints: req.DisableHighEntropyClientHints,
 		Timeout:                 req.Timeout,
 	}
 
@@ -1049,6 +1090,30 @@ func (s *Session) ConditionalCacheEnabled() bool {
 	return s.inner.ConditionalCacheEnabled()
 }
 
+// SetClientHintsEnabled toggles ALL UA client hints (the sec-ch-ua trio plus the
+// high-entropy hints) at runtime. When false, only sec-ch-* headers the caller
+// sets explicitly are sent.
+func (s *Session) SetClientHintsEnabled(enabled bool) {
+	s.inner.SetClientHintsEnabled(enabled)
+}
+
+// ClientHintsEnabled reports whether UA client hints are currently enabled.
+func (s *Session) ClientHintsEnabled() bool {
+	return s.inner.ClientHintsEnabled()
+}
+
+// SetHighEntropyClientHintsEnabled toggles only the high-entropy UA client hints
+// at runtime; the always-on sec-ch-ua trio is unaffected.
+func (s *Session) SetHighEntropyClientHintsEnabled(enabled bool) {
+	s.inner.SetHighEntropyClientHintsEnabled(enabled)
+}
+
+// HighEntropyClientHintsEnabled reports whether the high-entropy UA client hints
+// are currently enabled.
+func (s *Session) HighEntropyClientHintsEnabled() bool {
+	return s.inner.HighEntropyClientHintsEnabled()
+}
+
 // SetFollowRedirects toggles the session's redirect-following policy at
 // runtime. A per-request Request.FollowRedirects override still wins over
 // this value for that one request.
@@ -1199,6 +1264,8 @@ func (s *Session) DoStream(ctx context.Context, req *Request) (*StreamResponse, 
 		TLSOnly:                 req.TLSOnly,
 		FollowRedirects:         req.FollowRedirects,
 		DisableConditionalCache: req.DisableConditionalCache,
+		DisableClientHints:            req.DisableClientHints,
+		DisableHighEntropyClientHints: req.DisableHighEntropyClientHints,
 		Timeout:                 req.Timeout,
 	}
 

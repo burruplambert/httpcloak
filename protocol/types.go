@@ -235,6 +235,19 @@ type SessionConfig struct {
 	// Session.SetConditionalCacheEnabled(bool).
 	WithoutConditionalCache bool `json:"withoutConditionalCache,omitempty"`
 
+	// WithoutClientHints disables ALL UA client hints for the session: the
+	// always-on sec-ch-ua / sec-ch-ua-mobile / sec-ch-ua-platform trio AND the
+	// high-entropy hints. Only headers the caller sets explicitly are sent.
+	// Toggle at runtime with Session.SetClientHintsEnabled(bool).
+	WithoutClientHints bool `json:"withoutClientHints,omitempty"`
+
+	// WithoutHighEntropyClientHints keeps the always-on sec-ch-ua trio but
+	// suppresses the high-entropy hints (sec-ch-ua-full-version-list, -arch,
+	// -platform-version, -bitness, -model, -wow64) that Chrome only sends after
+	// a host advertises Accept-CH. Toggle at runtime with
+	// Session.SetHighEntropyClientHintsEnabled(bool).
+	WithoutHighEntropyClientHints bool `json:"withoutHighEntropyClientHints,omitempty"`
+
 	// Default authentication (can be overridden per-request)
 	Auth *AuthConfig `json:"auth,omitempty"`
 }

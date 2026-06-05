@@ -245,6 +245,10 @@ export interface SessionOptions {
   withoutCookieJar?: boolean;
   /** Disable ETag / If-Modified-Since handling for the lifetime of the session (default: false) */
   withoutConditionalCache?: boolean;
+  /** Full strip: drop ALL sec-ch-ua client hints (including the always-on trio) for the lifetime of the session (default: false) */
+  withoutClientHints?: boolean;
+  /** High-entropy strip: keep the always-on trio but drop only the Accept-CH high-entropy hints for the lifetime of the session (default: false) */
+  withoutHighEntropyClientHints?: boolean;
   /** Skip the ECH (Encrypted Client Hello) HTTPS RR lookup. Saves ~15-20ms on first connect (default: false) */
   disableEch?: boolean;
   /** Disable HTTP/3 racing while keeping H1/H2 auto-negotiation. Reachable indirectly via httpVersion: "h2" but the explicit flag is cleaner (default: false) */
@@ -314,6 +318,22 @@ export interface RequestOptions {
    * fresh fetch without touching the session-wide setting.
    */
   disableConditionalCache?: boolean;
+
+  /**
+   * Per-request full strip of sec-ch-ua client hints. When true, ALL client
+   * hints are dropped for this request, including the always-on trio
+   * (sec-ch-ua, sec-ch-ua-mobile, sec-ch-ua-platform). One-off only; the
+   * session-wide setting is untouched.
+   */
+  disableClientHints?: boolean;
+
+  /**
+   * Per-request high-entropy strip. When true, this request keeps the
+   * always-on trio but drops only the high-entropy Accept-CH hints
+   * (e.g. sec-ch-ua-platform-version, -arch, -model, -bitness,
+   * -full-version-list). One-off only; the session-wide setting is untouched.
+   */
+  disableHighEntropyClientHints?: boolean;
 
   /**
    * AbortSignal for cancelling an in-flight request. Honored by the async
@@ -511,6 +531,28 @@ export class Session {
 
   /** Read the session's current conditional-cache state. */
   getConditionalCache(): boolean;
+
+  /**
+   * Toggle the session's client-hints handling at runtime (full strip).
+   * When disabled, the session drops ALL sec-ch-ua client hints, including
+   * the always-on trio (sec-ch-ua, sec-ch-ua-mobile, sec-ch-ua-platform).
+   * The change takes effect on the next request and persists until set again.
+   */
+  setClientHints(enabled: boolean): void;
+
+  /** Read the session's current client-hints state. */
+  getClientHints(): boolean;
+
+  /**
+   * Toggle the session's high-entropy client-hints handling at runtime.
+   * When disabled, the session keeps the always-on trio but drops only the
+   * high-entropy Accept-CH hints (e.g. sec-ch-ua-platform-version, -arch,
+   * -model, -bitness, -full-version-list). Takes effect on the next request.
+   */
+  setHighEntropyClientHints(enabled: boolean): void;
+
+  /** Read the session's current high-entropy client-hints state. */
+  getHighEntropyClientHints(): boolean;
 
   /**
    * Toggle the session's redirect-following policy at runtime. The change

@@ -1081,6 +1081,14 @@ def _setup_lib(lib):
     lib.httpcloak_session_set_conditional_cache.restype = None
     lib.httpcloak_session_get_conditional_cache.argtypes = [c_int64]
     lib.httpcloak_session_get_conditional_cache.restype = c_int
+    lib.httpcloak_session_set_client_hints.argtypes = [c_int64, c_int]
+    lib.httpcloak_session_set_client_hints.restype = None
+    lib.httpcloak_session_get_client_hints.argtypes = [c_int64]
+    lib.httpcloak_session_get_client_hints.restype = c_int
+    lib.httpcloak_session_set_high_entropy_client_hints.argtypes = [c_int64, c_int]
+    lib.httpcloak_session_set_high_entropy_client_hints.restype = None
+    lib.httpcloak_session_get_high_entropy_client_hints.argtypes = [c_int64]
+    lib.httpcloak_session_get_high_entropy_client_hints.restype = c_int
     lib.httpcloak_session_set_follow_redirects.argtypes = [c_int64, c_int]
     lib.httpcloak_session_set_follow_redirects.restype = None
     lib.httpcloak_session_get_follow_redirects.argtypes = [c_int64]
@@ -1618,6 +1626,8 @@ class Session:
         switch_protocol: Optional[str] = None,
         without_cookie_jar: bool = False,
         without_conditional_cache: bool = False,
+        without_client_hints: bool = False,
+        without_high_entropy_client_hints: bool = False,
         disable_ech: bool = False,
         disable_http3: bool = False,
         ja3: Optional[str] = None,
@@ -1677,6 +1687,10 @@ class Session:
             config["without_cookie_jar"] = True
         if without_conditional_cache:
             config["without_conditional_cache"] = True
+        if without_client_hints:
+            config["without_client_hints"] = True
+        if without_high_entropy_client_hints:
+            config["without_high_entropy_client_hints"] = True
         if disable_ech:
             config["disable_ech"] = True
         if disable_http3:
@@ -1924,6 +1938,8 @@ class Session:
         fetch_mode: Optional[str] = None,
         allow_redirects: Optional[bool] = None,
         disable_conditional_cache: bool = False,
+        disable_client_hints: bool = False,
+        disable_high_entropy_client_hints: bool = False,
     ) -> Response:
         """
         Perform a POST request.
@@ -2003,7 +2019,7 @@ class Session:
         merged_headers = self._apply_cookies(merged_headers, cookies)
 
         if timeout:
-            return self.request("POST", url, headers=merged_headers, data=body, timeout=timeout, fetch_mode=fetch_mode, allow_redirects=allow_redirects, disable_conditional_cache=disable_conditional_cache)
+            return self.request("POST", url, headers=merged_headers, data=body, timeout=timeout, fetch_mode=fetch_mode, allow_redirects=allow_redirects, disable_conditional_cache=disable_conditional_cache, disable_client_hints=disable_client_hints, disable_high_entropy_client_hints=disable_high_entropy_client_hints)
 
         # Build options JSON with headers wrapper (clib expects {"headers": {...}})
         options = {}
@@ -2015,6 +2031,10 @@ class Session:
             options["follow_redirects"] = bool(allow_redirects)
         if disable_conditional_cache:
             options["disable_conditional_cache"] = True
+        if disable_client_hints:
+            options["disable_client_hints"] = True
+        if disable_high_entropy_client_hints:
+            options["disable_high_entropy_client_hints"] = True
         options_json = json_module.dumps(options).encode("utf-8") if options else None
 
         body_len = len(body) if body else 0
@@ -2049,6 +2069,8 @@ class Session:
         fetch_mode: Optional[str] = None,
         allow_redirects: Optional[bool] = None,
         disable_conditional_cache: bool = False,
+        disable_client_hints: bool = False,
+        disable_high_entropy_client_hints: bool = False,
     ) -> Response:
         """
         Perform a custom HTTP request.
@@ -2116,6 +2138,10 @@ class Session:
             request_config["follow_redirects"] = bool(allow_redirects)
         if disable_conditional_cache:
             request_config["disable_conditional_cache"] = True
+        if disable_client_hints:
+            request_config["disable_client_hints"] = True
+        if disable_high_entropy_client_hints:
+            request_config["disable_high_entropy_client_hints"] = True
 
         body_len = len(body_bytes) if body_bytes else 0
 
@@ -2147,9 +2173,11 @@ class Session:
         fetch_mode: Optional[str] = None,
         allow_redirects: Optional[bool] = None,
         disable_conditional_cache: bool = False,
+        disable_client_hints: bool = False,
+        disable_high_entropy_client_hints: bool = False,
     ) -> Response:
         """Perform a PUT request."""
-        return self.request("PUT", url, params=params, data=data, json=json, files=files, headers=headers, cookies=cookies, auth=auth, timeout=timeout, fetch_mode=fetch_mode, allow_redirects=allow_redirects, disable_conditional_cache=disable_conditional_cache)
+        return self.request("PUT", url, params=params, data=data, json=json, files=files, headers=headers, cookies=cookies, auth=auth, timeout=timeout, fetch_mode=fetch_mode, allow_redirects=allow_redirects, disable_conditional_cache=disable_conditional_cache, disable_client_hints=disable_client_hints, disable_high_entropy_client_hints=disable_high_entropy_client_hints)
 
     def delete(
         self,
@@ -2162,9 +2190,11 @@ class Session:
         fetch_mode: Optional[str] = None,
         allow_redirects: Optional[bool] = None,
         disable_conditional_cache: bool = False,
+        disable_client_hints: bool = False,
+        disable_high_entropy_client_hints: bool = False,
     ) -> Response:
         """Perform a DELETE request."""
-        return self.request("DELETE", url, params=params, headers=headers, cookies=cookies, auth=auth, timeout=timeout, fetch_mode=fetch_mode, allow_redirects=allow_redirects, disable_conditional_cache=disable_conditional_cache)
+        return self.request("DELETE", url, params=params, headers=headers, cookies=cookies, auth=auth, timeout=timeout, fetch_mode=fetch_mode, allow_redirects=allow_redirects, disable_conditional_cache=disable_conditional_cache, disable_client_hints=disable_client_hints, disable_high_entropy_client_hints=disable_high_entropy_client_hints)
 
     def patch(
         self,
@@ -2180,9 +2210,11 @@ class Session:
         fetch_mode: Optional[str] = None,
         allow_redirects: Optional[bool] = None,
         disable_conditional_cache: bool = False,
+        disable_client_hints: bool = False,
+        disable_high_entropy_client_hints: bool = False,
     ) -> Response:
         """Perform a PATCH request."""
-        return self.request("PATCH", url, params=params, data=data, json=json, files=files, headers=headers, cookies=cookies, auth=auth, timeout=timeout, fetch_mode=fetch_mode, allow_redirects=allow_redirects, disable_conditional_cache=disable_conditional_cache)
+        return self.request("PATCH", url, params=params, data=data, json=json, files=files, headers=headers, cookies=cookies, auth=auth, timeout=timeout, fetch_mode=fetch_mode, allow_redirects=allow_redirects, disable_conditional_cache=disable_conditional_cache, disable_client_hints=disable_client_hints, disable_high_entropy_client_hints=disable_high_entropy_client_hints)
 
     def head(
         self,
@@ -2195,9 +2227,11 @@ class Session:
         fetch_mode: Optional[str] = None,
         allow_redirects: Optional[bool] = None,
         disable_conditional_cache: bool = False,
+        disable_client_hints: bool = False,
+        disable_high_entropy_client_hints: bool = False,
     ) -> Response:
         """Perform a HEAD request."""
-        return self.request("HEAD", url, params=params, headers=headers, cookies=cookies, auth=auth, timeout=timeout, fetch_mode=fetch_mode, allow_redirects=allow_redirects, disable_conditional_cache=disable_conditional_cache)
+        return self.request("HEAD", url, params=params, headers=headers, cookies=cookies, auth=auth, timeout=timeout, fetch_mode=fetch_mode, allow_redirects=allow_redirects, disable_conditional_cache=disable_conditional_cache, disable_client_hints=disable_client_hints, disable_high_entropy_client_hints=disable_high_entropy_client_hints)
 
     def options(
         self,
@@ -2210,9 +2244,11 @@ class Session:
         fetch_mode: Optional[str] = None,
         allow_redirects: Optional[bool] = None,
         disable_conditional_cache: bool = False,
+        disable_client_hints: bool = False,
+        disable_high_entropy_client_hints: bool = False,
     ) -> Response:
         """Perform an OPTIONS request."""
-        return self.request("OPTIONS", url, params=params, headers=headers, cookies=cookies, auth=auth, timeout=timeout, fetch_mode=fetch_mode, allow_redirects=allow_redirects, disable_conditional_cache=disable_conditional_cache)
+        return self.request("OPTIONS", url, params=params, headers=headers, cookies=cookies, auth=auth, timeout=timeout, fetch_mode=fetch_mode, allow_redirects=allow_redirects, disable_conditional_cache=disable_conditional_cache, disable_client_hints=disable_client_hints, disable_high_entropy_client_hints=disable_high_entropy_client_hints)
 
     # =========================================================================
     # Async Methods (Native - using Go goroutines)
@@ -2228,6 +2264,8 @@ class Session:
         fetch_mode: Optional[str] = None,
         allow_redirects: Optional[bool] = None,
         disable_conditional_cache: bool = False,
+        disable_client_hints: bool = False,
+        disable_high_entropy_client_hints: bool = False,
     ) -> Response:
         """
         Async GET request using native Go goroutines.
@@ -2262,6 +2300,10 @@ class Session:
             options["follow_redirects"] = bool(allow_redirects)
         if disable_conditional_cache:
             options["disable_conditional_cache"] = True
+        if disable_client_hints:
+            options["disable_client_hints"] = True
+        if disable_high_entropy_client_hints:
+            options["disable_high_entropy_client_hints"] = True
         options_json = json.dumps(options).encode("utf-8") if options else None
 
         # Start async request
@@ -2287,6 +2329,8 @@ class Session:
         fetch_mode: Optional[str] = None,
         allow_redirects: Optional[bool] = None,
         disable_conditional_cache: bool = False,
+        disable_client_hints: bool = False,
+        disable_high_entropy_client_hints: bool = False,
     ) -> Response:
         """
         Async POST request using native Go goroutines.
@@ -2342,6 +2386,10 @@ class Session:
             options["follow_redirects"] = bool(allow_redirects)
         if disable_conditional_cache:
             options["disable_conditional_cache"] = True
+        if disable_client_hints:
+            options["disable_client_hints"] = True
+        if disable_high_entropy_client_hints:
+            options["disable_high_entropy_client_hints"] = True
         options_json = json.dumps(options).encode("utf-8") if options else None
 
         # Start async request
@@ -2369,6 +2417,8 @@ class Session:
         fetch_mode: Optional[str] = None,
         allow_redirects: Optional[bool] = None,
         disable_conditional_cache: bool = False,
+        disable_client_hints: bool = False,
+        disable_high_entropy_client_hints: bool = False,
     ) -> Response:
         """
         Async custom HTTP request using native Go goroutines.
@@ -2432,6 +2482,10 @@ class Session:
             request_config["follow_redirects"] = bool(allow_redirects)
         if disable_conditional_cache:
             request_config["disable_conditional_cache"] = True
+        if disable_client_hints:
+            request_config["disable_client_hints"] = True
+        if disable_high_entropy_client_hints:
+            request_config["disable_high_entropy_client_hints"] = True
 
         # Get async manager and register this request (each request gets unique ID)
         manager = _get_async_manager()
@@ -2667,6 +2721,36 @@ class Session:
     def get_conditional_cache(self) -> bool:
         """Return the session's current conditional-cache state."""
         return self._lib.httpcloak_session_get_conditional_cache(self._handle) != 0
+
+    def set_client_hints(self, enabled: bool) -> None:
+        """
+        Toggle the session's client-hint headers at runtime (full strip).
+
+        When disabled, the session stops emitting ALL sec-ch-ua headers,
+        including the always-on trio (sec-ch-ua, sec-ch-ua-mobile,
+        sec-ch-ua-platform) as well as the Accept-CH high-entropy hints. The
+        change takes effect on the next request and persists until set again.
+        """
+        self._lib.httpcloak_session_set_client_hints(self._handle, 1 if enabled else 0)
+
+    def get_client_hints(self) -> bool:
+        """Return the session's current client-hints state."""
+        return self._lib.httpcloak_session_get_client_hints(self._handle) != 0
+
+    def set_high_entropy_client_hints(self, enabled: bool) -> None:
+        """
+        Toggle the session's high-entropy client-hint headers at runtime.
+
+        When disabled, the session keeps the always-on trio (sec-ch-ua,
+        sec-ch-ua-mobile, sec-ch-ua-platform) but drops only the Accept-CH
+        high-entropy hints. The change takes effect on the next request and
+        persists until set again.
+        """
+        self._lib.httpcloak_session_set_high_entropy_client_hints(self._handle, 1 if enabled else 0)
+
+    def get_high_entropy_client_hints(self) -> bool:
+        """Return the session's current high-entropy client-hints state."""
+        return self._lib.httpcloak_session_get_high_entropy_client_hints(self._handle) != 0
 
     def set_follow_redirects(self, enabled: bool) -> None:
         """
@@ -2998,6 +3082,8 @@ class Session:
         fetch_mode: Optional[str] = None,
         allow_redirects: Optional[bool] = None,
         disable_conditional_cache: bool = False,
+        disable_client_hints: bool = False,
+        disable_high_entropy_client_hints: bool = False,
     ) -> Union[Response, StreamResponse]:
         """
         Perform a GET request.
@@ -3030,7 +3116,9 @@ class Session:
         if stream:
             return self._get_stream(url, params, headers, cookies, effective_auth, timeout,
                                     allow_redirects=allow_redirects,
-                                    disable_conditional_cache=disable_conditional_cache)
+                                    disable_conditional_cache=disable_conditional_cache,
+                                    disable_client_hints=disable_client_hints,
+                                    disable_high_entropy_client_hints=disable_high_entropy_client_hints)
 
         # Regular request (existing implementation)
         url = _add_params_to_url(url, params)
@@ -3042,7 +3130,9 @@ class Session:
             return self.request("GET", url, headers=merged_headers, timeout=timeout,
                                 fetch_mode=fetch_mode,
                                 allow_redirects=allow_redirects,
-                                disable_conditional_cache=disable_conditional_cache)
+                                disable_conditional_cache=disable_conditional_cache,
+                                disable_client_hints=disable_client_hints,
+                                disable_high_entropy_client_hints=disable_high_entropy_client_hints)
 
         # Build options JSON with headers wrapper (clib expects {"headers": {...}})
         options = {}
@@ -3054,6 +3144,10 @@ class Session:
             options["follow_redirects"] = bool(allow_redirects)
         if disable_conditional_cache:
             options["disable_conditional_cache"] = True
+        if disable_client_hints:
+            options["disable_client_hints"] = True
+        if disable_high_entropy_client_hints:
+            options["disable_high_entropy_client_hints"] = True
         options_json = json.dumps(options).encode("utf-8") if options else None
 
         start_time = time.perf_counter()
@@ -3412,6 +3506,8 @@ class Session:
         timeout: Optional[int] = None,
         allow_redirects: Optional[bool] = None,
         disable_conditional_cache: bool = False,
+        disable_client_hints: bool = False,
+        disable_high_entropy_client_hints: bool = False,
     ) -> StreamResponse:
         """Internal method to perform a streaming GET request."""
         url = _add_params_to_url(url, params)
@@ -3429,6 +3525,10 @@ class Session:
             options["follow_redirects"] = bool(allow_redirects)
         if disable_conditional_cache:
             options["disable_conditional_cache"] = True
+        if disable_client_hints:
+            options["disable_client_hints"] = True
+        if disable_high_entropy_client_hints:
+            options["disable_high_entropy_client_hints"] = True
         options_json = json.dumps(options).encode("utf-8") if options else None
 
         # Start stream
@@ -3492,6 +3592,8 @@ class Session:
         timeout: Optional[int] = None,
         allow_redirects: Optional[bool] = None,
         disable_conditional_cache: bool = False,
+        disable_client_hints: bool = False,
+        disable_high_entropy_client_hints: bool = False,
     ) -> StreamResponse:
         """
         Perform a streaming POST request.
@@ -3541,6 +3643,10 @@ class Session:
             options["follow_redirects"] = bool(allow_redirects)
         if disable_conditional_cache:
             options["disable_conditional_cache"] = True
+        if disable_client_hints:
+            options["disable_client_hints"] = True
+        if disable_high_entropy_client_hints:
+            options["disable_high_entropy_client_hints"] = True
         options_json = json.dumps(options).encode("utf-8") if options else None
 
         # Start stream
@@ -3605,6 +3711,8 @@ class Session:
         timeout: Optional[int] = None,
         allow_redirects: Optional[bool] = None,
         disable_conditional_cache: bool = False,
+        disable_client_hints: bool = False,
+        disable_high_entropy_client_hints: bool = False,
     ) -> StreamResponse:
         """
         Perform a streaming HTTP request with any method.
@@ -3646,6 +3754,10 @@ class Session:
             request_config["follow_redirects"] = bool(allow_redirects)
         if disable_conditional_cache:
             request_config["disable_conditional_cache"] = True
+        if disable_client_hints:
+            request_config["disable_client_hints"] = True
+        if disable_high_entropy_client_hints:
+            request_config["disable_high_entropy_client_hints"] = True
 
         # Start stream
         stream_handle = self._lib.httpcloak_stream_request(
@@ -3705,6 +3817,8 @@ class Session:
         timeout: Optional[int] = None,
         allow_redirects: Optional[bool] = None,
         disable_conditional_cache: bool = False,
+        disable_client_hints: bool = False,
+        disable_high_entropy_client_hints: bool = False,
     ) -> StreamResponse:
         """
         Perform a streaming GET request.
@@ -3718,6 +3832,8 @@ class Session:
             timeout: Request timeout in milliseconds
             allow_redirects: Override the session redirect policy for this request
             disable_conditional_cache: Skip ETag / If-Modified-Since for this request
+            disable_client_hints: Drop ALL sec-ch-ua headers (incl the always-on trio) for this request
+            disable_high_entropy_client_hints: Keep the trio, drop only the Accept-CH high-entropy hints for this request
 
         Returns:
             StreamResponse for streaming the response body
@@ -3732,6 +3848,8 @@ class Session:
             cookies=cookies, auth=auth, timeout=timeout,
             allow_redirects=allow_redirects,
             disable_conditional_cache=disable_conditional_cache,
+            disable_client_hints=disable_client_hints,
+            disable_high_entropy_client_hints=disable_high_entropy_client_hints,
         )
 
     def put_stream(
@@ -3746,6 +3864,8 @@ class Session:
         timeout: Optional[int] = None,
         allow_redirects: Optional[bool] = None,
         disable_conditional_cache: bool = False,
+        disable_client_hints: bool = False,
+        disable_high_entropy_client_hints: bool = False,
     ) -> StreamResponse:
         """
         Perform a streaming PUT request.
@@ -3786,6 +3906,8 @@ class Session:
             cookies=cookies, auth=auth, timeout=timeout,
             allow_redirects=allow_redirects,
             disable_conditional_cache=disable_conditional_cache,
+            disable_client_hints=disable_client_hints,
+            disable_high_entropy_client_hints=disable_high_entropy_client_hints,
         )
 
     def delete_stream(
@@ -3798,6 +3920,8 @@ class Session:
         timeout: Optional[int] = None,
         allow_redirects: Optional[bool] = None,
         disable_conditional_cache: bool = False,
+        disable_client_hints: bool = False,
+        disable_high_entropy_client_hints: bool = False,
     ) -> StreamResponse:
         """
         Perform a streaming DELETE request.
@@ -3818,6 +3942,8 @@ class Session:
             cookies=cookies, auth=auth, timeout=timeout,
             allow_redirects=allow_redirects,
             disable_conditional_cache=disable_conditional_cache,
+            disable_client_hints=disable_client_hints,
+            disable_high_entropy_client_hints=disable_high_entropy_client_hints,
         )
 
     def patch_stream(
@@ -3832,6 +3958,8 @@ class Session:
         timeout: Optional[int] = None,
         allow_redirects: Optional[bool] = None,
         disable_conditional_cache: bool = False,
+        disable_client_hints: bool = False,
+        disable_high_entropy_client_hints: bool = False,
     ) -> StreamResponse:
         """
         Perform a streaming PATCH request.
@@ -3872,6 +4000,8 @@ class Session:
             cookies=cookies, auth=auth, timeout=timeout,
             allow_redirects=allow_redirects,
             disable_conditional_cache=disable_conditional_cache,
+            disable_client_hints=disable_client_hints,
+            disable_high_entropy_client_hints=disable_high_entropy_client_hints,
         )
 
 

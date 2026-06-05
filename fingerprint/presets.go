@@ -45,6 +45,22 @@ func GetPlatformInfo() PlatformInfo {
 	}
 }
 
+// ClientHintsProfile holds preset-level values for the high-entropy UA client
+// hints (the ones Chrome only sends after a host advertises Accept-CH). Every
+// field is optional: an empty field is derived coherently from the preset's
+// low-entropy sec-ch-ua trio and platform (see Preset.ResolveClientHints), so a
+// preset only needs to spell out what differs from the coherent default. This is
+// the single source of truth that keeps full-version-list, arch, platform-version
+// etc. in lockstep with sec-ch-ua + User-Agent.
+type ClientHintsProfile struct {
+	FullVersionList string // sec-ch-ua-full-version-list; "" -> derived from sec-ch-ua (brands/order/GREASE preserved, versions expanded)
+	PlatformVersion string // sec-ch-ua-platform-version override; "" -> platform default (Linux is "")
+	Arch            string // sec-ch-ua-arch; "" -> platform default
+	Bitness         string // sec-ch-ua-bitness; "" -> platform default
+	Model           string // sec-ch-ua-model; "" -> platform default (desktop is "")
+	Wow64           string // sec-ch-ua-wow64; "" -> "?0"
+}
+
 // HeaderPair represents a single header key-value pair for ordered headers
 type HeaderPair struct {
 	Key   string
@@ -61,6 +77,7 @@ type Preset struct {
 	UserAgent         string
 	Headers           map[string]string // For backward compatibility
 	HeaderOrder       []HeaderPair      // Ordered headers for HTTP/2
+	ClientHints       ClientHintsProfile // High-entropy UA client hint overrides; empty fields are derived from sec-ch-ua (see Preset.ResolveClientHints)
 	HTTP2Settings     HTTP2Settings
 	TCPFingerprint    TCPFingerprint
 	SupportHTTP3      bool

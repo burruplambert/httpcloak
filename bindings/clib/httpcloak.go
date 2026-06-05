@@ -236,6 +236,11 @@ type RequestConfig struct {
 	// session's per-URL cache. Default false leaves the session-level
 	// behaviour intact.
 	DisableConditionalCache bool `json:"disable_conditional_cache,omitempty"`
+	// DisableClientHints strips ALL UA client hints (sec-ch-ua trio + high-entropy)
+	// for this request. DisableHighEntropyClientHints keeps the trio but drops the
+	// high-entropy hints. Default false leaves the session behaviour intact.
+	DisableClientHints            bool `json:"disable_client_hints,omitempty"`
+	DisableHighEntropyClientHints bool `json:"disable_high_entropy_client_hints,omitempty"`
 }
 
 // Cookie represents a parsed cookie from Set-Cookie header
@@ -321,6 +326,8 @@ type SessionConfig struct {
 	SwitchProtocol        string            `json:"switch_protocol,omitempty"`         // Protocol to switch to after Refresh()
 	WithoutCookieJar      bool              `json:"without_cookie_jar,omitempty"`      // Disable internal cookie jar (caller manages cookies via headers)
 	WithoutConditionalCache bool            `json:"without_conditional_cache,omitempty"` // Disable ETag / If-Modified-Since handling entirely
+	WithoutClientHints            bool      `json:"without_client_hints,omitempty"`             // Disable all UA client hints (trio + high-entropy)
+	WithoutHighEntropyClientHints bool      `json:"without_high_entropy_client_hints,omitempty"` // Disable only the high-entropy UA client hints
 	JA3               string                 `json:"ja3,omitempty"`                    // Custom JA3 fingerprint string
 	Akamai            string                 `json:"akamai,omitempty"`                 // Custom Akamai HTTP/2 fingerprint string
 	ExtraFP           map[string]interface{} `json:"extra_fp,omitempty"`               // Extra fingerprint options
@@ -836,6 +843,8 @@ func httpcloak_get_raw(handle C.int64_t, url *C.char, optionsJSON *C.char) C.int
 		Headers:                 buildHeaders(options.Headers, options.FetchMode),
 		FollowRedirects:         options.FollowRedirects,
 		DisableConditionalCache: options.DisableConditionalCache,
+		DisableClientHints:            options.DisableClientHints,
+		DisableHighEntropyClientHints: options.DisableHighEntropyClientHints,
 	}
 
 	resp, err := session.Do(ctx, req)
@@ -888,6 +897,8 @@ func httpcloak_post_raw(handle C.int64_t, url *C.char, body *C.char, bodyLen C.i
 		Body:                    bodyReader,
 		FollowRedirects:         options.FollowRedirects,
 		DisableConditionalCache: options.DisableConditionalCache,
+		DisableClientHints:            options.DisableClientHints,
+		DisableHighEntropyClientHints: options.DisableHighEntropyClientHints,
 	}
 
 	resp, err := session.Do(ctx, req)
@@ -948,6 +959,8 @@ func httpcloak_request_raw(handle C.int64_t, requestJSON *C.char, body *C.char, 
 		Body:                    bodyReader,
 		FollowRedirects:         config.FollowRedirects,
 		DisableConditionalCache: config.DisableConditionalCache,
+		DisableClientHints:            config.DisableClientHints,
+		DisableHighEntropyClientHints: config.DisableHighEntropyClientHints,
 	}
 
 	resp, err := session.Do(ctx, req)
@@ -1108,6 +1121,14 @@ func httpcloak_session_new(configJSON *C.char) C.int64_t {
 	// Handle conditional-cache disable (no ETag / If-Modified-Since traffic)
 	if config.WithoutConditionalCache {
 		opts = append(opts, httpcloak.WithoutConditionalCache())
+	}
+
+	// Handle client-hint disables (full strip / high-entropy only)
+	if config.WithoutClientHints {
+		opts = append(opts, httpcloak.WithoutClientHints())
+	}
+	if config.WithoutHighEntropyClientHints {
+		opts = append(opts, httpcloak.WithoutHighEntropyClientHints())
 	}
 
 	// Handle custom fingerprint (JA3 / Akamai / extra_fp)
@@ -1300,6 +1321,11 @@ type RequestOptions struct {
 	// session's per-URL cache. Default false leaves the session-level
 	// behaviour intact.
 	DisableConditionalCache bool `json:"disable_conditional_cache,omitempty"`
+	// DisableClientHints strips ALL UA client hints (sec-ch-ua trio + high-entropy)
+	// for this request. DisableHighEntropyClientHints keeps the trio but drops the
+	// high-entropy hints. Default false leaves the session behaviour intact.
+	DisableClientHints            bool `json:"disable_client_hints,omitempty"`
+	DisableHighEntropyClientHints bool `json:"disable_high_entropy_client_hints,omitempty"`
 	// BodyEncoding controls how the request body string is interpreted by
 	// post_async / get_async style entry points where the body is passed as
 	// a separate C string. "" (default) treats the body as UTF-8 text.
@@ -1345,6 +1371,8 @@ func httpcloak_get(handle C.int64_t, url *C.char, optionsJSON *C.char) *C.char {
 		Headers:                 buildHeaders(options.Headers, options.FetchMode),
 		FollowRedirects:         options.FollowRedirects,
 		DisableConditionalCache: options.DisableConditionalCache,
+		DisableClientHints:            options.DisableClientHints,
+		DisableHighEntropyClientHints: options.DisableHighEntropyClientHints,
 	}
 
 	resp, err := session.Do(ctx, req)
@@ -1400,6 +1428,8 @@ func httpcloak_post(handle C.int64_t, url *C.char, body *C.char, optionsJSON *C.
 		Body:                    bodyReader,
 		FollowRedirects:         options.FollowRedirects,
 		DisableConditionalCache: options.DisableConditionalCache,
+		DisableClientHints:            options.DisableClientHints,
+		DisableHighEntropyClientHints: options.DisableHighEntropyClientHints,
 	}
 
 	resp, err := session.Do(ctx, req)
@@ -1456,6 +1486,8 @@ func httpcloak_request(handle C.int64_t, requestJSON *C.char) *C.char {
 		Body:                    bodyReader,
 		FollowRedirects:         config.FollowRedirects,
 		DisableConditionalCache: config.DisableConditionalCache,
+		DisableClientHints:            config.DisableClientHints,
+		DisableHighEntropyClientHints: config.DisableHighEntropyClientHints,
 	}
 
 	resp, err := session.Do(ctx, req)
@@ -1578,6 +1610,8 @@ func httpcloak_get_async(handle C.int64_t, url *C.char, optionsJSON *C.char, cal
 			Headers:                 buildHeaders(options.Headers, options.FetchMode),
 			FollowRedirects:         options.FollowRedirects,
 			DisableConditionalCache: options.DisableConditionalCache,
+		DisableClientHints:            options.DisableClientHints,
+		DisableHighEntropyClientHints: options.DisableHighEntropyClientHints,
 		}
 
 		resp, err := session.Do(ctx, req)
@@ -1691,6 +1725,8 @@ func httpcloak_post_async(handle C.int64_t, url *C.char, body *C.char, optionsJS
 			Body:                    bodyReader,
 			FollowRedirects:         options.FollowRedirects,
 			DisableConditionalCache: options.DisableConditionalCache,
+		DisableClientHints:            options.DisableClientHints,
+		DisableHighEntropyClientHints: options.DisableHighEntropyClientHints,
 		}
 
 		resp, err := session.Do(ctx, req)
@@ -1793,6 +1829,8 @@ func httpcloak_request_async(handle C.int64_t, requestJSON *C.char, callbackID C
 			Body:                    bodyReader,
 			FollowRedirects:         config.FollowRedirects,
 			DisableConditionalCache: config.DisableConditionalCache,
+		DisableClientHints:            config.DisableClientHints,
+		DisableHighEntropyClientHints: config.DisableHighEntropyClientHints,
 		}
 
 		resp, err := session.Do(ctx, req)
@@ -2231,6 +2269,48 @@ func httpcloak_session_get_conditional_cache(handle C.int64_t) C.int {
 		return 0
 	}
 	if session.ConditionalCacheEnabled() {
+		return 1
+	}
+	return 0
+}
+
+//export httpcloak_session_set_client_hints
+func httpcloak_session_set_client_hints(handle C.int64_t, enabled C.int) {
+	session := getSession(handle)
+	if session == nil {
+		return
+	}
+	session.SetClientHintsEnabled(enabled != 0)
+}
+
+//export httpcloak_session_get_client_hints
+func httpcloak_session_get_client_hints(handle C.int64_t) C.int {
+	session := getSession(handle)
+	if session == nil {
+		return 0
+	}
+	if session.ClientHintsEnabled() {
+		return 1
+	}
+	return 0
+}
+
+//export httpcloak_session_set_high_entropy_client_hints
+func httpcloak_session_set_high_entropy_client_hints(handle C.int64_t, enabled C.int) {
+	session := getSession(handle)
+	if session == nil {
+		return
+	}
+	session.SetHighEntropyClientHintsEnabled(enabled != 0)
+}
+
+//export httpcloak_session_get_high_entropy_client_hints
+func httpcloak_session_get_high_entropy_client_hints(handle C.int64_t) C.int {
+	session := getSession(handle)
+	if session == nil {
+		return 0
+	}
+	if session.HighEntropyClientHintsEnabled() {
 		return 1
 	}
 	return 0
@@ -3212,6 +3292,8 @@ func httpcloak_stream_get(sessionHandle C.int64_t, url *C.char, optionsJSON *C.c
 		Headers:                 buildHeaders(options.Headers, options.FetchMode),
 		FollowRedirects:         options.FollowRedirects,
 		DisableConditionalCache: options.DisableConditionalCache,
+		DisableClientHints:            options.DisableClientHints,
+		DisableHighEntropyClientHints: options.DisableHighEntropyClientHints,
 	}
 
 	resp, err := session.DoStream(ctx, req)
@@ -3273,6 +3355,8 @@ func httpcloak_stream_post(sessionHandle C.int64_t, url *C.char, body *C.char, o
 		Body:                    bodyReader,
 		FollowRedirects:         options.FollowRedirects,
 		DisableConditionalCache: options.DisableConditionalCache,
+		DisableClientHints:            options.DisableClientHints,
+		DisableHighEntropyClientHints: options.DisableHighEntropyClientHints,
 	}
 
 	resp, err := session.DoStream(ctx, req)
@@ -3336,6 +3420,8 @@ func httpcloak_stream_request(sessionHandle C.int64_t, requestJSON *C.char) C.in
 		Body:                    bodyReader,
 		FollowRedirects:         config.FollowRedirects,
 		DisableConditionalCache: config.DisableConditionalCache,
+		DisableClientHints:            config.DisableClientHints,
+		DisableHighEntropyClientHints: config.DisableHighEntropyClientHints,
 	}
 
 	resp, err := session.DoStream(ctx, req)
