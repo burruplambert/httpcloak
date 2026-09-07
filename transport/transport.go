@@ -2816,14 +2816,24 @@ func mergeCallerHeaders(httpReq *http.Request, req *Request) {
 	if len(req.ExactHeaders) > 0 {
 		return
 	}
+	if len(req.Headers) == 0 {
+		return
+	}
+	// Each entry is a direct assignment under the memoised canonical key:
+	// programmatic callers overwhelmingly pass the same lowercase names on
+	// every request, and Header.Set re-derived the canonical form on each
+	// one. The value slices are carved out of one shared backing array with
+	// full slice expressions, one allocation instead of one per header, with
+	// every entry as isolated as a separate copy; see buildHeadersMap for
+	// why a multi-value entry pushing past the size hint stays correct.
+	backing := make([]string, 0, len(req.Headers))
 	for key, values := range req.Headers {
-		for i, value := range values {
-			if i == 0 {
-				httpReq.Header.Set(key, value)
-			} else {
-				httpReq.Header.Add(key, value)
-			}
+		if len(values) == 0 {
+			continue
 		}
+		start := len(backing)
+		backing = append(backing, values...)
+		httpReq.Header[canonicalHeaderName(key)] = backing[start:len(backing):len(backing)]
 	}
 }
 
@@ -3217,6 +3227,82 @@ func lowerHeaderName(name string) string {
 		lowerHeaderNameCacheSize.Add(1)
 	}
 	return lower
+}
+
+// canonicalHeaderNameCache memoises canonicalHeaderName for names that are
+// not already canonical, typically the all-lowercase keys programmatic
+// callers put in Request.Headers. Names reaching it come from a caller's
+// request, so the cache is bounded the same way lowerHeaderNameCache is:
+// past the cap unseen names fall back to converting without storing.
+var (
+	canonicalHeaderNameCache     sync.Map // string -> string
+	canonicalHeaderNameCacheSize atomic.Int64
+)
+
+const canonicalHeaderNameCacheMax = 1024
+
+// canonicalHeaderName returns http.CanonicalHeaderKey(name), without
+// allocating for the shapes caller header keys actually arrive in: an
+// already-canonical name returns as-is after one scan, and any other name
+// hits the memo after its first conversion. The scan is the same quick
+// check CanonicalHeaderKey opens with, so the two agree byte for byte,
+// including on a name with an invalid field byte, which both return
+// unchanged.
+func canonicalHeaderName(name string) string {
+	upper := true
+	for i := range len(name) {
+		c := name[i]
+		if !isTokenByte(c) {
+			// An invalid byte anywhere means CanonicalHeaderKey returns the
+			// name unchanged, whatever the bytes before it looked like.
+			return name
+		}
+		if (upper && 'a' <= c && c <= 'z') || (!upper && 'A' <= c && c <= 'Z') {
+			// Miscased letter: the name needs converting, unless a later
+			// byte turns out invalid. CanonicalHeaderKey re-checks that on
+			// the slow path, so it stays the single source of the answer.
+			return canonicalHeaderNameSlow(name)
+		}
+		upper = c == '-'
+	}
+	return name
+}
+
+func canonicalHeaderNameSlow(name string) string {
+	if canonical, ok := canonicalHeaderNameCache.Load(name); ok {
+		return canonical.(string)
+	}
+	canonical := http.CanonicalHeaderKey(name)
+	if canonicalHeaderNameCacheSize.Load() >= canonicalHeaderNameCacheMax {
+		return canonical
+	}
+	// Both entries must own their memory, for the same reason as in
+	// lowerHeaderName: the name can share backing with a caller's buffer,
+	// and CanonicalHeaderKey hands back a value-equal string when an
+	// invalid byte stops the conversion. The cap is soft under concurrent
+	// stores, which can overshoot it by at most one entry each.
+	key := strings.Clone(name)
+	if canonical == name {
+		canonical = key
+	}
+	if _, loaded := canonicalHeaderNameCache.LoadOrStore(key, canonical); !loaded {
+		canonicalHeaderNameCacheSize.Add(1)
+	}
+	return canonical
+}
+
+// isTokenByte mirrors textproto's validHeaderFieldByte: whether c can
+// appear in a header field name, which RFC 7230 defines as a token.
+func isTokenByte(c byte) bool {
+	switch {
+	case '0' <= c && c <= '9', 'a' <= c && c <= 'z', 'A' <= c && c <= 'Z':
+		return true
+	}
+	switch c {
+	case '!', '#', '$', '%', '&', '\'', '*', '+', '-', '.', '^', '_', '`', '|', '~':
+		return true
+	}
+	return false
 }
 
 // buildHeadersMap converts http.Header to map[string][]string.
