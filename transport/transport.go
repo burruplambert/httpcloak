@@ -2,6 +2,7 @@ package transport
 
 import (
 	"bytes"
+	"cmp"
 	"compress/flate"
 	"compress/gzip"
 	"context"
@@ -2946,43 +2947,30 @@ func applyPresetHeaders(httpReq *http.Request, wire *presetWireHeaders, customHe
 			// the request shape is intentional and our preset header defaults
 			// (which assume navigation) should yield. Without this, callers
 			// can't request browser sub-resource fetches like preload-as=image.
+			// The keys below are written literally in the canonical form
+			// Header.Set derives, so each write and delete is one map
+			// operation instead of a per-request canonicalisation of a
+			// constant name.
 			userMode := headerVal(userHeaders, "Sec-Fetch-Mode")
 			userDest := headerVal(userHeaders, "Sec-Fetch-Dest")
 			userSite := headerVal(userHeaders, "Sec-Fetch-Site")
-			if userMode != "" {
-				httpReq.Header.Set("Sec-Fetch-Mode", userMode)
-			} else {
-				httpReq.Header.Set("Sec-Fetch-Mode", "cors")
-			}
-			if userDest != "" {
-				httpReq.Header.Set("Sec-Fetch-Dest", userDest)
-			} else {
-				httpReq.Header.Set("Sec-Fetch-Dest", "empty")
-			}
-			if userSite != "" {
-				httpReq.Header.Set("Sec-Fetch-Site", userSite)
-			} else {
-				httpReq.Header.Set("Sec-Fetch-Site", "cross-site")
-			}
-			httpReq.Header.Del("Sec-Fetch-User")
-			httpReq.Header.Del("sec-fetch-user")
-			httpReq.Header.Del("Upgrade-Insecure-Requests")
-			httpReq.Header.Del("upgrade-insecure-requests")
+			httpReq.Header["Sec-Fetch-Mode"] = []string{cmp.Or(userMode, "cors")}
+			httpReq.Header["Sec-Fetch-Dest"] = []string{cmp.Or(userDest, "empty")}
+			httpReq.Header["Sec-Fetch-Site"] = []string{cmp.Or(userSite, "cross-site")}
+			delete(httpReq.Header, "Sec-Fetch-User")
+			delete(httpReq.Header, "Upgrade-Insecure-Requests")
 			// Real browsers send Accept: */* on fetch()/XHR unless the user
 			// explicitly asked for something else — no user Accept means swap
 			// the navigation Accept (text/html,...) for the CORS default.
 			if headerVal(userHeaders, "Accept") == "" {
-				httpReq.Header.Set("Accept", "*/*")
+				httpReq.Header["Accept"] = []string{"*/*"}
 			}
 			// CORS uses u=1,i priority (lower urgency than navigation's u=0,i)
 			// — used as the static fallback when the preset has no per-dest
 			// PriorityTable. Presets that ship a PriorityTable (Chrome 147+)
 			// override this below.
-			if httpReq.Header.Get("Priority") != "" {
-				httpReq.Header.Set("Priority", "u=1, i")
-			}
-			if httpReq.Header.Get("priority") != "" {
-				httpReq.Header.Set("priority", "u=1, i")
+			if p := httpReq.Header["Priority"]; len(p) > 0 && p[0] != "" {
+				httpReq.Header["Priority"] = []string{"u=1, i"}
 			}
 		}
 
@@ -2996,14 +2984,16 @@ func applyPresetHeaders(httpReq *http.Request, wire *presetWireHeaders, customHe
 		// Skip on HTTP/1.1 — Chrome never sends the priority: header on H1;
 		// the H1 strip below handles cleanup either way.
 		if (protocol == "h2" || protocol == "h3") && preset.H2HasPriorityTable() {
-			dest := httpReq.Header.Get("Sec-Fetch-Dest")
+			var dest string
+			if d := httpReq.Header["Sec-Fetch-Dest"]; len(d) > 0 {
+				dest = d[0]
+			}
 			if _, _, hv, ok := preset.H2PriorityFor(dest); ok {
 				if hv == "" {
 					// Chrome omits the header for this dest (e.g. async/defer scripts).
-					httpReq.Header.Del("Priority")
-					httpReq.Header.Del("priority")
+					delete(httpReq.Header, "Priority")
 				} else {
-					httpReq.Header.Set("Priority", hv)
+					httpReq.Header["Priority"] = []string{hv}
 					// Mirror the lowercase form for callers that bypassed Set's
 					// canonicalization when constructing the request.
 					if _, hasLower := httpReq.Header["priority"]; hasLower {
@@ -3017,8 +3007,7 @@ func applyPresetHeaders(httpReq *http.Request, wire *presetWireHeaders, customHe
 		// Some anti-bots (Cloudflare, Datadome, Akamai) check for this and flag requests
 		// that send Priority on H1 as bots.
 		if protocol == "h1" && isChromePreset(preset.Name) {
-			httpReq.Header.Del("Priority")
-			httpReq.Header.Del("priority")
+			delete(httpReq.Header, "Priority")
 		}
 	} else {
 		// TLS-only mode: set empty User-Agent to prevent Go's default "Go-http-client/2.0"
