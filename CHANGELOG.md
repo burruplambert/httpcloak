@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Sessions that never dial HTTP/3 no longer pay for a QUIC transport on close**: the direct-path HTTP/3 transport bound a UDP socket and constructed its `quic.Transport` up front, and `quic.Transport.Close` initialises a never-used transport before tearing it down. When the kernel's UDP receive buffer cap sits below the desired size, that initialisation allocates the 4096-slot userspace fallback buffer, roughly 384 KB, and starts a drain goroutine, both discarded moments later. Every session close paid this even when the session was forced to HTTP/2 and never sent a QUIC packet, which for a pool rotating sessions adds up to most of its allocation volume. The transport is now created on the first HTTP/3 dial, so a session that never dials HTTP/3 never binds a UDP socket at all and closing it touches nothing. Lazy creation also means a refresh simply drops the transport and the next dial rebinds with the current local address, where the old socket kept its construction-time binding, and a socket bind failure now surfaces as an error on the dial that needed it instead of failing construction for sessions that would never have dialed.
+
 ## [1.7.2] - 2026-09-03
 
 Worth taking if you use HTTP/3 with a custom fingerprint. A preset built from a

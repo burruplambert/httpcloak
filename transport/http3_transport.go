@@ -329,7 +329,15 @@ type HTTP3Transport struct {
 	udpbaraMu     sync.Mutex      // guards lazy connect of udpbaraTunnel
 	proxyConns    []*proxyQUICConn
 	proxyConnsMu  sync.Mutex
-	quicTransport *quic.Transport // Only used for direct connections
+
+	// quicTr is the QUIC transport for direct dials. It is nil until the first
+	// dial creates it through quicTransport(), and nil again after Refresh
+	// drops it. Guarded by quicTrMu.
+	quicTr *quic.Transport
+	// quicTrClosed marks the transport permanently closed so a dial racing
+	// Close cannot bind a new socket after teardown. Guarded by quicTrMu.
+	quicTrClosed bool
+	quicTrMu     sync.Mutex
 
 	// MASQUE proxy support
 	masqueConn *proxy.MASQUEConn
@@ -607,32 +615,9 @@ func NewHTTP3TransportWithTransportConfig(preset *fingerprint.Preset, dnsCache *
 		t.localAddr = config.LocalAddr
 	}
 
-	// Create QUIC transport for direct connections
-	// We need a bound UDP socket for quic.Transport
-	var localUDPAddr *net.UDPAddr
-	if t.localAddr != "" {
-		localUDPAddr = &net.UDPAddr{IP: net.ParseIP(t.localAddr)}
-	} else {
-		localUDPAddr = &net.UDPAddr{IP: net.IPv4zero, Port: 0}
-	}
-	udpConn, err := ListenUDPWithLocalAddr("udp", localUDPAddr, t.localAddr)
-	if err != nil {
-		if t.localAddr != "" {
-			// localAddr is set — retrying with the same IP on "udp6" won't help
-			return nil, fmt.Errorf("failed to create UDP socket for %s: %w", t.localAddr, err)
-		}
-		// Fallback to IPv6 if IPv4 fails (no localAddr — try IPv6zero)
-		localUDPAddr = &net.UDPAddr{IP: net.IPv6zero, Port: 0}
-		udpConn, err = ListenUDPWithLocalAddr("udp6", localUDPAddr, t.localAddr)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create UDP socket (IPv4 and IPv6 both failed): %w", err)
-		}
-	}
-	t.quicTransport = &quic.Transport{
-		Conn:                         udpConn,
-		ConnectionIDLength:           t.preset.H3QUICConnectionIDLength(),
-		AllowZeroLengthConnectionIDs: true,
-	}
+	// The QUIC transport for direct dials is created lazily by quicTransport()
+	// on the first dial, so sessions that never speak HTTP/3 never bind a UDP
+	// socket. See quicTransport for why eager creation was harmful.
 
 	// Create HTTP/3 transport with custom dial for DNS caching
 	// http3.Transport handles connection pooling internally
@@ -1271,6 +1256,52 @@ func interleaveAddrs(first, second []*net.UDPAddr) []*net.UDPAddr {
 	return out
 }
 
+// quicTransport returns the QUIC transport used for direct dials, creating it
+// on first use.
+//
+// It is deliberately not created up front. A session that never dials HTTP/3
+// (every ForceHTTP2 session) would otherwise bind a UDP socket it never reads,
+// and quic.Transport.Close initialises a never-dialled transport before
+// tearing it down, so closing an unused one allocates its receive buffer and
+// starts its drain goroutine purely to discard both. Creating it lazily also
+// means the socket binds with the localAddr in force at the first dial, where
+// the old eager socket kept its construction-time binding until a Refresh.
+func (t *HTTP3Transport) quicTransport() (*quic.Transport, error) {
+	t.quicTrMu.Lock()
+	defer t.quicTrMu.Unlock()
+	if t.quicTrClosed {
+		return nil, fmt.Errorf("http3: %w", ErrClosed)
+	}
+	if t.quicTr != nil {
+		return t.quicTr, nil
+	}
+	var localUDPAddr *net.UDPAddr
+	if t.localAddr != "" {
+		localUDPAddr = &net.UDPAddr{IP: net.ParseIP(t.localAddr)}
+	} else {
+		localUDPAddr = &net.UDPAddr{IP: net.IPv4zero, Port: 0}
+	}
+	udpConn, err := ListenUDPWithLocalAddr("udp", localUDPAddr, t.localAddr)
+	if err != nil {
+		if t.localAddr != "" {
+			// localAddr is set — retrying with the same IP on "udp6" won't help
+			return nil, fmt.Errorf("failed to create UDP socket for %s: %w", t.localAddr, err)
+		}
+		// Fallback to IPv6 if IPv4 fails (no localAddr — try IPv6zero)
+		localUDPAddr = &net.UDPAddr{IP: net.IPv6zero, Port: 0}
+		udpConn, err = ListenUDPWithLocalAddr("udp6", localUDPAddr, t.localAddr)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create UDP socket (IPv4 and IPv6 both failed): %w", err)
+		}
+	}
+	t.quicTr = &quic.Transport{
+		Conn:                         udpConn,
+		ConnectionIDLength:           t.preset.H3QUICConnectionIDLength(),
+		AllowZeroLengthConnectionIDs: true,
+	}
+	return t.quicTr, nil
+}
+
 // happyEyeballsDialQUIC races QUIC dials across addrs with a staggered start
 // (RFC 8305 Happy Eyeballs v2): dial the first address, start each subsequent
 // address after a short Connection Attempt Delay — or immediately when a prior
@@ -1279,13 +1310,17 @@ func interleaveAddrs(first, second []*net.UDPAddr) []*net.UDPAddr {
 // added up to 2s of dead time before IPv4 on IPv6-broken networks.
 func (t *HTTP3Transport) happyEyeballsDialQUIC(ctx context.Context, addrs []*net.UDPAddr, tlsCfg *tls.Config, makeConfig func() *quic.Config) (*quic.Conn, error) {
 	const attemptDelay = 250 * time.Millisecond
+	qt, err := t.quicTransport()
+	if err != nil {
+		return nil, err
+	}
 	return staggeredRace(ctx, len(addrs), attemptDelay,
 		func(rctx context.Context, idx int) (*quic.Conn, error) {
 			// Each attempt gets its own config clone AND its own regenerated
 			// ClientHello spec, so concurrent dials never mutate shared state.
 			// The spec matters most: utls rewrites it in place during
 			// ApplyPreset, so a shared one is corrupted by the racing dial.
-			return t.quicTransport.DialEarly(rctx, addrs[idx], tlsCfg, makeConfig())
+			return qt.DialEarly(rctx, addrs[idx], tlsCfg, makeConfig())
 		},
 		func(c *quic.Conn) { c.CloseWithError(0, "lost happy-eyeballs race") },
 	)
@@ -1294,6 +1329,10 @@ func (t *HTTP3Transport) happyEyeballsDialQUIC(ctx context.Context, addrs []*net
 // dialFirstSuccessful tries each address in order until one succeeds.
 // Per-address timeout prevents a single unresponsive IP from consuming the entire timeout budget.
 func (t *HTTP3Transport) dialFirstSuccessful(ctx context.Context, addrs []*net.UDPAddr, tlsCfg *tls.Config, cfg *quic.Config) (*quic.Conn, error) {
+	qt, err := t.quicTransport()
+	if err != nil {
+		return nil, err
+	}
 	var lastErr error
 	for i, addr := range addrs {
 		select {
@@ -1312,7 +1351,7 @@ func (t *HTTP3Transport) dialFirstSuccessful(ctx context.Context, addrs []*net.U
 			}
 		}
 		addrCtx, addrCancel := context.WithTimeout(ctx, perAddrTimeout)
-		conn, err := t.quicTransport.DialEarly(addrCtx, addr, tlsCfg, cfg)
+		conn, err := qt.DialEarly(addrCtx, addr, tlsCfg, cfg)
 		addrCancel()
 		if err == nil {
 			return conn, nil
@@ -1740,8 +1779,17 @@ func (t *HTTP3Transport) Close() error {
 	// Use timeout for QUIC closes to prevent blocking on graceful drain
 	closeWithTimeout(transport, 3*time.Second)
 
-	if t.quicTransport != nil {
-		closeWithTimeout(t.quicTransport, 3*time.Second)
+	// Take the QUIC transport out under the lock and mark the lifecycle
+	// closed, so a dial racing Close cannot bind a new socket after teardown.
+	// The close itself runs outside the lock: it can drain for up to 3s and
+	// must not block a concurrent dial's accessor for that long.
+	t.quicTrMu.Lock()
+	quicTr := t.quicTr
+	t.quicTr = nil
+	t.quicTrClosed = true
+	t.quicTrMu.Unlock()
+	if quicTr != nil {
+		closeWithTimeout(quicTr, 3*time.Second)
 	}
 
 	// Close udpbara tunnel (if it was ever connected) and all proxy QUIC
@@ -1785,32 +1833,15 @@ func (t *HTTP3Transport) Refresh() error {
 		closeWithTimeout(t.transport, 3*time.Second)
 	}
 
-	// Close and recreate quicTransport if it exists (for direct connections only)
-	if t.quicTransport != nil && !t.usesUDPProxy && t.masqueConn == nil {
-		closeWithTimeout(t.quicTransport, 3*time.Second)
-		// Create new UDP socket with localAddr binding if configured
-		var localUDPAddr *net.UDPAddr
-		if t.localAddr != "" {
-			localUDPAddr = &net.UDPAddr{IP: net.ParseIP(t.localAddr)}
-		} else {
-			localUDPAddr = &net.UDPAddr{IP: net.IPv4zero, Port: 0}
-		}
-		udpConn, err := ListenUDPWithLocalAddr("udp", localUDPAddr, t.localAddr)
-		if err != nil {
-			if t.localAddr != "" {
-				return fmt.Errorf("failed to create UDP socket for %s: %w", t.localAddr, err)
-			}
-			localUDPAddr = &net.UDPAddr{IP: net.IPv6zero, Port: 0}
-			udpConn, err = ListenUDPWithLocalAddr("udp6", localUDPAddr, t.localAddr)
-			if err != nil {
-				return fmt.Errorf("failed to create UDP socket (IPv4 and IPv6 both failed): %w", err)
-			}
-		}
-		t.quicTransport = &quic.Transport{
-			Conn:                         udpConn,
-			ConnectionIDLength:           t.preset.H3QUICConnectionIDLength(),
-			AllowZeroLengthConnectionIDs: true,
-		}
+	// Drop the QUIC transport if one was ever created; the next direct dial
+	// recreates it through quicTransport() with the current localAddr. Proxy
+	// and MASQUE transports never create it, so the nil check covers them.
+	t.quicTrMu.Lock()
+	quicTr := t.quicTr
+	t.quicTr = nil
+	t.quicTrMu.Unlock()
+	if quicTr != nil {
+		closeWithTimeout(quicTr, 3*time.Second)
 	}
 
 	// Close old proxy QUIC connections; tunnel stays alive for new dials.
