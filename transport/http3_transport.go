@@ -611,6 +611,7 @@ func NewHTTP3TransportWithTransportConfig(preset *fingerprint.Preset, dnsCache *
 		if err == nil {
 			fingerprint.ApplySignatureAlgorithms(spec.Extensions, preset.QUICSignatureAlgorithms)
 			fingerprint.ApplyQUICTrustAnchors(&spec.Extensions, preset)
+			fingerprint.ApplyExtensionOverlay(&spec.Extensions, *clientHelloID, preset.ExtensionOverlay)
 			t.cachedClientHelloSpec = &spec
 		}
 	}
@@ -731,6 +732,7 @@ func NewHTTP3TransportWithConfig(preset *fingerprint.Preset, dnsCache *dns.Cache
 		if err == nil {
 			fingerprint.ApplySignatureAlgorithms(spec.Extensions, preset.QUICSignatureAlgorithms)
 			fingerprint.ApplyQUICTrustAnchors(&spec.Extensions, preset)
+			fingerprint.ApplyExtensionOverlay(&spec.Extensions, *clientHelloID, preset.ExtensionOverlay)
 			t.cachedClientHelloSpec = &spec
 		}
 	}
@@ -840,6 +842,7 @@ func NewHTTP3TransportWithMASQUE(preset *fingerprint.Preset, dnsCache *dns.Cache
 		if err == nil {
 			fingerprint.ApplySignatureAlgorithms(spec.Extensions, preset.QUICSignatureAlgorithms)
 			fingerprint.ApplyQUICTrustAnchors(&spec.Extensions, preset)
+			fingerprint.ApplyExtensionOverlay(&spec.Extensions, *clientHelloID, preset.ExtensionOverlay)
 			t.cachedClientHelloSpec = &spec
 		}
 		// Create separate cached spec for inner connections (not shared with outer)
@@ -848,6 +851,7 @@ func NewHTTP3TransportWithMASQUE(preset *fingerprint.Preset, dnsCache *dns.Cache
 		if err == nil {
 			fingerprint.ApplySignatureAlgorithms(innerSpec.Extensions, preset.QUICSignatureAlgorithms)
 			fingerprint.ApplyQUICTrustAnchors(&innerSpec.Extensions, preset)
+			fingerprint.ApplyExtensionOverlay(&innerSpec.Extensions, *clientHelloID, preset.ExtensionOverlay)
 			t.cachedClientHelloSpecInner = &innerSpec
 		}
 	}
@@ -858,6 +862,7 @@ func NewHTTP3TransportWithMASQUE(preset *fingerprint.Preset, dnsCache *dns.Cache
 		if innerPskSpec, err := utls.UTLSIdToSpecWithSeed(preset.QUICPSKClientHelloID, fingerprint.FreshShuffleSeed()); err == nil {
 			fingerprint.ApplySignatureAlgorithms(innerPskSpec.Extensions, preset.QUICSignatureAlgorithms)
 			fingerprint.ApplyQUICTrustAnchors(&innerPskSpec.Extensions, preset)
+			fingerprint.ApplyExtensionOverlay(&innerPskSpec.Extensions, preset.QUICPSKClientHelloID, preset.ExtensionOverlay)
 			t.cachedClientHelloSpecInnerPSK = &innerPskSpec
 		}
 	}

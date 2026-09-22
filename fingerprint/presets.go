@@ -177,6 +177,16 @@ type Preset struct {
 	// three payloads over three QUIC connections in one process, and
 	// 155.0.8059.39 gave one sorted payload over three.
 	QUICTrustAnchorShuffle bool
+
+	// ExtensionOverlay adds and removes extensions on the hello the
+	// ClientHelloID produces, and changes nothing else about it. Empty means
+	// the hello goes out exactly as uTLS builds it, which is every preset that
+	// describes a client uTLS already models.
+	//
+	// It is honoured on the ClientHelloID path only. A JA3 states the whole
+	// extension list itself and a captured hello already contains one, so on
+	// those paths there is no base list for an overlay to edit.
+	ExtensionOverlay ExtensionOverlay
 }
 
 // SpecFor generates the uTLS ClientHelloSpec for id at the given shuffle seed and
@@ -193,12 +203,22 @@ func SpecFor(id tls.ClientHelloID, seed int64, sigAlgs []tls.SignatureScheme) (*
 // insertion rather than an override and so cannot go through the same
 // slice-mutating helper.
 func SpecForWithAnchors(id tls.ClientHelloID, seed int64, sigAlgs []tls.SignatureScheme, anchors [][]byte) (*tls.ClientHelloSpec, error) {
+	return SpecForWithOverlay(id, seed, sigAlgs, anchors, ExtensionOverlay{})
+}
+
+// SpecForWithOverlay is SpecForWithAnchors plus the preset's extension overlay,
+// and is the full set of changes a preset can layer onto the hello its
+// ClientHelloID produces. The order matters: the overlay runs last, so an
+// extension it drops is gone whether the base hello carried it or an earlier
+// step inserted it.
+func SpecForWithOverlay(id tls.ClientHelloID, seed int64, sigAlgs []tls.SignatureScheme, anchors [][]byte, overlay ExtensionOverlay) (*tls.ClientHelloSpec, error) {
 	spec, err := tls.UTLSIdToSpecWithSeed(id, seed)
 	if err != nil {
 		return nil, err
 	}
 	ApplySignatureAlgorithms(spec.Extensions, sigAlgs)
 	ApplyTrustAnchors(&spec.Extensions, anchors)
+	ApplyExtensionOverlay(&spec.Extensions, id, overlay)
 	return &spec, nil
 }
 
@@ -240,13 +260,23 @@ func FreshShuffleSeed() int64 {
 // Drawing here rather than at each call site is deliberate. There is no
 // legitimate reason to pin a QUIC extension order, so the choke point should
 // make it impossible rather than rely on every future caller remembering.
-func SpecForQUICWithAnchors(id tls.ClientHelloID, _ int64, sigAlgs []tls.SignatureScheme, anchors [][]byte, shuffleAnchors bool) (*tls.ClientHelloSpec, error) {
+func SpecForQUICWithAnchors(id tls.ClientHelloID, seed int64, sigAlgs []tls.SignatureScheme, anchors [][]byte, shuffleAnchors bool) (*tls.ClientHelloSpec, error) {
+	return SpecForQUICWithOverlay(id, seed, sigAlgs, anchors, shuffleAnchors, ExtensionOverlay{})
+}
+
+// SpecForQUICWithOverlay is SpecForQUICWithAnchors plus the preset's extension
+// overlay, the QUIC counterpart of SpecForWithOverlay. The overlay runs last
+// here too, and its additions are placed after the extension order has been
+// drawn for this connection, so they move with it (see ApplyExtensionOverlay).
+// Like SpecForQUICWithAnchors it ignores seed.
+func SpecForQUICWithOverlay(id tls.ClientHelloID, _ int64, sigAlgs []tls.SignatureScheme, anchors [][]byte, shuffleAnchors bool, overlay ExtensionOverlay) (*tls.ClientHelloSpec, error) {
 	spec, err := tls.UTLSIdToSpecWithSeed(id, FreshShuffleSeed())
 	if err != nil {
 		return nil, err
 	}
 	ApplySignatureAlgorithms(spec.Extensions, sigAlgs)
 	applyTrustAnchors(&spec.Extensions, anchors, shuffleAnchors)
+	ApplyExtensionOverlay(&spec.Extensions, id, overlay)
 	return &spec, nil
 }
 
