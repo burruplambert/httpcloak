@@ -554,6 +554,7 @@ func NewHTTP3TransportWithTransportConfig(preset *fingerprint.Preset, dnsCache *
 		if err == nil {
 			fingerprint.ApplySignatureAlgorithms(spec.Extensions, preset.QUICSignatureAlgorithms)
 			fingerprint.ApplyTrustAnchors(&spec.Extensions, preset.TrustAnchors)
+			fingerprint.ApplyExtensionOverlay(&spec.Extensions, preset.ExtensionOverlay)
 			t.cachedClientHelloSpec = &spec
 		}
 	}
@@ -564,6 +565,7 @@ func NewHTTP3TransportWithTransportConfig(preset *fingerprint.Preset, dnsCache *
 		if pskSpec, err := utls.UTLSIdToSpecWithSeed(preset.QUICPSKClientHelloID, shuffleSeed); err == nil {
 			fingerprint.ApplySignatureAlgorithms(pskSpec.Extensions, preset.QUICSignatureAlgorithms)
 			fingerprint.ApplyTrustAnchors(&pskSpec.Extensions, preset.TrustAnchors)
+			fingerprint.ApplyExtensionOverlay(&pskSpec.Extensions, preset.ExtensionOverlay)
 			t.cachedClientHelloSpecPSK = &pskSpec
 		}
 	}
@@ -714,6 +716,7 @@ func NewHTTP3TransportWithConfig(preset *fingerprint.Preset, dnsCache *dns.Cache
 		if err == nil {
 			fingerprint.ApplySignatureAlgorithms(spec.Extensions, preset.QUICSignatureAlgorithms)
 			fingerprint.ApplyTrustAnchors(&spec.Extensions, preset.TrustAnchors)
+			fingerprint.ApplyExtensionOverlay(&spec.Extensions, preset.ExtensionOverlay)
 			t.cachedClientHelloSpec = &spec
 		}
 	}
@@ -723,6 +726,7 @@ func NewHTTP3TransportWithConfig(preset *fingerprint.Preset, dnsCache *dns.Cache
 		if pskSpec, err := utls.UTLSIdToSpecWithSeed(preset.QUICPSKClientHelloID, shuffleSeed); err == nil {
 			fingerprint.ApplySignatureAlgorithms(pskSpec.Extensions, preset.QUICSignatureAlgorithms)
 			fingerprint.ApplyTrustAnchors(&pskSpec.Extensions, preset.TrustAnchors)
+			fingerprint.ApplyExtensionOverlay(&pskSpec.Extensions, preset.ExtensionOverlay)
 			t.cachedClientHelloSpecPSK = &pskSpec
 		}
 	}
@@ -838,6 +842,7 @@ func NewHTTP3TransportWithMASQUE(preset *fingerprint.Preset, dnsCache *dns.Cache
 		if err == nil {
 			fingerprint.ApplySignatureAlgorithms(spec.Extensions, preset.QUICSignatureAlgorithms)
 			fingerprint.ApplyTrustAnchors(&spec.Extensions, preset.TrustAnchors)
+			fingerprint.ApplyExtensionOverlay(&spec.Extensions, preset.ExtensionOverlay)
 			t.cachedClientHelloSpec = &spec
 		}
 		// Create separate cached spec for inner connections (not shared with outer)
@@ -846,6 +851,7 @@ func NewHTTP3TransportWithMASQUE(preset *fingerprint.Preset, dnsCache *dns.Cache
 		if err == nil {
 			fingerprint.ApplySignatureAlgorithms(innerSpec.Extensions, preset.QUICSignatureAlgorithms)
 			fingerprint.ApplyTrustAnchors(&innerSpec.Extensions, preset.TrustAnchors)
+			fingerprint.ApplyExtensionOverlay(&innerSpec.Extensions, preset.ExtensionOverlay)
 			t.cachedClientHelloSpecInner = &innerSpec
 		}
 	}
@@ -856,12 +862,14 @@ func NewHTTP3TransportWithMASQUE(preset *fingerprint.Preset, dnsCache *dns.Cache
 		if pskSpec, err := utls.UTLSIdToSpecWithSeed(preset.QUICPSKClientHelloID, shuffleSeed); err == nil {
 			fingerprint.ApplySignatureAlgorithms(pskSpec.Extensions, preset.QUICSignatureAlgorithms)
 			fingerprint.ApplyTrustAnchors(&pskSpec.Extensions, preset.TrustAnchors)
+			fingerprint.ApplyExtensionOverlay(&pskSpec.Extensions, preset.ExtensionOverlay)
 			t.cachedClientHelloSpecPSK = &pskSpec
 		}
 		// Inner PSK spec for MASQUE connections
 		if innerPskSpec, err := utls.UTLSIdToSpecWithSeed(preset.QUICPSKClientHelloID, shuffleSeed); err == nil {
 			fingerprint.ApplySignatureAlgorithms(innerPskSpec.Extensions, preset.QUICSignatureAlgorithms)
 			fingerprint.ApplyTrustAnchors(&innerPskSpec.Extensions, preset.TrustAnchors)
+			fingerprint.ApplyExtensionOverlay(&innerPskSpec.Extensions, preset.ExtensionOverlay)
 			t.cachedClientHelloSpecInnerPSK = &innerPskSpec
 		}
 	}

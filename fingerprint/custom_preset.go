@@ -103,10 +103,18 @@ type TLSSpec struct {
 	// The list is a snapshot of a root store and moves independently of the
 	// browser version, so it lives here rather than in code. Empty means the
 	// extension is not sent.
-	TrustAnchors      []string `json:"trust_anchors,omitempty"`
-	PermuteExtensions *bool    `json:"permute_extensions,omitempty"`
-	RecordSizeLimit   *uint16  `json:"record_size_limit,omitempty"`
-	KeyShareCurves    *int     `json:"key_share_curves,omitempty"` // number of curves to send key shares for; nil/0 = 1
+	TrustAnchors []string `json:"trust_anchors,omitempty"`
+
+	// ExtensionOverlay adds and removes extensions on the hello client_hello
+	// produces. It is the only way to state "this client sends what uTLS models
+	// for it, plus or minus these extensions" without replacing the whole
+	// ClientHello with a JA3 or a capture, both of which lose what the
+	// ClientHelloID gets right. Only the codepoints ExtensionOverlay.Validate
+	// accepts may be added, and a rejected one fails the load.
+	ExtensionOverlay  *ExtensionOverlay `json:"extension_overlay,omitempty"`
+	PermuteExtensions *bool             `json:"permute_extensions,omitempty"`
+	RecordSizeLimit   *uint16           `json:"record_size_limit,omitempty"`
+	KeyShareCurves    *int              `json:"key_share_curves,omitempty"` // number of curves to send key shares for; nil/0 = 1
 }
 
 // JA3ExtrasSpec is the JSON representation of JA3Extras.
@@ -649,6 +657,7 @@ func clonePreset(src *Preset) *Preset {
 			dst.TrustAnchors[i] = append([]byte(nil), ta...)
 		}
 	}
+	dst.ExtensionOverlay = src.ExtensionOverlay.Clone()
 
 	return &dst
 }
@@ -825,6 +834,12 @@ func applyTLS(p *Preset, spec *TLSSpec) error {
 			anchors = append(anchors, b)
 		}
 		p.TrustAnchors = anchors
+	}
+	if spec.ExtensionOverlay != nil {
+		if err := spec.ExtensionOverlay.Validate(); err != nil {
+			return fmt.Errorf("extension_overlay: %w", err)
+		}
+		p.ExtensionOverlay = spec.ExtensionOverlay.Clone()
 	}
 
 	return nil

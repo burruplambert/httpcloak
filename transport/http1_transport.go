@@ -1869,6 +1869,7 @@ func (t *HTTP1Transport) applyH1Spec(
 	if source == fingerprint.SourceClientHelloID {
 		fingerprint.ApplySignatureAlgorithms(spec.Extensions, t.preset.SignatureAlgorithms)
 		fingerprint.ApplyTrustAnchors(&spec.Extensions, t.preset.TrustAnchors)
+		fingerprint.ApplyExtensionOverlay(&spec.Extensions, t.preset.ExtensionOverlay)
 	}
 
 	conn := utls.UClient(rawConn, tlsConfig, utls.HelloCustom)

@@ -766,6 +766,7 @@ func (t *HTTP2Transport) establishConn(ctx context.Context, host, port string, s
 	if specSource == fingerprint.SourceClientHelloID {
 		fingerprint.ApplySignatureAlgorithms(specToUse.Extensions, t.preset.SignatureAlgorithms)
 		fingerprint.ApplyTrustAnchors(&specToUse.Extensions, t.preset.TrustAnchors)
+		fingerprint.ApplyExtensionOverlay(&specToUse.Extensions, t.preset.ExtensionOverlay)
 	}
 
 	// Fetch ECH config if needed. skipECH forces a no-ECH handshake, used by the
@@ -898,6 +899,7 @@ func (t *HTTP2Transport) establishConn(ctx context.Context, host, port string, s
 			if fallbackJA3 == "" && fallbackSpec != nil {
 				fingerprint.ApplySignatureAlgorithms(fallbackSpec.Extensions, t.preset.SignatureAlgorithms)
 				fingerprint.ApplyTrustAnchors(&fallbackSpec.Extensions, t.preset.TrustAnchors)
+				fingerprint.ApplyExtensionOverlay(&fallbackSpec.Extensions, t.preset.ExtensionOverlay)
 			}
 
 			// Redo TLS handshake on the clean connection
