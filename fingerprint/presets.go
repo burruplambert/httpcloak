@@ -118,7 +118,7 @@ type Preset struct {
 	// parse risks placing it where the protocol does not allow, so the two are
 	// mutually exclusive by design rather than by accident.
 	RawPermuteExtensions bool
-	BasedOn           string // For custom presets: name of the parent preset (used by inheritance-loop detection). Empty for built-ins.
+	BasedOn              string // For custom presets: name of the parent preset (used by inheritance-loop detection). Empty for built-ins.
 
 	// SignatureAlgorithms, when non-empty, replaces the signature_algorithms
 	// extension emitted on TCP (HTTP/1.1 + HTTP/2), on top of whatever base spec
@@ -150,6 +150,16 @@ type Preset struct {
 	// The ORDER here is canonical only. Chrome shuffles the list per
 	// connection, and so does the extension.
 	TrustAnchors [][]byte
+
+	// ExtensionOverlay adds and removes extensions on the hello the
+	// ClientHelloID produces, and changes nothing else about it. Empty means
+	// the hello goes out exactly as uTLS builds it, which is every preset that
+	// describes a client uTLS already models.
+	//
+	// It is honoured on the ClientHelloID path only. A JA3 states the whole
+	// extension list itself and a captured hello already contains one, so on
+	// those paths there is no base list for an overlay to edit.
+	ExtensionOverlay ExtensionOverlay
 }
 
 // SpecFor generates the uTLS ClientHelloSpec for id at the given shuffle seed and
@@ -166,12 +176,22 @@ func SpecFor(id tls.ClientHelloID, seed int64, sigAlgs []tls.SignatureScheme) (*
 // insertion rather than an override and so cannot go through the same
 // slice-mutating helper.
 func SpecForWithAnchors(id tls.ClientHelloID, seed int64, sigAlgs []tls.SignatureScheme, anchors [][]byte) (*tls.ClientHelloSpec, error) {
+	return SpecForWithOverlay(id, seed, sigAlgs, anchors, ExtensionOverlay{})
+}
+
+// SpecForWithOverlay is SpecForWithAnchors plus the preset's extension overlay,
+// and is the full set of changes a preset can layer onto the hello its
+// ClientHelloID produces. The order matters: the overlay runs last, so an
+// extension it drops is gone whether the base hello carried it or an earlier
+// step inserted it.
+func SpecForWithOverlay(id tls.ClientHelloID, seed int64, sigAlgs []tls.SignatureScheme, anchors [][]byte, overlay ExtensionOverlay) (*tls.ClientHelloSpec, error) {
 	spec, err := tls.UTLSIdToSpecWithSeed(id, seed)
 	if err != nil {
 		return nil, err
 	}
 	ApplySignatureAlgorithms(spec.Extensions, sigAlgs)
 	ApplyTrustAnchors(&spec.Extensions, anchors)
+	ApplyExtensionOverlay(&spec.Extensions, overlay)
 	return &spec, nil
 }
 
@@ -219,15 +239,7 @@ func ApplyTrustAnchors(exts *[]tls.TLSExtension, anchors [][]byte) {
 		}
 	}
 
-	at := len(*exts)
-	for at > 0 {
-		switch (*exts)[at-1].(type) {
-		case *tls.UtlsGREASEExtension, *tls.UtlsPaddingExtension, tls.PreSharedKeyExtension:
-			at--
-			continue
-		}
-		break
-	}
+	at := pinnedTailStart(*exts)
 	out := make([]tls.TLSExtension, 0, len(*exts)+1)
 	out = append(out, (*exts)[:at]...)
 	out = append(out, ext)
@@ -294,7 +306,7 @@ type HTTP2Settings struct {
 // When nil on a Preset, all getters return Chrome defaults. Individual nil/zero fields
 // also fall back to Chrome defaults, so you can override just the fields you need.
 type H2FingerprintConfig struct {
-	HPACKHeaderOrder    []string // HPACK wire encoding order. nil = Chrome 143 default.
+	HPACKHeaderOrder []string // HPACK wire encoding order. nil = Chrome 143 default.
 
 	// HPACKHeaderOrderSubresource is the order for every request that is not a
 	// top-level navigation. Chrome builds those through a different path and the
@@ -302,7 +314,7 @@ type H2FingerprintConfig struct {
 	// then the rest of the hint cluster. Nil means "use HPACKHeaderOrder for
 	// everything", which is what every non-Chromium preset wants.
 	HPACKHeaderOrderSubresource []string `json:"hpack_header_order_subresource,omitempty"`
-	HPACKIndexingPolicy string   // "chrome"/"never"/"always"/"default". "" = "chrome".
+	HPACKIndexingPolicy         string   // "chrome"/"never"/"always"/"default". "" = "chrome".
 	// DataFrameMaxSize caps the payload of a DATA frame this profile will send.
 	// nil means derive it from the client family; see H2DataFrameMaxSize.
 	DataFrameMaxSize *uint32
