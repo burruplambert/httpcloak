@@ -120,6 +120,15 @@ type TLSSpec struct {
 	// through based_on unless set.
 	QUICTrustAnchorsShuffle *bool `json:"quic_trust_anchors_shuffle,omitempty"`
 
+	// ExtensionOverlay adds and removes extensions on the hello client_hello
+	// produces. It is the only way to state "this client sends what uTLS models
+	// for it, plus or minus these extensions" without replacing the whole
+	// ClientHello with a JA3 or a capture, both of which lose what the
+	// ClientHelloID gets right. Only the codepoints ExtensionOverlay.Validate
+	// accepts may be added, and a rejected one fails the load, as does an
+	// overlay on a preset whose hello does not come from a client_hello.
+	ExtensionOverlay *ExtensionOverlay `json:"extension_overlay,omitempty"`
+
 	PermuteExtensions *bool   `json:"permute_extensions,omitempty"`
 	RecordSizeLimit   *uint16 `json:"record_size_limit,omitempty"`
 	KeyShareCurves    *int    `json:"key_share_curves,omitempty"` // number of curves to send key shares for; nil/0 = 1
@@ -680,6 +689,7 @@ func clonePreset(src *Preset) *Preset {
 			dst.TrustAnchors[i] = append([]byte(nil), ta...)
 		}
 	}
+	dst.ExtensionOverlay = src.ExtensionOverlay.Clone()
 
 	return &dst
 }
@@ -917,6 +927,12 @@ func applyTLS(p *Preset, spec *TLSSpec) error {
 			anchors = append(anchors, b)
 		}
 		p.TrustAnchors = anchors
+	}
+	if spec.ExtensionOverlay != nil {
+		if err := spec.ExtensionOverlay.Validate(); err != nil {
+			return fmt.Errorf("extension_overlay: %w", err)
+		}
+		p.ExtensionOverlay = spec.ExtensionOverlay.Clone()
 	}
 
 	return nil
@@ -1576,6 +1592,44 @@ func validatePreset(p *Preset, spec *PresetSpec) error {
 				}
 				return fmt.Errorf("tls.%s only apply alongside ja3 in the same tls block, "+
 					"and would be ignored with %s", strings.Join(ignored, ", tls."), mode)
+			}
+		}
+		// extension_overlay is the mirror image of the fields above: it edits
+		// the hello a ClientHelloID produces and is read nowhere else, since a
+		// JA3 states its own extension list and a capture already contains one.
+		// Beside raw_client_hello applyTLS never even stores it, and beside a
+		// ja3, declared here or inherited, the TCP hello goes out without it.
+		// Same reasoning as #130: refuse it where it would be ignored rather
+		// than load a preset that looks configured and is not. The resolver
+		// is asked directly, so the answer is the one the transports will get.
+		//
+		// HTTP/3 resolves its hello separately, and the overlay reaches it only
+		// through a QUIC ClientHelloID. Beside a raw_quic_client_hello, or a
+		// QUIC capture or QUIC ja3 inherited through based_on, TCP would carry
+		// the overlay and HTTP/3 would go out without it, so the QUIC resolver
+		// is asked too.
+		if spec.TLS.ExtensionOverlay != nil && !spec.TLS.ExtensionOverlay.IsZero() {
+			mode := ""
+			switch {
+			case spec.TLS.RawClientHello != "":
+				mode = "raw_client_hello"
+			case spec.TLS.JA3 != "":
+				mode = "ja3"
+			case spec.TLS.RawQUICClientHello != "":
+				mode = "raw_quic_client_hello"
+			default:
+				if _, src, err := ResolveClientHelloSpec(p, "", nil, false, 0); err == nil && src != SourceClientHelloID {
+					mode = "a hello inherited through based_on that does not come from a client_hello"
+				}
+				if mode == "" {
+					if _, src, err := ResolveQUICClientHelloSpec(p, false, 0); err == nil && src != SourceClientHelloID {
+						mode = "an HTTP/3 hello inherited through based_on that does not come from a client_hello"
+					}
+				}
+			}
+			if mode != "" {
+				return fmt.Errorf("tls.extension_overlay only applies to a hello built from a client_hello, "+
+					"and would be ignored with %s", mode)
 			}
 		}
 	}

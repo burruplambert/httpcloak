@@ -81,6 +81,7 @@ func TestDescribeRoundTripsEveryPreset(t *testing.T) {
 			"QUICSignatureAlgorithms": {orig.QUICSignatureAlgorithms, clone.QUICSignatureAlgorithms},
 			"TrustAnchors":            {orig.TrustAnchors, clone.TrustAnchors},
 			"QUICTrustAnchorShuffle":  {orig.QUICTrustAnchorShuffle, clone.QUICTrustAnchorShuffle},
+			"ExtensionOverlay":        {orig.ExtensionOverlay, clone.ExtensionOverlay},
 			"JA3":                     {orig.JA3, clone.JA3},
 			"UserAgent":               {orig.UserAgent, clone.UserAgent},
 			"HeaderOrder":             {orig.HeaderOrder, clone.HeaderOrder},
